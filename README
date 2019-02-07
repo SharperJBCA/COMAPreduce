@@ -1,0 +1,6 @@
+# Install
+
+1) Open setup.py and set starlib variable to directory of local starlib libraries.
+
+2) python setup.py install 
+
