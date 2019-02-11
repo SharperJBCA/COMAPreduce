@@ -7,12 +7,22 @@ from comancpipeline.Tools import Coordinates
 from os import listdir, getcwd
 from os.path import isfile, join
 
+from mpi4py import MPI 
+comm = MPI.COMM_WORLD
+
 class FillPointing(DataStructure):
     """
     Checks if the pointing has been generated and generates it if not.
     """
     
-    def __init__(self, longitude=-118.2941, latitude=37.2314):
+    def __init__(self, longitude=-118.2941, latitude=37.2314, force=True):
+        super().__init__()
+
+        if isinstance(force, type(str)):
+            self.force = (force.lower() == 'true')
+        else:
+            self.force = force
+
         # stores and write the lon/lat of the telescope to the output file
         # default is the COMAP telescope geo coordinates
         self.longitude = longitude
@@ -27,6 +37,8 @@ class FillPointing(DataStructure):
         
         missingFields = []
         checkFields = ['spectrometer/pixel_pointing/{}'.format(v) for v in ['pixel_az','pixel_el', 'pixel_ra', 'pixel_dec']]
+        if self.force:
+            return checkFields
 
         for field in checkFields:
             if not field in data.data:
@@ -42,8 +54,8 @@ class FillPointing(DataStructure):
         return mdl(todmjd)
 
     def run(self,data):
-
         missingFields = self.missingFields(data)
+        print(missingFields)
         if not isinstance(missingFields, type(None)):
             spec = data.data['spectrometer']
             nHorn, nSB, nChan, nSample = spec['tod'].shape
@@ -68,17 +80,20 @@ class FillPointing(DataStructure):
                     
                 # fill in the ra/dec fields
                 data.data[missingFields[2]][i,:],data.data[missingFields[3]][i,:] = Coordinates.h2e(data.data[missingFields[0]][i,:],
-                                                                                          data.data[missingFields[1]][i,:],
-                                                                                          data.data['spectrometer/MJD'][...], 
-                                                                                          self.longitude, 
-                                                                                          self.latitude)
+                                                                                                    data.data[missingFields[1]][i,:],
+                                                                                                    data.data['spectrometer/MJD'][...], 
+                                                                                                    self.longitude, 
+                                                                                                    self.latitude)
 
 
 class DownSampleFrequency(DataStructure):
     """
-    Downsample data in frequency
+    Downsample data in frequency.
+    THIS IS A SPECIAL FUNCTION: It cannot be called with MPI due to data volume and IO issues.
     """
     def __init__(self, out_dir='', factor=16):
+        super().__init__()
+        self.mode = 'r' # down sampling is transfered to a new file.
         self.out_dir = out_dir
         self.factor = int(factor)
 
@@ -89,54 +104,54 @@ class DownSampleFrequency(DataStructure):
         """
         Copy all groups/datasets/attributes that are not downsampled (e.g., those without a frequency dependency) to the new downsampled file.
         """
-        justFilename = self.filename.split('/')[-1]
-        self.dout = h5py.File('{}/{}'.format(self.out_dir, justFilename))
-
-        din.copy('comap/', self.dout)
-        for key, attr in din['comap'].attrs.items():
+        din.data.copy('comap/', self.dout)
+        for key, attr in din.data['comap'].attrs.items():
             self.dout['comap'].attrs[key] = attr
 
         hk    = self.dout.create_group('hk')
         hkgroups = ['deTracker', 'drivenode', 'env', 'saddlebag', 'vane']
         for hkgroup in hkgroups:
-            din.copy('hk/{}'.format(hkgroup), hk)
+            din.data.copy('hk/{}'.format(hkgroup), hk)
 
-        din.copy('pointing/', self.dout)
+        din.data.copy('pointing/', self.dout)
 
-        din.copy('weather/', self.dout)
+        din.data.copy('weather/', self.dout)
 
         spectrometer = self.dout.create_group('spectrometer')
         specsets = ['MJD', 'band_average', 'bands', 'feeds']
         for specset in specsets:
             spectrometer.create_dataset('{}'.format(specset), 
-                                        data=din['spectrometer/{}'.format(specset)])
+                                        data=din.data['spectrometer/{}'.format(specset)])
 
-        din.copy('spectrometer/pixel_pointing', spectrometer)
+        din.data.copy('spectrometer/pixel_pointing', spectrometer)
     
     def run(self,data):
-        justFilename = self.filename.split('/')[-1]
-        try:
-            dout = h5py.File('{}/{}'.format(self.out_dir, justFilename),'r')
-            targFileOkay = isinstance(dout['comap'].attrs.get('downsampled'), type(None))
-            dout.close()
-        except OSError:
-            targFileOkay = True
+        justFilename = data.filename.split('/')[-1]
+        # try:
+        #     # First see if there is a downsampled file that already exists with
+        #     # a downsampled tag. If so we should do nothing.
+        #     #dout = h5py.File('{}/{}'.format(self.out_dir, justFilename),'r')
+        #     #targFileOkay = isinstance(dout['comap'].attrs.get('downsampled'), type(None))
+        #     #dout.close()
+        #     print('File {} already exists'.format(justFilename))
+        #     return None
+        # except OSError:
+        #     targFileOkay = True
 
-        thisFileOkay = isinstance(data.data['comap'].attrs.get('downsampled'), type(None))
-        if (not thisFileOkay) or (not targFileOkay):
-            print('File is already downsampled')
-            # Assume that if you asked for down sampled data then you want to 
-            # actually being working with the previously down sampled dataset.
-            data.data.close()
-            justFilename = self.filename.split('/')[-1]
-            data.data = h5py.File('{}/{}'.format(self.out_dir, justFilename))
-            return None
+        # thisFileOkay = isinstance(data.data['comap'].attrs.get('downsampled'), type(None))
+        # if (not thisFileOkay) or (not targFileOkay):
+        #     print('File {} already downsampled'.format(justFilename))
+        #     # Assume that if you asked for down sampled data then you want to 
+        #     # actually being working with the previously downsampled dataset.
+        #     data.update('{}/{}'.format(self.out_dir, justFilename))
+        #     return None
 
         # Open the output filename
-        self.createDatasets(data.data)
+        self.dout = h5py.File('{}/{}'.format(self.out_dir, justFilename), driver='mpio', comm=comm)
+        self.createDatasets(data)
         
         # down sample the frequency based values
-        spec = data.data['spectrometer']
+        spec    = data.data['spectrometer']
         outSpec = self.dout['spectrometer']
         
         freq = spec['frequency'][...]
@@ -154,41 +169,50 @@ class DownSampleFrequency(DataStructure):
         todOut = outSpec.create_dataset('tod', (tod.shape[0], tod.shape[1], tod.shape[2]//self.factor, tod.shape[3]))
 
         # ...read in one horn at a time
-        nHorns = tod.shape[0]
+        nHorns, nSBs, nChans, nSamps = tod.shape
+        import time
         for i in range(nHorns):
             # need frequency to be the last index...
-            temp = np.transpose(tod[i,:,:,:], (0,2,1))
+            for j in range(nSBs):
+                start=time.time()
+                temp = np.transpose(tod[i,j,:,:], (1,0))
 
-            temp = np.reshape(temp, (temp.shape[0], 
-                                     temp.shape[1], 
-                                     temp.shape[2]//self.factor, 
-                                     self.factor))
-            todOut[i,:,:,:] = np.transpose(np.nanmean(temp,axis=-1),(0,2,1))
+                temp = np.reshape(temp, (temp.shape[0],
+                                         temp.shape[1]//self.factor, 
+                                         self.factor))
+                todOut[i,j,:,:] = np.transpose(np.nanmean(temp,axis=-1),(1,0))
+                print(i,j,'Time taken {}'.format(time.time()-start))
+
+        # add some new attributes:
+        if data.rank == 0:
+            self.dout['comap'].attrs.create('downsampled', True)
+            self.dout['comap'].attrs.create('ds_factor', self.factor)
+        self.dout.close()
 
         # At the end of downsampling, change the input data reference
-        # to point to the downsampled data reference
-        data.data.close()
-        data.data = self.dout
-        # add some new attributes:
-        data.data['comap'].attrs.create('downsampled', True)
-        data.data['comap'].attrs.create('ds_factor', self.factor)
+        # to point to the downsampled data reference:
+        #data.update('{}/{}'.format(self.out_dir, justFilename))
 
 class AmbLoadCal(DataStructure):
     """
     Interpolate Ambient Measurements
     """
     def __init__(self, amb_dir='AmbientLoads/'):
+        super().__init__()
         self.amb_dir = amb_dir
+        
+        self.fields = {'spectrometer/tod':True, 
+                       'pointing/MJD':False}
 
     def __str__(self):
         return "Applying ambient load calibration"
 
     def getNearestGain(self, data):
-        meanmjd = np.nanmean(data.data['pointing/MJD'])
+        meanmjd = np.nanmean(data.dsets['pointing/MJD'])
 
         # First get the mean MJD of the data
         obsids = np.array([int(f.split('-')[-5]) for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if 'hdf5' in f ])
-        obsid  = int(self.filename.split('-')[-5])
+        obsid  = int(data.filename.split('-')[-5])
 
         gainfiles = [f for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if 'hdf5' in f]
 
@@ -216,9 +240,10 @@ class AmbLoadCal(DataStructure):
 
     def run(self, data):
         # don't want to calibrate multiple times!
-        if not isinstance(data.data['comap'].attrs.get('cal_ambload'), type(None)):
-            print('{} is already ambient load calibrated'.format(self.filename.split('/')[-1]))
-            return None
+        if ('comap' in data.output) :
+            if (not isinstance(data.output['comap'].attrs.get('cal_ambload'), type(None))):
+                print('2 {} is already ambient load calibrated'.format(data.filename.split('/')[-1]))
+                return None
 
         self.Gain = self.getNearestGain(data)
 
@@ -231,12 +256,18 @@ class AmbLoadCal(DataStructure):
                                                        self.factor)),axis=-1)
         
         nHorns, nSBs, nChans, nSamples = data.data['spectrometer/tod'].shape
-        for i in range(nHorns):
-            for j in range(nSBs):
-                for k in range(nChans):
-                    data.data['spectrometer/tod'][i,j,k,:] /= self.Gain[i,j,k]
+        field = 'spectrometer/tod'
+        selectAxes, splitAxis = data.selectAxes[field], data.splitAxis[field]
+        if not isinstance(selectAxes, type(None)):
+            for i in selectAxes:
+                self.Gain = self.Gain[i]
 
-        data.data['comap'].attrs.create('cal_ambload', True)
+
+        data.dsets['spectrometer/tod'] /= np.take(self.Gain,
+                                                  range(data.lo[field],data.hi[field]),
+                                                  axis=data.splitAxis[field])[...,np.newaxis]
+
+        data.setOutputAttr('comap', 'cal_ambload', True)
 
 
 from scipy.ndimage.filters import gaussian_filter1d
@@ -252,7 +283,8 @@ class AmbientLoad(DataStructure):
     Calculate AmbientLoad temperature
     """
     def __init__(self, output_dir='AmbientLoads/', overwrite=True):
-        self.output_dir = 'AmbientLoads'
+        super().__init__()
+        self.output_dir = output_dir
         self.overwrite= overwrite
 
         self.suffix = '_AmbLoad'
@@ -315,10 +347,19 @@ class AmbientLoad(DataStructure):
 
     def run(self,data):
 
+        if not b'Tsys' in data.data['comap'].attrs['comment']:
+            print('Not an ambient load scan')
+            return None
+
         # Check if elevations shift (e.g., there is a skydip
         e0, e1 = np.nanmin(data.data['pointing/elEncoder']), np.nanmax(data.data['pointing/elEncoder'])
-        assert (e1-e0) < self.elLim, 'Elevation range exceeds {:.0f} degrees'.format(self.elLim)
+        if (e1-e0) > self.elLim:
+            print('Elevation range exceeds {:.0f} degrees'.format(self.elLim))
+            return None
         
+
+        self.parsefilename(data.filename)
+
         tod = data.data['spectrometer/tod']
         mjd = data.data['spectrometer/MJD'][:]
         self.mjd = np.mean(mjd)
@@ -375,6 +416,7 @@ class AmbientLoad(DataStructure):
 
         #write to disk
         self.writeFile(self.filename, self.overwrite)
+        data.stop = True # if this was a calibrator, we dont want to run anything else
 
     def writeFile(self, filename, overwrite=True):
         dout = h5py.File(filename,'a')

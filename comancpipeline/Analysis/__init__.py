@@ -1,1 +1,1 @@
-from comancpipeline.Analysis import Calibration,SourceFitting,Mapping
+from comancpipeline.Analysis import Calibration,SourceFitting,Mapping,BaseClasses

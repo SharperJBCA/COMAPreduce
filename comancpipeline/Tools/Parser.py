@@ -37,13 +37,44 @@ def parse_parameters(filename):
 
     order = Parameters.get('Inputs', 'order').split(',')
 
+    targets = Parameters.get('Inputs', 'targets').split(',')
+    targets = [t.lower() for t in targets]
+
     selectors = []
     for key in order:
-        valDict = dict(Parameters.items(key))
-        checkTypes(valDict)
+        if Parameters.has_section(key):
+            valDict = dict(Parameters.items(key))
+            checkTypes(valDict)
 
-        c = getClass(key)
+            c = getClass(key)
+            
+            selectors += [c(**valDict)]
+        else:
+            c = getClass(key)
+            selectors += [c()]
 
-        selectors += [c(**valDict)]
+    return selectors, targets, Parameters
 
-    return selectors
+def parse_split(config, field):
+
+    if config.has_section(field):
+        if config.has_option(field, 'selectAxes'):
+            selectAxes = config.get(field, 'selectAxes')
+            if selectAxes.lower() == 'none':
+                selectAxes = None
+            else:
+                selectAxes = selectAxes.split(',')
+                selectAxes = [int(s) for s in selectAxes]
+        else:
+            selectAxes = None
+        if config.has_option(field, 'splitAxis'):
+            splitAxis = config.get(field, 'splitAxis')
+            if splitAxis.lower() == 'none':
+                splitAxis = None
+            else:
+                splitAxis = int(splitAxis)
+        else:
+            splitAxis = 0
+
+    return selectAxes, splitAxis
+    

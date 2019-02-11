@@ -34,6 +34,7 @@ def Rotate(ra, dec, r0, d0, p0):
     All inputs in degrees
 
     """
+    print(np.min(dec), np.max(dec))
     skyVec = hp.ang2vec((90.-dec)*np.pi/180., ra*np.pi/180.)
 
     outVec = RotatePhi(skyVec, r0)
@@ -145,7 +146,7 @@ def h2e(az, el, mjd, lon, lat, degrees=True):
     lat- double, latitude
     """
 
-    if not degrees:
+    if degrees:
         c = np.pi/180.
     else:
         c = 1.
@@ -163,7 +164,7 @@ def precess(ra, dec, mjd, degrees=True):
     mjd- arraylike
     """
 
-    if not degrees:
+    if degrees:
         c = np.pi/180.
     else:
         c = 1.
@@ -184,7 +185,7 @@ def pa(ra, dec, mjd, lon ,lat, degrees=True):
 
     """
     
-    if not degrees:
+    if degrees:
         c = np.pi/180.
     else:
         c = 1.
@@ -200,7 +201,7 @@ def e2g(ra, dec, degrees=True):
     ra - arraylike, right ascension
     dec- arraylike, declination
     """
-    if not degrees:
+    if degrees:
         c = np.pi/180.
     else:
         c = 1.
