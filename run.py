@@ -19,7 +19,6 @@ default_parser.add_option("-P","--parameters",dest='parameters',action="store",t
 import time
 
 def main(args):
-    
     # Read in the metadata for this pipeline run
     options,pargs = default_parser.parse_args(args)
 
@@ -36,10 +35,13 @@ def main(args):
             start = time.time()
 
         filename = filelist[i]
-        print('Opening: {}'.format(filename.split('/')[-1]))
+        if comm.rank == 0:
+            print('Opening: {}'.format(filename.split('/')[-1]))
         try: # If the file fails to open we just continue to the next...
 
-            h5data = H5Data(filename,comm.rank, comm.size, out_dir=config.get('Inputs', 'out_dir'))
+            h5data = H5Data(filename,comm.rank, comm.size, config,
+                            out_extras_dir=config.get('Inputs', 'out_extras_dir'), 
+                            out_dir=config.get('Inputs', 'out_dir'))
             h5data.open()
 
             try: # Check to see if this file has a comment string, no string then no analysis!
@@ -58,40 +60,25 @@ def main(args):
             for selector in selectors:
 
                 # Update stored data storage if required...
-                h5data.setFields(selector.fields, config) # which fields does this operator need?
-                print(selector)
+                #h5data.setFields(selector.fields, config) # which fields does this operator need?
+                if comm.rank == 0:
+                    print(selector)
                 selector(h5data)
-                try: # Run any plotting functions if there are any...
-                    selector.plot() # make any plots
-                except AttributeError:
-                    pass
 
-                if h5data.stop:
-                    break
-            h5data.close() # Write updated data out to file
-        except IOError:
+            comm.Barrier() # we want all threads to wait here.
+            print(comm.rank, 'about to output...')
+            h5data.outputFields() # Write updated data out to file
+            comm.Barrier() # This should ensure that all threads close AFTER writing out
+            comm.barrier()
+            print(comm.rank, 'about to close...')
+            h5data.close()
+        except OSError:
             pass
 
         if comm.rank == 0:
             print('Run time {}'.format(time.time()-start))
+    print(comm.rank,'at end of script')
+    #sys.exit()
 
-
-    # for i in getDataRange(comm.rank, comm.size, filelist.size):
-    #     if comm.rank == 0:
-    #         start = time.time()
-    #     filename = filelist[i]
-    #     print('Opening: {}'.format(filename.split('/')[-1]))
-    #     try:
-    #         h5data = H5Data(filename,comm.rank, comm.size)
-    #         for selector in selectors:
-    #             print(selector)
-    #             h5data.open(selector.mode)
-    #             selector(h5data)
-    #             h5data.close()
-    #     except AssertionError:
-    #         pass
-
-    #     if comm.rank == 0:
-    #         print('Run time {}'.format(time.time()-start))
-
-if __name__ == "__main__": main(sys.argv[1:])
+if __name__ == "__main__": 
+    main(sys.argv[1:])

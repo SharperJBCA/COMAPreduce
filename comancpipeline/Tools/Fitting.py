@@ -39,10 +39,10 @@ def ErrorFmin(*args, **kwargs):
     P = args[0]
     func = args[1]
     limits = args[2]
-    z = args[5]
-    funcArgs = args[3:]
+    #z = args[5]
+    x, y, z,ra0,dec0 = args[3:]
 
     if limits(P):
         return 1e32
     else:
-        return np.sum( (z - func(*funcArgs, **kwargs))**2)
+        return np.sum( (z - func(P,x,y,ra0,dec0, **kwargs))**2)

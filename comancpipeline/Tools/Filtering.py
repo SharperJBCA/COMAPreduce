@@ -32,7 +32,9 @@ def estimateBackground(_tod, rms, close=None, sampleRate=50, cutoff=1.):
         lo, hi = indices[2*m], indices[2*m+1]
         lo = max([lo, 0])
         hi = min([hi, tod.size])
-        fitRange = np.concatenate((np.arange(lo-sampleRate,lo), np.arange(hi, hi+sampleRate))).astype(int)
+        fitRange = np.concatenate((np.arange(np.max([lo-sampleRate,0]),lo), np.arange(hi, np.min([hi+sampleRate, tod.size]))  )).astype(int)
+        #fitRange = np.concatenate((np.arange(lo-sampleRate,lo), np.arange(hi, hi+sampleRate)  )).astype(int)
+
         dmdl = np.poly1d(np.polyfit(time[fitRange], tod[fitRange],3))
         tod[lo:hi] = np.random.normal(scale=rms, loc=dmdl(time[lo:hi]))
           

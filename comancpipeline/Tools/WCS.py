@@ -98,6 +98,34 @@ def pix2ang(naxis, cdelt, crval,  xpix, ypix, ctype=['RA---TAN', 'DEC--TAN']):
     return pixcrd[1,:], pixcrd[0,:]
 
 
+def pix2ang1D(w, naxis, pix):
+    """
+    Pixel coordinates to sky coordinates
+
+    args:
+    naxis = [npix_x, npix_y]
+    cdelt = [cd_x, cd_y] (degrees)
+    crval = [cv_x, cv_y] (degrees)
+    xpix   : longitude pixels (arraylike, int)
+    ypix   : latitude pixels (arraylike, int)
+
+    kwargs:
+    ctype : projection (Default: ['RA---TAN','DEC--TAN'])
+
+    returns
+    latitude, longitude (degrees)
+    """
+
+
+    xpix, ypix = np.meshgrid(np.arange(naxis[0]), np.arange(naxis[1]),indexing='ij')
+
+    # Generate pixel coordinates
+    pixcrd = np.array(w.wcs_pix2world(xpix, ypix, 0))
+
+
+    return pixcrd[1,:], pixcrd[0,:]
+
+
 
 def DefineWCS(naxis=[100,100], cdelt=[1./60., 1./60.],
               crval=[0,0], ctype=['RA---TAN', 'DEC--TAN']):
@@ -114,10 +142,10 @@ def DefineWCS(naxis=[100,100], cdelt=[1./60., 1./60.],
     wcs, longitude, latitude
     """
 
-    wcs = CartPix.Info2WCS(naxis, cdelt, crval, ctype=ctype)
+    wcs = Info2WCS(naxis, cdelt, crval, ctype=ctype)
  # Setup WCS
     xpix, ypix= np.meshgrid(np.arange(naxis[0]), np.arange(naxis[1]),indexing='ij')
-    yr, xr = CartPix.pix2ang(naxis, cdelt, crval,  ypix, xpix)
+    yr, xr = pix2ang(naxis, cdelt, crval,  ypix, xpix)
 
     xr[xr > 180] -= 360
     return wcs, xr, yr
@@ -137,6 +165,7 @@ def ang2pixWCS(wcs, ra, dec, ctype=['RA---TAN', 'DEC--TAN']):
 
     naxis = [int((wcs.wcs.crpix[0]-1.)*2.), int((wcs.wcs.crpix[1]-1.)*2.)]
 
-    pix = CartPix.ang2pix(naxis, wcs.wcs.cdelt, wcs.wcs.crval, ra, dec, ctype=ctype).astype('int')
-    
+
+    pix = ang2pix(naxis, wcs.wcs.cdelt, wcs.wcs.crval, dec, ra, ctype=ctype).astype('int')
+
     return pix

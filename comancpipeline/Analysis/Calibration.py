@@ -147,9 +147,9 @@ class DownSampleFrequency(DataStructure):
         #     return None
 
         # Open the output filename
-        self.dout = h5py.File('{}/{}'.format(self.out_dir, justFilename), driver='mpio', comm=comm)
+        self.dout = h5py.File('{}/{}'.format(self.out_dir, justFilename))
         self.createDatasets(data)
-        
+
         # down sample the frequency based values
         spec    = data.data['spectrometer']
         outSpec = self.dout['spectrometer']
@@ -187,6 +187,7 @@ class DownSampleFrequency(DataStructure):
         if data.rank == 0:
             self.dout['comap'].attrs.create('downsampled', True)
             self.dout['comap'].attrs.create('ds_factor', self.factor)
+        print(self.dout.filename)
         self.dout.close()
 
         # At the end of downsampling, change the input data reference
@@ -197,9 +198,10 @@ class AmbLoadCal(DataStructure):
     """
     Interpolate Ambient Measurements
     """
-    def __init__(self, amb_dir='AmbientLoads/'):
+    def __init__(self, amb_dir='AmbientLoads/', force=False):
         super().__init__()
         self.amb_dir = amb_dir
+        self.force = False
         
         self.fields = {'spectrometer/tod':True, 
                        'pointing/MJD':False}
@@ -240,8 +242,8 @@ class AmbLoadCal(DataStructure):
 
     def run(self, data):
         # don't want to calibrate multiple times!
-        if ('comap' in data.output) :
-            if (not isinstance(data.output['comap'].attrs.get('cal_ambload'), type(None))):
+        if ('comap' in data.data):
+            if (not isinstance(data.data['comap'].attrs.get('cal_ambload'), type(None))) and (not self.force):
                 print('2 {} is already ambient load calibrated'.format(data.filename.split('/')[-1]))
                 return None
 

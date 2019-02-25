@@ -1,7 +1,7 @@
 # Scripts for parsing the parameter file.
 
 import configparser
-import comancpipeline.Analysis as Analysis
+from  comancpipeline import Analysis 
 
 def checkTypes(valDict):
     for k, v in valDict.items():
@@ -57,6 +57,7 @@ def parse_parameters(filename):
 
 def parse_split(config, field):
 
+    print(config,field)
     if config.has_section(field):
         if config.has_option(field, 'selectAxes'):
             selectAxes = config.get(field, 'selectAxes')
@@ -76,5 +77,7 @@ def parse_split(config, field):
         else:
             splitAxis = 0
 
-    return selectAxes, splitAxis
+        return selectAxes, splitAxis
+    else:
+        return None, 0
     
