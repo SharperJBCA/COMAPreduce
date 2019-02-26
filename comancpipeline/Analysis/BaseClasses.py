@@ -2,6 +2,7 @@ import h5py
 from mpi4py import MPI
 from comancpipeline.Tools import Parser, Types
 import numpy as np
+import configparser
 
 comm = MPI.COMM_WORLD
 
@@ -71,21 +72,31 @@ class H5Data(object):
         self.extras = {} # contains extra data to write out
 
 
-        self.dsets= {}
+        self.dsets= {} # cropped values of input datasets
+        self.ndims= {} # original shapes of input datasets (don't use self.data[field].shape)
         self.hi = {}
         self.lo = {}
 
-        self.splitType = config.get('Inputs','splitAxis')
-        if not isinstance(self.splitType, type(None)):
-            self.splitType = getattr(Types, self.splitType)
-        self.selectType = config.get('SelectAxis','select')
-        self.selectIndex = 0
-        if not isinstance(self.selectType, type(None)):
-            self.selectType  = getattr(Types, self.selectType)
-            self.selectIndex = int(config.get('SelectAxis','index'))
-        
+        try:
+            self.splitType = config.get('Inputs','splitAxis')
+            if not isinstance(self.splitType, type(None)):
+                self.splitType = getattr(Types, self.splitType)
+        except (configparser.NoOptionError, configparser.NoSectionError):
+            self.splitType = None
+
+        try:
+            self.selectType = config.get('SelectAxis','select')
+            self.selectIndex = 0
+            if not isinstance(self.selectType, type(None)):
+                self.selectType  = getattr(Types, self.selectType)
+                self.selectIndex = int(config.get('SelectAxis','index'))
+        except (configparser.NoOptionError, configparser.NoSectionError):
+            self.selectType  = None
+            self.selectIndex = 0
+
         self.splitFields  = Types.getSplitStructure(self.splitType)
         self.selectFields = Types.getSelectStructure(self.selectType, self.selectIndex)
+
         #self.fields = {}
         #self.selectAxes={}
         #self.splitAxis ={}
@@ -94,16 +105,8 @@ class H5Data(object):
     def __del__(self):
         del self.dsets
         self.dsets = {}
-        #self.fields = {}
         self.hi = {}
         self.lo = {}
-        self.data.close()
-        if hasattr(self, 'outputextras'):
-            print(self.rank, 'CLOSING EXTRAS')
-            self.outputextras.close()
-            print(self.rank, 'CLOSED EXTRAS')
-        if hasattr(self, 'output'):
-            self.output.close()
 
     def getdset(self,field):
         """
@@ -113,6 +116,26 @@ class H5Data(object):
             self.setField(field)
 
         return self.dsets[field]
+
+    def setdset(self,field, d):
+        """
+        Update a dataset with new values.
+        Check to see if the dimensions need to be updated.
+        """
+        self.dsets[field] = d
+        self.ndims[field] = list(d.shape)
+
+        # If we are splitting/selecting any of these axes then we must remember
+        # to resize these to full size...
+        if field in self.splitFields:
+            splitAxis = self.splitFields[field]
+            self.ndims[field][splitAxis] = self.fullFieldLengths[self.splitType]
+
+        # Do we want to really update the select size again? When would this be useful? Piecewise writing?
+        if field in self.selectFields:
+            selectAxis = self.selectFields[field][0]
+            self.ndims[field][selectAxis] = self.fullFieldLengths[self.selectType]
+
 
     def getextra(self, field):
         if field not in self.extras.keys():
@@ -128,9 +151,12 @@ class H5Data(object):
         Allocate dataset to memory.
         """
 
+        # First store shape of original data for outputting
+        self.ndims[field] = [s for s in self.data[field].shape]
+        
         # Get maximum dimensions of dataset
-        slc = [slice(0,s,None) for s in self.data[field].shape]
-        ndims = [s for s in self.data[field].shape]
+        slc = [slice(0,s,None) for s in self.ndims[field]]
+        ndims = [s for s in self.ndims[field]]
 
         # is this field only having a single axis being selected?
         if field in self.selectFields.keys():
@@ -142,7 +168,7 @@ class H5Data(object):
         # if this field being split for MPI?
         if field in self.splitFields.keys():
             splitAxis = self.splitFields[field] # this will return an integer index
-            self.lo[field], self.hi[field] = self.getDataRange(self.data[field].shape[splitAxis])
+            self.lo[field], self.hi[field] = self.getDataRange(self.ndims[field][splitAxis])
             slc[splitAxis] = slice(self.lo[field], self.hi[field])
             slcin[splitAxis] = slice(0, self.hi[field]-self.lo[field])
             ndims[splitAxis] = self.hi[field]-self.lo[field]
@@ -172,49 +198,6 @@ class H5Data(object):
             # Else just read the whole thing at once
             self.dsets[field] = self.data[field][tuple(slc)]
 
-    def outputFields(self):
-        """
-        Output datasets to output file
-        """
-
-        # All mpi nodes must create the same overall sized dataset
-        if hasattr(self,'output'):
-            for field in self.dsets.keys():
-                tmp = self.output.create_dataset(field, self.data[field].shape)
-                if field in self.dsets.keys():
-                    # Get maximum dimensions of dataset
-                    slc = [slice(0,s,None) for s in self.data[field].shape]
-                    ndims = [s for s in self.data[field].shape]
-
-                    # is this field only having a single axis being selected?
-                    if field in self.selectFields.keys():
-                        selectAxis = self.selectFields[field][0]
-                        selectIndex = self.selectFields[field][1]
-                        slc[selectAxis] = slice(selectIndex,
-                                                selectIndex + 1)
-                        ndims[selectAxis] = 1
-                        mustSelect=True
-                    else:
-                        mustSelect=False
-
-                    slcin = [s for s in slc]
-                    # if this field being split for MPI?
-                    if field in self.splitFields.keys():
-                        splitAxis = self.splitFields[field] # this will return an integer index
-                        self.lo[field], self.hi[field] = self.getDataRange(self.data[field].shape[splitAxis])
-                        slc[splitAxis] = slice(self.lo[field], self.hi[field])
-                        slcin[splitAxis] = slice(0, self.hi[field]-self.lo[field])
-                        mustSplit = True
-                    else:
-                        mustSplit = False
-
-                    tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
-                else:
-                    # if the field is not in the datasets, then copy if from the original datafile.
-                    tmp[slc] = self.data[field]
-
-        if len(self.extras.keys()) > 0:
-            self.outputExtras()
 
 
     def setOutputAttr(self,grp, attr, value):
@@ -240,57 +223,92 @@ class H5Data(object):
         (i.e. the data is modified in place)
         """
         self.mode = 'a'
-        self.data = h5py.File(self.filename,self.mode, **self.filekwargs)
-                              #driver='mpio', comm=comm)
+        if comm.size > 1:
+            self.data = h5py.File(self.filename,self.mode, driver='mpio',comm=comm)
+        else:
+            self.data = h5py.File(self.filename,self.mode)
+
+        self.fullFieldLengths = Types.getFieldFullLength([self.splitType, self.selectType], self.data)
 
         if not isinstance(self.out_dir, type(None)):
-            self.output = h5py.File(self.out_dir+'/'+self.data.filename.split('/')[-1],'a', **self.filekwargs)
-            #, driver='mpio', comm=comm)
+            if comm.size > 1:
+                self.output = h5py.File(self.out_dir+'/'+self.data.filename.split('/')[-1],'a',
+                                        driver='mpio', comm=comm)
+            else:
+                self.output = h5py.File(self.out_dir+'/'+self.data.filename.split('/')[-1],'a')
 
         if not isinstance(self.out_extras_dir, type(None)):
             extrasname = self.data.filename.split('/')[-1].split('.h')[0]
-            self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a', **self.filekwargs)
+            if comm.size > 1:
+                self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a',
+                                              driver='mpio', comm=comm)#**self.filekwargs)
+            else:
+                self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a')
 
 
-    def outputExtras(self):
+    def outputExtras(self,k):
         """
         If you want to save any extra ancil output, e.g. images, tables, etc... they are saved here.
         """
+
+        # v[0] - the extra data
+        # v[1] - the description of the data (e.g. [_HORNS_,_TIME_] or [_OTHER_,_OTHER_])
+        # v[2] - Dimension in which a single index is selected
+        # v[3] - Dimension in which indices are split between MPI processes
+
+        v = self.extras[k]
+
         #='mpio', comm=comm)
-        self.fullFieldLengths = Types.getFieldFullLength([self.splitType, self.selectType], self.data)
 
-
-        for k, v in self.extras.items():
+        if (isinstance(v[2], type(None)) and isinstance(v[3], type(None))):
+            tmp = self.outputextras.create_dataset(k, v[0].shape)
+            tmp[...] = v[0]
+        else:
+            slc   = [slice(0,s,None) for s in v[0].shape]
+            ndims = [s for s in v[0].shape]
             
-            if (isinstance(v[2], type(None)) and isinstance(v[3], type(None))):
-                tmp = self.outputextras.create_dataset(k, v[0].shape)
-                tmp[...] = v[0]
-            else:
+            selectAxis = v[2]
+            if not isinstance(selectAxis, type(None)):
+                selectFull = self.fullFieldLengths[self.selectType]
 
-                slc   = [slice(0,s,None) for s in v[0].shape]
-                ndims = [s for s in v[0].shape]
+            splitAxis = v[3]
+            if not isinstance(splitAxis, type(None)):
+                splitFull = self.fullFieldLengths[self.splitType]
+                lo, hi    = self.getDataRange(splitFull)
+                slc[splitAxis] = slice(lo,hi)
+                ndims[splitAxis] = splitFull
 
-                selectAxis = v[2]
-                if not isinstance(selectAxis, type(None)):
-                    selectFull = self.fullFieldLengths[self.selectType]
-                    #slc[selectAxis] =  
+            slc = tuple(slc)
+            tmp = self.outputextras.create_dataset(k, ndims) # create the dataset for the correct size
+            tmp[slc] = v[0]
 
-                splitAxis = v[3]
-                if not isinstance(splitAxis, type(None)):
-                    splitFull = self.fullFieldLengths[self.splitType]
-                    lo, hi    = self.getDataRange(splitFull)
-                    slc[splitAxis] = slice(lo,hi)
-                    ndims[splitAxis] = splitFull
+    def outputFields(self, field):
+        """
+        Output datasets to output file
+        """
 
-                slc = tuple(slc)
-                tmp = self.outputextras.create_dataset(k, ndims) # create the dataset for the correct size
-                try:
-                    tmp[slc] = v[0]
-                except TypeError:
-                    print(slc)
-                    print(v[0].shape)
-                    print(k)
-                    raise TypeError
+        # Get maximum dimensions of dataset
+        slc   = [slice(0,s,None) for s in self.ndims[field]]
+        slcin = [s for s in slc]
+        ndims = [s for s in self.ndims[field]]
+
+        if field in self.splitFields:
+            splitAxis = self.splitFields[field]
+            slc[splitAxis] = slice(self.lo[field], self.hi[field])
+            slcin[splitAxis] = slice(0, self.hi[field]-self.lo[field])
+
+        if field in self.selectFields:
+            selectAxis = self.selectFields[field][0]
+            selectIndex = self.selectFields[field][1]
+            slc[selectAxis] = slice(selectIndex, selectIndex + 1)
+            slcin[selectAxis] = slice(0,1)
+
+
+        # All mpi nodes must create the same overall sized dataset
+        tmp = self.output.create_dataset(field, ndims)
+        tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
+
+
 
     def setExtrasData(self, key, data, axisdesp):
         """
@@ -331,3 +349,22 @@ class H5Data(object):
         hi = int(np.max(thisNode)) + 1
         lo = int(np.min(thisNode))
         return lo, hi
+
+# MPI FUNCTIONS FOR WRITING OUT
+def writeoutextras(h5data):
+
+    keys = list(h5data.extras.keys())
+    keys = np.sort(np.array(keys)) # all nodes must do this in the same order
+    for k in keys:
+        h5data.outputExtras(k)
+        comm.Barrier()
+
+
+# MPI FUNCTIONS FOR WRITING OUT
+def writeoutput(h5data):
+
+    keys = list(h5data.dsets.keys())
+    keys = np.sort(np.array(keys)) # all nodes must do this in the same order
+    for k in keys:
+        h5data.outputFields(k)
+        comm.Barrier()

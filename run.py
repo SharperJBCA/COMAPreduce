@@ -3,7 +3,7 @@ comm = MPI.COMM_WORLD
 
 import numpy as np
 #from comancpipeline.Tools import *
-from comancpipeline.Analysis.BaseClasses import H5Data
+from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis import Calibration
 from comancpipeline.Tools import Parser
 import sys
@@ -39,9 +39,9 @@ def main(args):
             print('Opening: {}'.format(filename.split('/')[-1]))
         try: # If the file fails to open we just continue to the next...
 
-            h5data = H5Data(filename,comm.rank, comm.size, config,
-                            out_extras_dir=config.get('Inputs', 'out_extras_dir'), 
-                            out_dir=config.get('Inputs', 'out_dir'))
+            h5data = BaseClasses.H5Data(filename,comm.rank, comm.size, config,
+                                        out_extras_dir=config.get('Inputs', 'out_extras_dir'), 
+                                        out_dir=config.get('Inputs', 'out_dir'))
             h5data.open()
 
             try: # Check to see if this file has a comment string, no string then no analysis!
@@ -65,13 +65,21 @@ def main(args):
                     print(selector)
                 selector(h5data)
 
-            comm.Barrier() # we want all threads to wait here.
             print(comm.rank, 'about to output...')
-            h5data.outputFields() # Write updated data out to file
-            comm.Barrier() # This should ensure that all threads close AFTER writing out
-            comm.barrier()
+            if hasattr(h5data, 'outputextras'):
+                BaseClasses.writeoutextras(h5data)
+            if hasattr(h5data, 'output'):
+                BaseClasses.writeoutput(h5data)
+
             print(comm.rank, 'about to close...')
             h5data.close()
+            if hasattr(h5data, 'outputextras'):
+                h5data.outputextras.close()
+            if hasattr(h5data, 'output'):
+                h5data.output.close()
+            if hasattr(h5data,'data'):
+                h5data.data.close()
+
         except OSError:
             pass
 

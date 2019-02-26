@@ -14,7 +14,11 @@ _COMAPDATA_ = {'spectrometer/tod': [_HORNS_,_SIDEBANDS_,_FREQUENCY_,_TIME_],
                'spectrometer/pixel_pointing/pixel_dec':[_HORNS_,_TIME_],
                'spectrometer/pixel_pointing/pixel_az':[_HORNS_,_TIME_],   
                'spectrometer/pixel_pointing/pixel_el':[_HORNS_,_TIME_],
-               'spectrometer/frequency':[_SIDEBANDS_,_FREQUENCY_]}
+               'spectrometer/frequency':[_SIDEBANDS_,_FREQUENCY_],
+               'spectrometer/time_average':[_HORNS_,_SIDEBANDS_,_FREQUENCY_],
+               'spectrometer/band_average':[_HORNS_,_SIDEBANDS_,_TIME_],
+               'spectrometer/bands':[_SIDEBANDS_],
+               'spectrometer/feeds':[_HORNS_]}
 
 
 def getSplitStructure(splitdir, datastc=_COMAPDATA_):

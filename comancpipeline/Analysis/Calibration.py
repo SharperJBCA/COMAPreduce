@@ -125,49 +125,24 @@ class DownSampleFrequency(DataStructure):
 
         din.data.copy('spectrometer/pixel_pointing', spectrometer)
     
+
     def run(self,data):
-        justFilename = data.filename.split('/')[-1]
-        # try:
-        #     # First see if there is a downsampled file that already exists with
-        #     # a downsampled tag. If so we should do nothing.
-        #     #dout = h5py.File('{}/{}'.format(self.out_dir, justFilename),'r')
-        #     #targFileOkay = isinstance(dout['comap'].attrs.get('downsampled'), type(None))
-        #     #dout.close()
-        #     print('File {} already exists'.format(justFilename))
-        #     return None
-        # except OSError:
-        #     targFileOkay = True
-
-        # thisFileOkay = isinstance(data.data['comap'].attrs.get('downsampled'), type(None))
-        # if (not thisFileOkay) or (not targFileOkay):
-        #     print('File {} already downsampled'.format(justFilename))
-        #     # Assume that if you asked for down sampled data then you want to 
-        #     # actually being working with the previously downsampled dataset.
-        #     data.update('{}/{}'.format(self.out_dir, justFilename))
-        #     return None
-
-        # Open the output filename
-        self.dout = h5py.File('{}/{}'.format(self.out_dir, justFilename))
-        self.createDatasets(data)
-
-        # down sample the frequency based values
-        spec    = data.data['spectrometer']
-        outSpec = self.dout['spectrometer']
         
-        freq = spec['frequency'][...]
-        freq = freq.reshape((freq.shape[0], freq.shape[1]//self.factor, self.factor))
-        outSpec.create_dataset('frequency', data=np.mean(freq, axis=-1))
+        field = 'spectrometer/frequency'
+        freq = data.getdset(field) 
+        data.setdset(field, freq.reshape((freq.shape[0], freq.shape[1]//self.factor, self.factor)))
 
-        time_average = spec['time_average'][...]
+        field = 'spectrometer/time_average'
+        time_average = data.getdset(field)
         time_average = time_average.reshape((time_average.shape[0], time_average.shape[1],
                               time_average.shape[2]//self.factor, 
                               self.factor))
-        outSpec.create_dataset('time_average', data=np.nanmean(time_average, axis=-1))
-        
-        # can't read in all of the TOD usually...
-        tod = spec['tod']
-        todOut = outSpec.create_dataset('tod', (tod.shape[0], tod.shape[1], tod.shape[2]//self.factor, tod.shape[3]))
+        data.setdset(field, time_average)
 
+        # can't read in all of the TOD usually...
+        field = 'spectrometer/tod'
+        tod = data.getdset(field)
+        todOut = np.zeros((tod.shape[0], tod.shape[1], tod.shape[2]//self.factor, tod.shape[3]))
         # ...read in one horn at a time
         nHorns, nSBs, nChans, nSamps = tod.shape
         import time
@@ -183,16 +158,7 @@ class DownSampleFrequency(DataStructure):
                 todOut[i,j,:,:] = np.transpose(np.nanmean(temp,axis=-1),(1,0))
                 print(i,j,'Time taken {}'.format(time.time()-start))
 
-        # add some new attributes:
-        if data.rank == 0:
-            self.dout['comap'].attrs.create('downsampled', True)
-            self.dout['comap'].attrs.create('ds_factor', self.factor)
-        print(self.dout.filename)
-        self.dout.close()
-
-        # At the end of downsampling, change the input data reference
-        # to point to the downsampled data reference:
-        #data.update('{}/{}'.format(self.out_dir, justFilename))
+        data.setdset(field, todOut)
 
 class AmbLoadCal(DataStructure):
     """

@@ -250,7 +250,7 @@ class SimpleMapCentred(SimpleMap):
             self.hits = np.reshape(h, (self.naxis[0], self.naxis[1]))
 
             for j in range(nSBs):
-                for k in range(nChans):
+                for k in range(1):#nChans):
                     todmap = tod[i,j,k,good]
 
                     if self.filtertod:

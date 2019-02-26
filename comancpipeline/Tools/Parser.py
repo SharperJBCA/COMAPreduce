@@ -37,7 +37,10 @@ def parse_parameters(filename):
 
     order = Parameters.get('Inputs', 'order').split(',')
 
-    targets = Parameters.get('Inputs', 'targets').split(',')
+    try:
+        targets = Parameters.get('Inputs', 'targets').split(',')
+    except configparser.NoOptionError:
+        targets = ['']
     targets = [t.lower() for t in targets]
 
     selectors = []
