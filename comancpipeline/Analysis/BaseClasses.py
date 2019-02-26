@@ -130,12 +130,13 @@ class H5Data(object):
         if field in self.splitFields:
             splitAxis = self.splitFields[field]
             self.ndims[field][splitAxis] = self.fullFieldLengths[self.splitType]
+            self.fullFieldLengths[self.splitType] = self.ndims[field][splitAxis]
 
         # Do we want to really update the select size again? When would this be useful? Piecewise writing?
         if field in self.selectFields:
             selectAxis = self.selectFields[field][0]
             self.ndims[field][selectAxis] = self.fullFieldLengths[self.selectType]
-
+            self.fullFieldLengths[self.selectType] = self.ndims[field][selectAxis]
 
     def getextra(self, field):
         if field not in self.extras.keys():
@@ -145,6 +146,25 @@ class H5Data(object):
 
     def setExtra(self,field):
         pass
+
+    def cropExtra(self, d, desc):
+        
+        selectAxis = np.where((np.array(desc) == self.selectType))[0]
+        splitAxis  = np.where((np.array(desc) == self.splitType ))[0]
+
+        if (len(selectAxis) == 0) and (len(splitAxis) == 0):
+            return d
+        else:
+            slc = [s for s in d.shape]
+            if not (len(selectAxis)==0):
+                slc[selectAxis[0]] = slice(self.selectIndex, self.selectIndex+1)
+            if not (len(splitAxis)==0):
+                splitFull = self.fullFieldLengths[self.splitType]
+                lo, hi    = self.getDataRange(splitFull)
+                slc[splitAxis[0]] = slice(lo, hi)
+
+            return d[tuple(slc)]
+
 
     def setField(self, field):
         """
@@ -331,6 +351,12 @@ class H5Data(object):
 
     def close(self):
         self.__del__()
+        if hasattr(self, 'outputextras'):
+            self.outputextras.close()
+        if hasattr(self, 'output'):
+            self.output.close()
+        if hasattr(self,'data'):
+            self.data.close()
 
     def update(self, filename, mode='a'):
         self.close()

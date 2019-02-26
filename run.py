@@ -31,62 +31,54 @@ def main(args):
     
     # Start main loop over each file
     for i in range(filelist.size):
+        comm.Barrier()
+
         if comm.rank == 0:
             start = time.time()
 
         filename = filelist[i]
         if comm.rank == 0:
             print('Opening: {}'.format(filename.split('/')[-1]))
+
+        h5data = BaseClasses.H5Data(filename,comm.rank, comm.size, config,
+                                    out_extras_dir=config.get('Inputs', 'out_extras_dir'), 
+                                    out_dir=config.get('Inputs', 'out_dir'))
         try: # If the file fails to open we just continue to the next...
-
-            h5data = BaseClasses.H5Data(filename,comm.rank, comm.size, config,
-                                        out_extras_dir=config.get('Inputs', 'out_extras_dir'), 
-                                        out_dir=config.get('Inputs', 'out_dir'))
             h5data.open()
-
-            try: # Check to see if this file has a comment string, no string then no analysis!
-                comment = (h5data.data['comap'].attrs['comment'].lower()).decode('utf-8')
-            except KeyError:
-                print('No comment, skipping...')
-                continue
-
-            # Does the comment contain a target we are wanting to analyse?
-            check = [t in comment for t in targets]
-            if not any(check):
-                print('{} does not contain allowed target'.format(comment))
-                continue
-
-            # Loop over pipeline operations
-            for selector in selectors:
-
-                # Update stored data storage if required...
-                #h5data.setFields(selector.fields, config) # which fields does this operator need?
-                if comm.rank == 0:
-                    print(selector)
-                selector(h5data)
-
-            print(comm.rank, 'about to output...')
-            if hasattr(h5data, 'outputextras'):
-                BaseClasses.writeoutextras(h5data)
-            if hasattr(h5data, 'output'):
-                BaseClasses.writeoutput(h5data)
-
-            print(comm.rank, 'about to close...')
-            h5data.close()
-            if hasattr(h5data, 'outputextras'):
-                h5data.outputextras.close()
-            if hasattr(h5data, 'output'):
-                h5data.output.close()
-            if hasattr(h5data,'data'):
-                h5data.data.close()
-
         except OSError:
-            pass
+            print('Could not open file')
+            continue
+
+        try: # Check to see if this file has a comment string, no string then no analysis!
+            comment = (h5data.data['comap'].attrs['comment'].lower()).decode('utf-8')
+        except KeyError:
+            print('No comment, skipping...')
+            continue
+
+        # Does the comment contain a target we are wanting to analyse?
+        check = [t in comment for t in targets]
+        if not any(check):
+            print('{} does not contain allowed target'.format(comment))
+            continue
+
+        # Loop over pipeline operations
+        for selector in selectors:
+
+            # Update stored data storage if required...
+            if comm.rank == 0:
+                print(selector)
+            selector(h5data)
+
+        if hasattr(h5data, 'outputextras'):
+            BaseClasses.writeoutextras(h5data)
+        if hasattr(h5data, 'output'):
+            BaseClasses.writeoutput(h5data)
+
+        h5data.close()
 
         if comm.rank == 0:
             print('Run time {}'.format(time.time()-start))
     print(comm.rank,'at end of script')
-    #sys.exit()
 
 if __name__ == "__main__": 
     main(sys.argv[1:])

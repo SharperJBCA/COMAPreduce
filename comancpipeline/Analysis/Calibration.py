@@ -3,7 +3,7 @@ from matplotlib import pyplot
 import h5py
 from comancpipeline.Analysis.BaseClasses import DataStructure
 from comancpipeline.Analysis.FocalPlane import FocalPlane
-from comancpipeline.Tools import Coordinates
+from comancpipeline.Tools import Coordinates, Types
 from os import listdir, getcwd
 from os.path import isfile, join
 
@@ -55,17 +55,19 @@ class FillPointing(DataStructure):
 
     def run(self,data):
         missingFields = self.missingFields(data)
-        print(missingFields)
         if not isinstance(missingFields, type(None)):
-            spec = data.data['spectrometer']
-            nHorn, nSB, nChan, nSample = spec['tod'].shape
             
-            azval = self.interpAzEl(data.data['pointing/azActual'][...],
-                                    data.data['pointing/MJD'][...],
-                                    data.data['spectrometer/MJD'][...])
-            elval = self.interpAzEl(data.data['pointing/elActual'][...],
-                                    data.data['pointing/MJD'][...],
-                                    data.data['spectrometer/MJD'][...])
+            if 'spectrometer/tod' in data.dsets:
+                nHorn, nSB, nChan, nSample = data.dsets['spectrometer/tod'].shape
+            else:
+                nHorn, nSB, nChan, nSample = data.data['spectrometer/tod'].shape
+            
+            azval = self.interpAzEl(data.getdset('pointing/azActual'),
+                                    data.getdset('pointing/MJD'),
+                                    data.getdset('spectrometer/MJD'))
+            elval = self.interpAzEl(data.getdset('pointing/elActual'),
+                                    data.getdset('pointing/MJD'),
+                                    data.getdset('spectrometer/MJD'))
 
             
             #az,el, ra, dec = [np.zeros(( nHorn, nSample)) for i in range(4)]
@@ -74,14 +76,21 @@ class FillPointing(DataStructure):
                     del data.data[field]
                 data.data.create_dataset(field, (nHorn, nSample), dtype='f')
 
-            for i in range(nHorn):
+            if data.splitType == Types._HORNS_:
+                splitFull = data.fullFieldLengths[data.splitType]
+                lo, hi    = data.getDataRange(splitFull)
+            else:
+                lo, hi = 0, nHorn
+
+            for ilocal, i in enumerate(range(lo,hi)):
+                print(ilocal, i)
                 data.data[missingFields[1]][i,:] = elval+self.focalPlane.offsets[i][1] - self.focalPlane.eloff
                 data.data[missingFields[0]][i,:] = azval+self.focalPlane.offsets[i][0]/np.cos(data.data[missingFields[1]][i,:]*np.pi/180.) - self.focalPlane.azoff
                     
                 # fill in the ra/dec fields
                 data.data[missingFields[2]][i,:],data.data[missingFields[3]][i,:] = Coordinates.h2e(data.data[missingFields[0]][i,:],
                                                                                                     data.data[missingFields[1]][i,:],
-                                                                                                    data.data['spectrometer/MJD'][...], 
+                                                                                                    data.getdset('spectrometer/MJD'), 
                                                                                                     self.longitude, 
                                                                                                     self.latitude)
 
@@ -169,14 +178,11 @@ class AmbLoadCal(DataStructure):
         self.amb_dir = amb_dir
         self.force = False
         
-        self.fields = {'spectrometer/tod':True, 
-                       'pointing/MJD':False}
-
     def __str__(self):
         return "Applying ambient load calibration"
 
     def getNearestGain(self, data):
-        meanmjd = np.nanmean(data.dsets['pointing/MJD'])
+        meanmjd = np.nanmean(data.getdset('pointing/MJD'))
 
         # First get the mean MJD of the data
         obsids = np.array([int(f.split('-')[-5]) for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if 'hdf5' in f ])
@@ -189,9 +195,14 @@ class AmbLoadCal(DataStructure):
         gainmjd = np.zeros(len(argmins))
         gainel = np.zeros(len(argmins))
         for i,j in enumerate(argmins):
-            g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[j]),'r')
-            gainmjd[i] = g['MJD'][0]
-            gainel[i]  = g['EL'][0]
+            if comm.size > 1:
+                g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[j]),'r', driver='mpio', comm=comm)
+            else:
+                g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[j]),'r')
+
+            if 'AMBIENTLOAD' in g:
+                gainmjd[i] = g['AMBIENTLOAD/MJD'][0]
+                gainel[i]  = g['AMBIENTLAD/EL'][0]
             g.close()
 
         Amass = 1./np.sin(gainel*np.pi/180.)
@@ -200,42 +211,50 @@ class AmbLoadCal(DataStructure):
 
         # Now find the nearest mjd to obs
         minmjd = np.argmin((gainmjd[AmassRange] - meanmjd)**2)
-        gain = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[AmassRange[minmjd]]),'r')
-        self.Gain = gain['Gain'][...]
-        gain.close()
-        
-        return self.Gain
+        if comm.size > 1:
+            g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[AmassRange[minmjd]]),'r', driver='mpio', comm=comm)
+        else:
+            g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[AmassRange[minmjd]]),'r')
 
-    def run(self, data):
-        # don't want to calibrate multiple times!
-        if ('comap' in data.data):
-            if (not isinstance(data.data['comap'].attrs.get('cal_ambload'), type(None))) and (not self.force):
-                print('2 {} is already ambient load calibrated'.format(data.filename.split('/')[-1]))
-                return None
+        self.Gain = g['AMBIENTLOAD/Gain'][...]
+        self.GainFreq = g['AMBIENTLOAD/GainFreq'][...]
+        g.close()
 
-        self.Gain = self.getNearestGain(data)
+        # DOWNSAMPLE TO THE CORRECT FREQUENCY BINNING
+        freq = data.getdset('spectrometer/frequency')
+        if data.splitType == Types._FREQUENCY_:
+            nFreqs = data.fullFieldLengths[Types._FREQUENCY_]
+        else:
+            nFreqs = freq.shape[2]
 
-        # if data is downsampled then we must down sample the gain too
-        if not isinstance(data.data['comap'].attrs.get('downsampled'), type(None)):
-            self.factor = int(data.data['comap'].attrs.get('ds_factor'))
+        if self.Gain.shape[2] != nFreqs:
+            factor = int(self.Gain.shape[2]//nFreqs)
             self.Gain = np.mean(np.reshape(self.Gain, (self.Gain.shape[0],
                                                        self.Gain.shape[1], 
                                                        self.Gain.shape[2]//self.factor, 
                                                        self.factor)),axis=-1)
+
+
+        # CROP TO THE DESIRED SELECT
+        desc = [Types._HORNS_, Types._SIDEBANDS_, Types._FREQUENCY_]
+        self.Gain = data.cropExtra(self.Gain, desc)
         
-        nHorns, nSBs, nChans, nSamples = data.data['spectrometer/tod'].shape
-        field = 'spectrometer/tod'
-        selectAxes, splitAxis = data.selectAxes[field], data.splitAxis[field]
-        if not isinstance(selectAxes, type(None)):
-            for i in selectAxes:
-                self.Gain = self.Gain[i]
+        return self.Gain, self.GainFreq
+
+    def run(self, data):
+        # don't want to calibrate multiple times!
+        #if ('comap' in data.data):
+        #    if (not isinstance(data.data['comap'].attrs.get('cal_ambload'), type(None))) and (not self.force):
+        #        print('2 {} is already ambient load calibrated'.format(data.filename.split('/')[-1]))
+        #        return None
+
+        self.Gain, self.GainFreq = self.getNearestGain(data)
+
+        tod = data.getdset('spectrometer/tod')
+        tod /= self.Gain[...,np.newaxis]
 
 
-        data.dsets['spectrometer/tod'] /= np.take(self.Gain,
-                                                  range(data.lo[field],data.hi[field]),
-                                                  axis=data.splitAxis[field])[...,np.newaxis]
-
-        data.setOutputAttr('comap', 'cal_ambload', True)
+        #data.setOutputAttr('comap', 'cal_ambload', True)
 
 
 from scipy.ndimage.filters import gaussian_filter1d
