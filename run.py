@@ -19,6 +19,8 @@ default_parser.add_option("-P","--parameters",dest='parameters',action="store",t
 import time
 
 def main(args):
+    print('Starting process {}'.format(comm.rank),flush=True)
+
     # Read in the metadata for this pipeline run
     options,pargs = default_parser.parse_args(args)
 
@@ -31,14 +33,14 @@ def main(args):
     
     # Start main loop over each file
     for i in range(filelist.size):
-        comm.Barrier()
+        BaseClasses.synch(0)
 
         if comm.rank == 0:
             start = time.time()
 
         filename = filelist[i]
         if comm.rank == 0:
-            print('Opening: {}'.format(filename.split('/')[-1]))
+            print('Opening: {}'.format(filename.split('/')[-1]),flush=True)
 
         h5data = BaseClasses.H5Data(filename,comm.rank, comm.size, config,
                                     out_extras_dir=config.get('Inputs', 'out_extras_dir'), 
@@ -53,29 +55,36 @@ def main(args):
             comment = (h5data.data['comap'].attrs['comment'].lower()).decode('utf-8')
         except KeyError:
             print('No comment, skipping...')
+            h5data.close()
             continue
 
         # Does the comment contain a target we are wanting to analyse?
         check = [t in comment for t in targets]
         if not any(check):
             print('{} does not contain allowed target'.format(comment))
+            h5data.close()
             continue
 
         # Loop over pipeline operations
+        writeout = True
         for selector in selectors:
 
             # Update stored data storage if required...
             if comm.rank == 0:
                 print(selector)
-            selector(h5data)
+            try:
+                selector(h5data)
+            except KeyError:
+                print('Failed to find an expected field in {}'.format(filename))
+                writeout = False
+                break
 
-        if hasattr(h5data, 'outputextras'):
+        if hasattr(h5data, 'outputextras') and writeout:
             BaseClasses.writeoutextras(h5data)
-        if hasattr(h5data, 'output'):
+        if hasattr(h5data, 'output') and writeout:
             BaseClasses.writeoutput(h5data)
 
         h5data.close()
-
         if comm.rank == 0:
             print('Run time {}'.format(time.time()-start))
     print(comm.rank,'at end of script')

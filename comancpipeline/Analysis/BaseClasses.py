@@ -3,7 +3,7 @@ from mpi4py import MPI
 from comancpipeline.Tools import Parser, Types
 import numpy as np
 import configparser
-
+import time
 comm = MPI.COMM_WORLD
 
 class DataStructure(object):
@@ -57,15 +57,19 @@ class H5Data(object):
         else:
             self.filekwargs = {}
 
-        self.filename = filename
-        self.rank = rank
-        self.size = size
-        self.mode = mode
-
+        data_dir = config.get('Inputs','data_dir')
+        if data_dir == 'None':
+            data_dir = './'
         if out_dir == 'None':
             out_dir = None
         if out_extras_dir == 'None':
             out_extras_dir = None
+
+        self.filename = '{}/{}'.format(data_dir,filename)
+        self.rank = rank
+        self.size = size
+        self.mode = mode
+
 
         self.out_dir = out_dir # where to store changed data
         self.out_extras_dir = out_extras_dir
@@ -104,7 +108,11 @@ class H5Data(object):
 
     def __del__(self):
         del self.dsets
-        self.dsets = {}
+        del self.extras
+        del self.ndims
+        self.ndims  = {}
+        self.extras = {}
+        self.dsets  = {}
         self.hi = {}
         self.lo = {}
 
@@ -140,7 +148,7 @@ class H5Data(object):
 
     def getextra(self, field):
         if field not in self.extras.keys():
-            self.setExtra(field)
+            pass
 
         return self.extras[field][0]
 
@@ -193,7 +201,7 @@ class H5Data(object):
             slcin[splitAxis] = slice(0, self.hi[field]-self.lo[field])
             ndims[splitAxis] = self.hi[field]-self.lo[field]
 
-        maxDim = np.argmax(ndims)
+        maxDim = 0
         maxStep = 1000000 # don't read more than 1000000 values at once?
         Adims = 1
         for i, dim in enumerate(ndims):
@@ -205,14 +213,23 @@ class H5Data(object):
             nsteps = int(Adims*ndims[maxDim]//maxStep)
             if np.mod(Adims*ndims[maxDim],maxStep) != 0:
                 nsteps += 1
-            stepSize = int(maxStep//Adims) # in maximum dimension
+            stepSize = int(maxStep//Adims) # in first dimension
+            if stepSize == 0:
+                stepSize = 1
+                nsteps = ndims[maxDim]
             for i in range(nsteps):
                 lo = i*stepSize
                 hi = (i+1)*stepSize
                 if i == nsteps-1:
                     hi = ndims[maxDim]
-                slc[maxDim] = slice(lo,hi)
+
+                if field in self.splitFields:
+                    if self.splitFields[field] == maxDim:
+                        slc[maxDim]   = slice(self.lo[field]+lo,self.lo[field]+hi)
+                else:
+                    slc[maxDim] = slice(lo,hi)
                 slcin[maxDim] = slice(lo,hi)
+
                 self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
         else:
             # Else just read the whole thing at once
@@ -376,21 +393,40 @@ class H5Data(object):
         lo = int(np.min(thisNode))
         return lo, hi
 
+def synch(tag=0):
+    buf = None
+
+    if comm.rank == 0:
+        for ip in range(1, comm.size):
+            comm.send(buf, dest=ip,tag=tag+ip)
+            buf = comm.recv(source=ip,tag=tag+ip)
+        for ip in range(1,comm.size):
+            comm.send(buf,dest=ip,tag=tag+ip)
+    else:
+        buf = comm.recv(source=0,tag=tag+comm.rank)
+        comm.send(buf,dest=0,tag=tag+comm.rank)
+        buf = comm.recv(source=0,tag=tag+comm.rank)
 # MPI FUNCTIONS FOR WRITING OUT
 def writeoutextras(h5data):
 
     keys = list(h5data.extras.keys())
+    if len(keys) == 0:
+        return None
+
     keys = np.sort(np.array(keys)) # all nodes must do this in the same order
     for k in keys:
         h5data.outputExtras(k)
-        comm.Barrier()
+        synch(10000)
 
 
 # MPI FUNCTIONS FOR WRITING OUT
 def writeoutput(h5data):
 
     keys = list(h5data.dsets.keys())
+    if len(keys) == 0:
+        return None
+
     keys = np.sort(np.array(keys)) # all nodes must do this in the same order
     for k in keys:
         h5data.outputFields(k)
-        comm.Barrier()
+        synch(20000)

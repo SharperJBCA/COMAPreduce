@@ -277,7 +277,7 @@ class AmbientLoad(DataStructure):
         self.suffix = '_AmbLoad'
 
         self.elLim = 5.
-        self.minSamples = 2000
+        self.minSamples = 200
 
         self.tCold = 2.73 # K, cmb
         self.tHotOffset = 273.15 # celcius -> kelvin
@@ -334,12 +334,13 @@ class AmbientLoad(DataStructure):
 
     def run(self,data):
 
-        if not b'Tsys' in data.data['comap'].attrs['comment']:
-            print('Not an ambient load scan')
-            return None
+        #if not b'Tsys' in data.data['comap'].attrs['comment']:
+        #   print('Not an ambient load scan')
+        #    return None
 
         # Check if elevations shift (e.g., there is a skydip
-        e0, e1 = np.nanmin(data.data['pointing/elEncoder']), np.nanmax(data.data['pointing/elEncoder'])
+        el  = data.getdset('pointing/elEncoder')
+        e0, e1 = np.nanmin(el), np.nanmax(el)
         if (e1-e0) > self.elLim:
             print('Elevation range exceeds {:.0f} degrees'.format(self.elLim))
             return None
@@ -347,10 +348,11 @@ class AmbientLoad(DataStructure):
 
         self.parsefilename(data.filename)
 
-        tod = data.data['spectrometer/tod']
-        mjd = data.data['spectrometer/MJD'][:]
+        freq = data.getdset('spectrometer/frequency')
+        tod = data.getdset('spectrometer/tod') # data.data['spectrometer/tod']
+        mjd = data.getdset('spectrometer/MJD') # data.data['spectrometer/MJD'][:]
         self.mjd = np.mean(mjd)
-        self.elevation = np.nanmedian(data.data['pointing/elEncoder'])
+        self.elevation = np.nanmedian(el)
 
         # Create output containers
         nHorns, nSBs, nChan, nSamps = tod.shape
@@ -358,12 +360,12 @@ class AmbientLoad(DataStructure):
         self.Tsys = np.zeros((nHorns, nSBs, nChan))
         self.G    = self.Tsys*0.
 
-        if nSamps < self.minSamples:
-            return 0
+        #if nSamps < self.minSamples:
+        #   return 0
 
 
-        tHot = data.data['hk']['env']['ambientLoadTemp'][:] + self.tHotOffset
-        hkMJD = data.data['hk']['env']['MJD'][:]
+        tHot = data.getdset('hk/env/ambientLoadTemp') + self.tHotOffset
+        hkMJD = data.getdset('hk/env/MJD')
         tHot = gaussian_filter1d(tHot, 35)
         tHot = interp1d(hkMJD, tHot, bounds_error=False, fill_value=np.nan)(mjd)
 
@@ -381,7 +383,7 @@ class AmbientLoad(DataStructure):
 
 
         for i in range(nHorns):
-            if (nSamps//2 - 1000 < 0):
+            if (nSamps//2 - self.minSamples//2 < 0):
                 continue
             itod = tod[i,:,:,:]
             
@@ -401,9 +403,30 @@ class AmbientLoad(DataStructure):
                 self.Tsys[i,j,:] = ((tHot - self.tCold)/(Y - 1.) - self.tCold )#[::step]
                 self.G[i,j,:] = ((vHot - vCold)/(tHot - self.tCold))#[::step]
 
+        data.setExtrasData('AMBIENTLOADS/Gain', 
+                           self.G,
+                           [Types._HORNS_, 
+                            Types._SIDEBANDS_, 
+                            Types._FREQUENCY_])
+        data.setExtrasData('AMBIENTLOADS/Tsys', 
+                           self.Tsys,
+                           [Types._HORNS_, 
+                            Types._SIDEBANDS_, 
+                            Types._FREQUENCY_])
+        data.setExtrasData('AMBIENTLOADS/Frequency', 
+                           freq,
+                           [Types._SIDEBANDS_, 
+                            Types._FREQUENCY_])
+        data.setExtrasData('AMBIENTLOADS/MJD', 
+                           np.array([np.nanmean(mjd)]),
+                           [Types._OTHER_])
+        data.setExtrasData('AMBIENTLOADS/EL', 
+                           np.array([np.nanmean(el)]),
+                           [Types._OTHER_])
+
         #write to disk
-        self.writeFile(self.filename, self.overwrite)
-        data.stop = True # if this was a calibrator, we dont want to run anything else
+        #self.writeFile(self.filename, self.overwrite)
+        #data.stop = True # if this was a calibrator, we dont want to run anything else
 
     def writeFile(self, filename, overwrite=True):
         dout = h5py.File(filename,'a')

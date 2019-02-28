@@ -141,7 +141,7 @@ class FitSource(DataStructure):
                     #pyplot.plot(todFit-Fitting.Gauss2d(fout[0], x, y,0,0))
                     #pyplot.show()
                 
-        nHorns, nSBs, nChans, nSamples = data.data['spectrometer/tod'].shape
+        #nHorns, nSBs, nChans, nSamples = data.data['spectrometer/tod'].shape
         data.setExtrasData('JupiterFits/Parameters', 
                            self.Pout,
                            [Types._HORNS_, 

@@ -68,6 +68,7 @@ def getFieldFullLength(svals, data, datastc=_COMAPDATA_):
         for k, v in datastc.items():
             if s in v:
                 selectAxis = np.where(np.array(v) == s)[0][0]
-                fields[s] = data[k].shape[selectAxis]
-                break
+                if k in data:
+                    fields[s] = data[k].shape[selectAxis]
+                    break
     return fields
