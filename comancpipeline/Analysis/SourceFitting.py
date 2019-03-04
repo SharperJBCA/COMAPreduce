@@ -111,9 +111,11 @@ class FitSource(DataStructure):
             good = (np.isnan(ra[i,:]) == False) & (np.isnan(tod[i,0,0]) == False)
             pa = Coordinates.pa(ra[i,good], dec[i,good], mjd[good], self.lon, self.lat)
             x, y = Coordinates.Rotate(ra[i,good], dec[i,good], self.x0, self.y0, -pa)
+
             r = np.sqrt((x)**2 + (y)**2)
 
             todAvg = np.nanmean(np.nanmean(tod[i,...],axis=0),axis=0)
+
             fitx0, fity0 = self.initialPeak(todAvg[good], x, y)
 
             for j in range(nSBs):
@@ -142,16 +144,16 @@ class FitSource(DataStructure):
                     #pyplot.show()
                 
         #nHorns, nSBs, nChans, nSamples = data.data['spectrometer/tod'].shape
-        data.setExtrasData('JupiterFits/Parameters', 
-                           self.Pout,
-                           [Types._HORNS_, 
-                            Types._SIDEBANDS_, 
-                            Types._FREQUENCY_,
-                            Types._OTHER_])
-        data.setExtrasData('JupiterFits/frequency', 
-                           nu,
-                           [Types._SIDEBANDS_, 
-                            Types._FREQUENCY_])
+        data.setextra('JupiterFits/Parameters', 
+                      self.Pout,
+                      [Types._HORNS_, 
+                       Types._SIDEBANDS_, 
+                       Types._FREQUENCY_,
+                       Types._OTHER_])
+        data.setextra('JupiterFits/frequency', 
+                      nu,
+                      [Types._SIDEBANDS_, 
+                       Types._FREQUENCY_])
 
 
 class FitPlanet(FitSource):
@@ -232,12 +234,12 @@ class FitSourceApPhot(FitSource):
                     self.Pout[i,j,k,0] = apFlux - annuFlux
                                     
         print('writing extras')
-        data.setExtrasData('SourceFits/ApertureFlux', 
-                           self.Pout,
-                           [Types._HORNS_, 
-                            Types._SIDEBANDS_, 
-                            Types._FREQUENCY_,
-                            Types._OTHER_])
+        data.setextra('SourceFits/ApertureFlux', 
+                      self.Pout,
+                      [Types._HORNS_, 
+                       Types._SIDEBANDS_, 
+                       Types._FREQUENCY_,
+                       Types._OTHER_])
 
 class FitPlanetApPhot(FitSourceApPhot):
 

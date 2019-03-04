@@ -77,6 +77,7 @@ class H5Data(object):
 
 
         self.dsets= {} # cropped values of input datasets
+        self.attrs= {}
         self.ndims= {} # original shapes of input datasets (don't use self.data[field].shape)
         self.hi = {}
         self.lo = {}
@@ -121,83 +122,51 @@ class H5Data(object):
         Return dataset from hdf5 file and stores it in memory if not already loaded.
         """
         if field not in self.dsets.keys():
-            self.setField(field)
+            self.setdset(field)
 
         return self.dsets[field]
 
-    def setdset(self,field, d):
-        """
-        Update a dataset with new values.
-        Check to see if the dimensions need to be updated.
-        """
-        self.dsets[field] = d
-        self.ndims[field] = list(d.shape)
-
-        # If we are splitting/selecting any of these axes then we must remember
-        # to resize these to full size...
-        if field in self.splitFields:
-            splitAxis = self.splitFields[field]
-            self.ndims[field][splitAxis] = self.fullFieldLengths[self.splitType]
-            self.fullFieldLengths[self.splitType] = self.ndims[field][splitAxis]
-
-        # Do we want to really update the select size again? When would this be useful? Piecewise writing?
-        if field in self.selectFields:
-            selectAxis = self.selectFields[field][0]
-            self.ndims[field][selectAxis] = self.fullFieldLengths[self.selectType]
-            self.fullFieldLengths[self.selectType] = self.ndims[field][selectAxis]
-
-    def getextra(self, field):
-        if field not in self.extras.keys():
-            pass
-
-        return self.extras[field][0]
-
-    def setExtra(self,field):
-        pass
-
-    def cropExtra(self, d, desc):
-        
-        selectAxis = np.where((np.array(desc) == self.selectType))[0]
-        splitAxis  = np.where((np.array(desc) == self.splitType ))[0]
-
-        if (len(selectAxis) == 0) and (len(splitAxis) == 0):
-            return d
-        else:
-            slc = [s for s in d.shape]
-            if not (len(selectAxis)==0):
-                slc[selectAxis[0]] = slice(self.selectIndex, self.selectIndex+1)
-            if not (len(splitAxis)==0):
-                splitFull = self.fullFieldLengths[self.splitType]
-                lo, hi    = self.getDataRange(splitFull)
-                slc[splitAxis[0]] = slice(lo, hi)
-
-            return d[tuple(slc)]
-
-
-    def setField(self, field):
+    def setdset(self, field, desc=None):
         """
         Allocate dataset to memory.
         """
 
         # First store shape of original data for outputting
         self.ndims[field] = [s for s in self.data[field].shape]
-        
+
         # Get maximum dimensions of dataset
-        slc = [slice(0,s,None) for s in self.ndims[field]]
+        slc   = [slice(0,s,None) for s in self.ndims[field]]
         ndims = [s for s in self.ndims[field]]
 
         # is this field only having a single axis being selected?
         if field in self.selectFields.keys():
-            slc[self.selectFields[field][0]] = slice(self.selectFields[field][1],
-                                                     self.selectFields[field][1] + 1)
-            ndims[self.selectFields[field][0]] = 1
+            selectAxis  = self.selectFields[field][0]
+            selectIndex = self.selectFields[field][1]
+            slc[selectAxis]   = slice(selectIndex,
+                                      selectIndex + 1)
+            ndims[selectAxis] = 1
+        elif not isinstance(desc, type(None)) and not isinstance(self.selectType, type(None)):
+            # assume that all the select indices are the same
+            selectIndex = self.selectFields[self.selectFields.keys()[0]][1]
+            # calculate the selctAxis
+            selectAxis  = np.where((np.array(desc) == self.selectType))[0]
+            slc[selectAxis]   = slice(selectIndex,
+                                      selectIndex + 1)
+            ndims[selectAxis] = 1
 
         slcin = [s for s in slc]
         # if this field being split for MPI?
         if field in self.splitFields.keys():
             splitAxis = self.splitFields[field] # this will return an integer index
             self.lo[field], self.hi[field] = self.getDataRange(self.ndims[field][splitAxis])
-            slc[splitAxis] = slice(self.lo[field], self.hi[field])
+            slc[splitAxis]   = slice(self.lo[field], self.hi[field])
+            slcin[splitAxis] = slice(0, self.hi[field]-self.lo[field])
+            ndims[splitAxis] = self.hi[field]-self.lo[field]
+        elif not isinstance(desc, type(None)) and not isinstance(self.splitType, type(None)):
+            # calculate the selctAxis
+            splitAxis  = np.where((np.array(desc) == self.splitType))[0]
+            self.lo[field], self.hi[field]     = self.getDataRange(self.ndims[field][splitAxis])
+            slc[splitAxis]   = slice(self.lo[field], self.hi[field])
             slcin[splitAxis] = slice(0, self.hi[field]-self.lo[field])
             ndims[splitAxis] = self.hi[field]-self.lo[field]
 
@@ -230,24 +199,77 @@ class H5Data(object):
                     slc[maxDim] = slice(lo,hi)
                 slcin[maxDim] = slice(lo,hi)
 
+
                 self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
         else:
             # Else just read the whole thing at once
+
             self.dsets[field] = self.data[field][tuple(slc)]
 
+    def resizedset(self,field, d):
+        """
+        Update a dataset with new values.
+        Check to see if the dimensions need to be updated.
+        """
+        #print(self.ndims[field], d.shape)
+        factors = [self.dsets[field].shape[i]/d.shape[i] for i in range(len(d.shape))]
+        self.dsets[field] = d
+
+        self.ndims[field] = list(d.shape)
+
+        # If we are splitting/selecting any of these axes then we must remember
+        # to resize these to full size...
+        if field in self.splitFields:
+            splitAxis = self.splitFields[field]
+            if not Types._SHAPECHANGES_[self.splitType]:
+                self.fullFieldLengths[self.splitType] = int( self.fullFieldLengths[self.splitType] / factors[splitAxis])
+            self.ndims[field][splitAxis] = self.fullFieldLengths[self.splitType]
+            self.lo[field], self.hi[field] = self.getDataRange(self.fullFieldLengths[self.splitType])
+            Types._SHAPECHANGES_[self.splitType] = True
+
+        # Do we want to really update the select size again? When would this be useful? Piecewise writing?
+        if field in self.selectFields:
+            #if not Types._SHAPECHANGES_[self.selectType]:
+            selectAxis = self.selectFields[field][0]
+            self.ndims[field][selectAxis] = self.fullFieldLengths[self.selectType]
+            Types._SHAPECHANGES_[self.selectType] = True
+
+    def updatedset(self,field, d, fromfile=False):
+        """
+        Update a dataset with new values.
+        Check to see if the dimensions need to be updated.
+        """
+        if fromfile:
+            self.setdset(field)
+        else:
+            self.dsets[field] = d
 
 
-    def setOutputAttr(self,grp, attr, value):
+    def getAttr(self,grp, attr):
         """
         set an attribute in a group in the output data file(self.output)
         """
         if not hasattr(self, 'output'):
             return None
 
-        if not grp in self.output:
-            self.output.create_group(grp)
+        if (grp in self.attrs) and (attr in self.attrs[grp]):
+            return self.attrs[grp][attr]
+        elif (grp in self.data) and (attr in self.data[grp].attrs):
+            return self.data[grp].attrs[attr]
+        else:
+            return None
 
-        self.output[grp].attrs.create(attr, value)
+    def setAttr(self,grp, attr, value):
+        """
+        set an attribute in a group in the output data file(self.output)
+        """
+        if not hasattr(self, 'output'):
+            return None
+
+        if not grp in self.attrs:
+            self.attrs[grp] = {}
+
+        self.attrs[grp][attr] = value
 
     def open(self, mode='a'):
         """
@@ -281,6 +303,50 @@ class H5Data(object):
                                               driver='mpio', comm=comm)#**self.filekwargs)
             else:
                 self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a')
+
+    def getextra(self, field, desc=None):
+        if field not in self.extras.keys():
+            return None
+
+        return self.extras[field][0]
+
+    def resizeextra(self, d, desc):
+        
+        selectAxis = np.where((np.array(desc) == self.selectType))[0]
+        splitAxis  = np.where((np.array(desc) == self.splitType ))[0]
+
+        if (len(selectAxis) == 0) and (len(splitAxis) == 0):
+            return d
+        else:
+            slc = [slice(0,s) for s in d.shape]
+            if not (len(selectAxis)==0):
+                slc[selectAxis[0]] = slice(self.selectIndex, self.selectIndex+1)
+            if not (len(splitAxis)==0):
+                splitFull = self.fullFieldLengths[self.splitType]
+                lo, hi    = self.getDataRange(splitFull)
+                slc[splitAxis[0]] = slice(lo, hi)
+
+            return d[tuple(slc)]
+
+    def setextra(self, key, data, desc):
+        """
+        splitAxes = [True, True, True, N]
+        where the True describes the axis that is split
+        """
+        
+        a = np.where((np.array(desc) == self.selectType))[0]
+        if len(a) == 0:
+            a = None
+        else:
+            a = a[0]
+        b = np.where((np.array(desc) == self.splitType))[0]
+        if len(b) == 0:
+            b = None
+        else:
+            b = b[0]
+
+        self.extras[key] = [data, desc, a , b]
+
 
 
     def outputExtras(self,k):
@@ -319,7 +385,7 @@ class H5Data(object):
             tmp = self.outputextras.create_dataset(k, ndims) # create the dataset for the correct size
             tmp[slc] = v[0]
 
-    def outputFields(self, field):
+    def outputDsets(self, field):
         """
         Output datasets to output file
         """
@@ -331,40 +397,34 @@ class H5Data(object):
 
         if field in self.splitFields:
             splitAxis = self.splitFields[field]
-            slc[splitAxis] = slice(self.lo[field], self.hi[field])
+            slc[splitAxis]   = slice(self.lo[field], self.hi[field])
             slcin[splitAxis] = slice(0, self.hi[field]-self.lo[field])
+            ndims[splitAxis] = self.fullFieldLengths[self.splitType]
 
         if field in self.selectFields:
-            selectAxis = self.selectFields[field][0]
+            selectAxis  = self.selectFields[field][0]
             selectIndex = self.selectFields[field][1]
-            slc[selectAxis] = slice(selectIndex, selectIndex + 1)
+            slc[selectAxis]   = slice(0,1) #slice(selectIndex, selectIndex + 1)
             slcin[selectAxis] = slice(0,1)
+            ndims[selectAxis] = 1
 
 
         # All mpi nodes must create the same overall sized dataset
-        tmp = self.output.create_dataset(field, ndims)
+
+        if type(self.dsets[field].flatten()[0]) == np.bytes_:
+            tmp = self.output.create_dataset(field, ndims, dtype='S10')
+        else:
+            tmp = self.output.create_dataset(field, ndims)
+
         tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
 
 
+    def outputAttrs(self, grp, attr):
+        if not grp in self.output:
+            self.output.create_group(grp)
 
-    def setExtrasData(self, key, data, axisdesp):
-        """
-        splitAxes = [True, True, True, N]
-        where the True describes the axis that is split
-        """
-        
-        a = np.where((np.array(axisdesp) == self.selectType))[0]
-        if len(a) == 0:
-            a = None
-        else:
-            a = a[0]
-        b = np.where((np.array(axisdesp) == self.splitType))[0]
-        if len(b) == 0:
-            b = None
-        else:
-            b = b[0]
-
-        self.extras[key] = [data, axisdesp, a , b]
+        self.output[grp].attrs[attr] = self.attrs[grp][attr]
+                    
 
     def close(self):
         self.__del__()
@@ -406,6 +466,7 @@ def synch(tag=0):
         buf = comm.recv(source=0,tag=tag+comm.rank)
         comm.send(buf,dest=0,tag=tag+comm.rank)
         buf = comm.recv(source=0,tag=tag+comm.rank)
+
 # MPI FUNCTIONS FOR WRITING OUT
 def writeoutextras(h5data):
 
@@ -416,7 +477,7 @@ def writeoutextras(h5data):
     keys = np.sort(np.array(keys)) # all nodes must do this in the same order
     for k in keys:
         h5data.outputExtras(k)
-        synch(10000)
+        #synch(10000)
 
 
 # MPI FUNCTIONS FOR WRITING OUT
@@ -428,5 +489,16 @@ def writeoutput(h5data):
 
     keys = np.sort(np.array(keys)) # all nodes must do this in the same order
     for k in keys:
-        h5data.outputFields(k)
-        synch(20000)
+        h5data.outputDsets(k)
+        #synch(20000)
+
+
+    # Output any new attributes too
+    grps = list(h5data.attrs.keys()) # grps
+    if len(grps) == 0:
+        return None
+
+    for g in grps:
+        attrs = np.sort(np.array(list(h5data.attrs[g].keys())))
+        for attr in attrs:
+            h5data.outputAttrs(g,attr)

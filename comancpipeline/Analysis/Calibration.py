@@ -71,10 +71,10 @@ class FillPointing(DataStructure):
 
             
             #az,el, ra, dec = [np.zeros(( nHorn, nSample)) for i in range(4)]
-            for field in missingFields:
-                if field in data.data:
-                    del data.data[field]
-                data.data.create_dataset(field, (nHorn, nSample), dtype='f')
+            missingFields = np.sort(np.array(missingFields))
+            for field in np.sort(missingFields):
+                if not field in data.data:
+                    data.data.create_dataset(field, (nHorn, nSample), dtype='f')
 
             if data.splitType == Types._HORNS_:
                 splitFull = data.fullFieldLengths[data.splitType]
@@ -83,16 +83,19 @@ class FillPointing(DataStructure):
                 lo, hi = 0, nHorn
 
             for ilocal, i in enumerate(range(lo,hi)):
-                print(ilocal, i)
-                data.data[missingFields[1]][i,:] = elval+self.focalPlane.offsets[i][1] - self.focalPlane.eloff
-                data.data[missingFields[0]][i,:] = azval+self.focalPlane.offsets[i][0]/np.cos(data.data[missingFields[1]][i,:]*np.pi/180.) - self.focalPlane.azoff
+                data.data['spectrometer/pixel_pointing/pixel_el'][i,:] = elval+self.focalPlane.offsets[i][1] - self.focalPlane.eloff
+                data.data['spectrometer/pixel_pointing/pixel_az'][i,:] = azval+self.focalPlane.offsets[i][0]/np.cos(data.data['spectrometer/pixel_pointing/pixel_el'][i,:]*np.pi/180.) - self.focalPlane.azoff
                     
                 # fill in the ra/dec fields
-                data.data[missingFields[2]][i,:],data.data[missingFields[3]][i,:] = Coordinates.h2e(data.data[missingFields[0]][i,:],
-                                                                                                    data.data[missingFields[1]][i,:],
-                                                                                                    data.getdset('spectrometer/MJD'), 
-                                                                                                    self.longitude, 
-                                                                                                    self.latitude)
+                data.data['spectrometer/pixel_pointing/pixel_ra'][i,:],data.data['spectrometer/pixel_pointing/pixel_dec'][i,:] = Coordinates.h2e(data.data['spectrometer/pixel_pointing/pixel_az'][i,:],
+                                                                                                                                                 data.data['spectrometer/pixel_pointing/pixel_el'][i,:],
+                                                                                                                                                 data.getdset('spectrometer/MJD'), 
+                                                                                                                                                 self.longitude, 
+                                                                                                                                                 self.latitude)
+        
+
+
+        data.setAttr('comap', 'cal_fillpointing', True)
 
 
 class DownSampleFrequency(DataStructure):
@@ -137,16 +140,48 @@ class DownSampleFrequency(DataStructure):
 
     def run(self,data):
         
-        field = 'spectrometer/frequency'
-        freq = data.getdset(field) 
-        data.setdset(field, freq.reshape((freq.shape[0], freq.shape[1]//self.factor, self.factor)))
+        for field, desc in Types._COMAPDATA_.items():
+            if field == 'spectrometer/tod':
+                continue
 
-        field = 'spectrometer/time_average'
-        time_average = data.getdset(field)
-        time_average = time_average.reshape((time_average.shape[0], time_average.shape[1],
-                              time_average.shape[2]//self.factor, 
-                              self.factor))
-        data.setdset(field, time_average)
+            dset = data.getdset(field)
+            try:
+                meanAxis = np.where((np.array(desc) == Types._FREQUENCY_))[0][0]
+            except IndexError:
+                continue
+
+            dsetShape = dset.shape
+            if not (meanAxis == len(dsetShape)): # swap order so frequency is last
+                dshape = np.arange(len(dset.shape)).astype(int)
+                transShape = np.arange(len(dset.shape)).astype(int)
+                transShape[-1] = dshape[meanAxis]
+                transShape[meanAxis] = dshape[-1]
+                dset = np.transpose(dset, transShape)
+
+            meanShape = list(dsetShape) + [self.factor]
+            meanShape[-2] = meanShape[-2]//self.factor
+            dset = np.nanmean(np.reshape(dset, meanShape),axis=-1)
+            
+            if not (meanAxis == len(dsetShape)): # swap back to original ordering
+                dshape = np.arange(len(dset.shape)).astype(int)
+                transShape = np.arange(len(dset.shape)).astype(int)
+                transShape[-1] = dshape[meanAxis]
+                transShape[meanAxis] = dshape[-1]
+                dset = np.transpose(dset, transShape)
+            data.resizedset(field, dset)
+
+        # field = 'spectrometer/frequency'
+        # freq = data.getdset(field) 
+        # freq = np.mean(freq.reshape((freq.shape[0], freq.shape[1]//self.factor, self.factor)),axis=-1)
+        # data.resizedset(field, freq)
+
+        # field = 'spectrometer/time_average'
+        # time_average = data.getdset(field)
+        # time_average = time_average.reshape((time_average.shape[0], time_average.shape[1],
+        #                       time_average.shape[2]//self.factor, 
+        #                       self.factor))
+        # time_average = np.mean(time_average, axis=-1)
+        # data.resizedset(field, time_average)
 
         # can't read in all of the TOD usually...
         field = 'spectrometer/tod'
@@ -154,20 +189,23 @@ class DownSampleFrequency(DataStructure):
         todOut = np.zeros((tod.shape[0], tod.shape[1], tod.shape[2]//self.factor, tod.shape[3]))
         # ...read in one horn at a time
         nHorns, nSBs, nChans, nSamps = tod.shape
-        import time
+        #import time
         for i in range(nHorns):
             # need frequency to be the last index...
             for j in range(nSBs):
-                start=time.time()
+                #start=time.time()
                 temp = np.transpose(tod[i,j,:,:], (1,0))
 
                 temp = np.reshape(temp, (temp.shape[0],
                                          temp.shape[1]//self.factor, 
                                          self.factor))
                 todOut[i,j,:,:] = np.transpose(np.nanmean(temp,axis=-1),(1,0))
-                print(i,j,'Time taken {}'.format(time.time()-start))
+                #print(i,j,'Time taken {}'.format(time.time()-start))
 
-        data.setdset(field, todOut)
+        Types._SHAPECHANGES_[Types._FREQUENCY_] = True
+        data.resizedset(field, todOut)
+        data.setAttr('comap', 'cal_downsampfreq', True)
+        data.setAttr('comap', 'cal_downsampfreqfactor', self.factor)
 
 class AmbLoadCal(DataStructure):
     """
@@ -185,10 +223,10 @@ class AmbLoadCal(DataStructure):
         meanmjd = np.nanmean(data.getdset('pointing/MJD'))
 
         # First get the mean MJD of the data
-        obsids = np.array([int(f.split('-')[-5]) for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if 'hdf5' in f ])
+        obsids = np.array([int(f.split('-')[-5]) for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if ('hd5' in f) | ('hdf5' in f) ])
         obsid  = int(data.filename.split('-')[-5])
 
-        gainfiles = [f for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if 'hdf5' in f]
+        gainfiles = [f for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if ('hd5' in f) | ('hdf5' in f) ]
 
         # find the 10 closest obsids:
         argmins = np.argsort((obsids - obsid)**2)[:10]
@@ -200,14 +238,20 @@ class AmbLoadCal(DataStructure):
             else:
                 g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[j]),'r')
 
-            if 'AMBIENTLOAD' in g:
-                gainmjd[i] = g['AMBIENTLOAD/MJD'][0]
-                gainel[i]  = g['AMBIENTLAD/EL'][0]
+            if 'AMBIENTLOADS' in g:
+                gainmjd[i] = g['AMBIENTLOADS/MJD'][0]
+                gainel[i]  = g['AMBIENTLOADS/EL'][0]
             g.close()
 
         Amass = 1./np.sin(gainel*np.pi/180.)
 
-        AmassRange = np.where((Amass < 1.005))[0] # almost zenith
+        if all((Amass == np.inf)):
+            AmassRange = np.arange(gainmjd.size).astype(int)
+        else:
+            AmassRange = np.where((Amass < 2))[0] # almost zenith
+
+        if len(AmassRange) == 0:
+            AmassRange = np.arange(gainmjd.size).astype(int)
 
         # Now find the nearest mjd to obs
         minmjd = np.argmin((gainmjd[AmassRange] - meanmjd)**2)
@@ -216,8 +260,8 @@ class AmbLoadCal(DataStructure):
         else:
             g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[AmassRange[minmjd]]),'r')
 
-        self.Gain = g['AMBIENTLOAD/Gain'][...]
-        self.GainFreq = g['AMBIENTLOAD/GainFreq'][...]
+        self.Gain = g['AMBIENTLOADS/Gain'][...]
+        self.GainFreq = g['AMBIENTLOADS/Frequency'][...]
         g.close()
 
         # DOWNSAMPLE TO THE CORRECT FREQUENCY BINNING
@@ -225,10 +269,18 @@ class AmbLoadCal(DataStructure):
         if data.splitType == Types._FREQUENCY_:
             nFreqs = data.fullFieldLengths[Types._FREQUENCY_]
         else:
-            nFreqs = freq.shape[2]
+            nFreqs = freq.shape[1]
+
 
         if self.Gain.shape[2] != nFreqs:
-            factor = int(self.Gain.shape[2]//nFreqs)
+            if ('comap' in data.data) and ('cal_downsampfreqfactor' in data.data['comap'].attrs):
+                self.factor = data.data['comap'].attrs['cal_downsampfreqfactor']
+            elif ('comap' in data.attrs) and ('cal_downsampfreqfactor' in data.attrs['comap']):
+                self.factor = data.attrs['comap']['cal_downsampfreqfactor']
+            else:
+                self.factor = int(self.Gain.shape[2]//nFreqs)
+                print('Warning: No down sample factor found, estimating to be: {}'.format(self.factor),flush=True)
+
             self.Gain = np.mean(np.reshape(self.Gain, (self.Gain.shape[0],
                                                        self.Gain.shape[1], 
                                                        self.Gain.shape[2]//self.factor, 
@@ -237,7 +289,7 @@ class AmbLoadCal(DataStructure):
 
         # CROP TO THE DESIRED SELECT
         desc = [Types._HORNS_, Types._SIDEBANDS_, Types._FREQUENCY_]
-        self.Gain = data.cropExtra(self.Gain, desc)
+        self.Gain = data.resizeextra(self.Gain, desc)
         
         return self.Gain, self.GainFreq
 
@@ -254,7 +306,7 @@ class AmbLoadCal(DataStructure):
         tod /= self.Gain[...,np.newaxis]
 
 
-        #data.setOutputAttr('comap', 'cal_ambload', True)
+        data.setAttr('comap', 'cal_ambload', True)
 
 
 from scipy.ndimage.filters import gaussian_filter1d
@@ -364,10 +416,10 @@ class AmbientLoad(DataStructure):
         #   return 0
 
 
-        tHot = data.getdset('hk/env/ambientLoadTemp') + self.tHotOffset
+        tHot  = data.getdset('hk/env/ambientLoadTemp') + self.tHotOffset
         hkMJD = data.getdset('hk/env/MJD')
-        tHot = gaussian_filter1d(tHot, 35)
-        tHot = interp1d(hkMJD, tHot, bounds_error=False, fill_value=np.nan)(mjd)
+        tHot  = gaussian_filter1d(tHot, 35)
+        tHot  = interp1d(hkMJD, tHot, bounds_error=False, fill_value=np.nan)(mjd)
 
         # Fill in any NaNs that we we might encounter
         ambNan = np.where(np.isnan(tHot))[0]
@@ -403,38 +455,23 @@ class AmbientLoad(DataStructure):
                 self.Tsys[i,j,:] = ((tHot - self.tCold)/(Y - 1.) - self.tCold )#[::step]
                 self.G[i,j,:] = ((vHot - vCold)/(tHot - self.tCold))#[::step]
 
-        data.setExtrasData('AMBIENTLOADS/Gain', 
-                           self.G,
-                           [Types._HORNS_, 
-                            Types._SIDEBANDS_, 
-                            Types._FREQUENCY_])
-        data.setExtrasData('AMBIENTLOADS/Tsys', 
-                           self.Tsys,
-                           [Types._HORNS_, 
-                            Types._SIDEBANDS_, 
-                            Types._FREQUENCY_])
-        data.setExtrasData('AMBIENTLOADS/Frequency', 
-                           freq,
-                           [Types._SIDEBANDS_, 
-                            Types._FREQUENCY_])
-        data.setExtrasData('AMBIENTLOADS/MJD', 
-                           np.array([np.nanmean(mjd)]),
-                           [Types._OTHER_])
-        data.setExtrasData('AMBIENTLOADS/EL', 
-                           np.array([np.nanmean(el)]),
-                           [Types._OTHER_])
-
-        #write to disk
-        #self.writeFile(self.filename, self.overwrite)
-        #data.stop = True # if this was a calibrator, we dont want to run anything else
-
-    def writeFile(self, filename, overwrite=True):
-        dout = h5py.File(filename,'a')
-        if overwrite & (len(dout.keys()) > 0):
-            for k in dout.keys():
-                del dout[k]
-        dout['Tsys'] = self.Tsys
-        dout['Gain'] = self.G
-        dout['MJD']  = np.array([self.mjd])
-        dout['EL']   = np.array([self.elevation])
-        dout.close()
+        data.setextra('AMBIENTLOADS/Gain', 
+                      self.G,
+                      [Types._HORNS_, 
+                       Types._SIDEBANDS_, 
+                       Types._FREQUENCY_])
+        data.setextra('AMBIENTLOADS/Tsys', 
+                      self.Tsys,
+                      [Types._HORNS_, 
+                       Types._SIDEBANDS_, 
+                       Types._FREQUENCY_])
+        data.setextra('AMBIENTLOADS/Frequency', 
+                      freq,
+                      [Types._SIDEBANDS_, 
+                       Types._FREQUENCY_])
+        data.setextra('AMBIENTLOADS/MJD', 
+                      np.array([np.nanmean(mjd)]),
+                      [Types._OTHER_])
+        data.setextra('AMBIENTLOADS/EL', 
+                      np.array([np.nanmean(el)]),
+                      [Types._OTHER_])
