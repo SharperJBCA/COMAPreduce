@@ -23,11 +23,7 @@ def estimateBackground(_tod, rms, close=None, sampleRate=50, cutoff=1.):
 
     closeIndex = np.where(close)[0]
     indices = (closeIndex[:-1])[timeSelect]
-    try:
-        indices = np.concatenate((closeIndex[0:1], indices, (np.where(close)[0][:-1])[timeSelect+1], [closeIndex[-1]]))
-    except IndexError:
-        indices = np.concatenate((closeIndex[0:1], indices, (np.where(close)[0][:-1])[timeSelect], [closeIndex[-1]]))
-
+    indices = np.concatenate((closeIndex[0:1], indices, (np.where(close)[0][:-1])[timeSelect+1], [closeIndex[-1]]))
     indices = np.sort(indices)
                 
     # For each source crossing fit a polynomial using the data just before and after
@@ -116,3 +112,16 @@ def calcRMS(tod):
     splitTOD = (tod[...,:(nSamps//2) * 2:2] - tod[...,1:(nSamps//2)*2:2])
     rms = np.nanstd(splitTOD,axis=-1)/np.sqrt(2)
     return rms
+
+
+def noiseProperties(tod, ra, dec, mjd):
+    """
+    Calculates rms of TOD using adjacent pairs for the last array dimension, and corresponding RA and Dec for use in noise map
+    """
+
+    nSamps = tod.shape[-1]
+    rms = (tod[...,:(nSamps//2) * 2:2] - tod[...,1:(nSamps//2)*2:2])
+    ranew = (ra[...,1:(nSamps//2)*2:2] + ra[...,:(nSamps//2)*2:2]) / 2
+    decnew = (dec[...,1:(nSamps//2)*2:2] + dec[...,:(nSamps//2)*2:2]) / 2
+    mjdnew = (mjd[...,1:(nSamps//2)*2:2] + mjd[...,:(nSamps//2)*2:2]) / 2
+    return rms, ranew, decnew, mjdnew
