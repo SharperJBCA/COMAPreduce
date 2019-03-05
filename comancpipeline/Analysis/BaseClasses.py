@@ -287,9 +287,9 @@ class H5Data(object):
         """
         self.mode = 'a'
         if comm.size > 1:
-            self.data = h5py.File(self.filename,self.mode, driver='mpio',comm=comm)
+            self.data = h5py.File(self.filename, driver='mpio',comm=comm)
         else:
-            self.data = h5py.File(self.filename,self.mode)
+            self.data = h5py.File(self.filename)
 
         self.fullFieldLengths = Types.getFieldFullLength([self.splitType, self.selectType], self.data)
 
