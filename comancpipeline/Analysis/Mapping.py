@@ -58,8 +58,22 @@ class SimpleMap(object):
                                  ctype=self.ctype)
 
         maps = self.MakeMap(tod, ra, dec, mjd, el)
+        noisemap = self.MakeNoiseMap(tod, ra, dec, mjd, el)
+        
+        #save wcs info
+        #container.setExtrasData('Mapping/WCS',
+        #                        self.wcs,
+        #                        [Types._OTHER_])
+        #save map
         container.setExtrasData('Mapping/SimpleMaps', 
                                 maps,
+                                [Types._HORNS_, 
+                                 Types._SIDEBANDS_, 
+                                 Types._FREQUENCY_,
+                                 Types._OTHER_, Types._OTHER_])
+        #save noise map
+        container.setExtrasData('Mapping/NoiseMaps', 
+                                noisemap,
                                 [Types._HORNS_, 
                                  Types._SIDEBANDS_, 
                                  Types._FREQUENCY_,
@@ -139,8 +153,71 @@ class SimpleMap(object):
 #                    w, b = np.histogram(pix[:], pixbins, weights=tod[i,j,k,:])
                     m = np.reshape(w, (self.naxis[0], self.naxis[1]))
                     maps[i,j,k,...] = m/self.hits
+            pyplot.subplot(projection=self.wcs)
+            pyplot.imshow(maps[0,0,0,:,:])
+            pyplot.show()
+        return maps
+
+    def MakeNoiseMap(self, tod, ra, dec, mjd, el):
+        #takes a 1D tod array and makes a simple noise map
+
+        #produce arrays for mapping
+        npix = self.naxis[0]*self.naxis[1]
+
+        pixbins = np.arange(0, npix+1).astype(int)       
+        rms  = Filtering.calcRMS(tod)
+
+        #get noise rms and associated ra and dec
+        noise, ranew, dnew, mjdnew = Filtering.noiseProperties(tod,ra,dec,mjd)
+
+        nHorns, nSBs, nChans, nSamples = noise.shape
+        maps = np.zeros((nHorns, nSBs, nChans, self.naxis[0], self.naxis[1]))
+        for i in range(nHorns):
+
+            good = (np.isnan(ranew[i,:]) == False) & (np.isnan(noise[i,0,0]) == False) 
+            pa = Coordinates.pa(ranew[i,good], dnew[i,good], mjdnew[good], self.lon, self.lat)
+            x, y = Coordinates.Rotate(ranew[i,good], dnew[i,good], self.crval[0], self.crval[1], -pa)
+            nbins = 10
+            xbins = np.linspace(np.min(x),np.max(x), nbins+1)
+            xmids = (xbins[1:] + xbins[:-1])/2.
+            xbw, _ = np.histogram(x,xbins)
+            ybw, _ = np.histogram(y,xbins)
+
+            noiseAvg = np.nanmean(np.nanmean(noise[i,...],axis=0),axis=0)
+            fitx0, fity0 = self.initialPeak(noiseAvg[good], x, y)
+            r = np.sqrt((x-fitx0)**2 + (y-fity0)**2)
+            close = (r < 6./60.)
+
+            pix = ang2pixWCS(self.wcs, ranew[i,good], dnew[i,good]).astype('int')
+            mask = np.where((pix != -1))[0]
+
+            h, b = np.histogram(pix, pixbins, weights=(pix != -1).astype(float))
+            self.hits = np.reshape(h, (self.naxis[0], self.naxis[1]))
+
+            for j in range(nSBs):
+                for k in range(nChans):
+                    noisemap = noise[i,j,k,good]
+
+                    if self.filtertod:
+                        txbw, _ = np.histogram(x,xbins, weights=noisemap)
+                        tybw, _ = np.histogram(y,xbins, weights=noisemap)
+                        fb = txbw/xbw
+                        gd = np.isfinite(fb)
+                        pmdl = np.poly1d(np.polyfit(xmids[gd],fb[gd],1))
+                        noisemap -= pmdl(x)
+                        fb = tybw/ybw
+                        gd = np.isfinite(fb)
+                        pmdl = np.poly1d(np.polyfit(xmids[gd],fb[gd],1))
+                        noisemap -= pmdl(y)
+
+                    w, b = np.histogram(pix[mask], pixbins, weights=noisemap[mask])
+#                    w, b = np.histogram(pix[:], pixbins, weights=noise[i,j,k,:])
+                    m = np.reshape(w, (self.naxis[0], self.naxis[1]))
+                    maps[i,j,k,...] = m/self.hits
 
         return maps
+
+
 
     def WriteMain(self, finalMaps, obsid):
         #writes map data to .fits file along with wcs for scaling
