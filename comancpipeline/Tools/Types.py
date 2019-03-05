@@ -20,6 +20,10 @@ _COMAPDATA_ = {'spectrometer/tod': [_HORNS_,_SIDEBANDS_,_FREQUENCY_,_TIME_],
                'spectrometer/bands':[_SIDEBANDS_],
                'spectrometer/feeds':[_HORNS_]}
 
+_SHAPECHANGES_ = {_HORNS_:False,
+                  _SIDEBANDS_:False,
+                  _FREQUENCY_:False,
+                  _TIME_:False}
 
 def getSplitStructure(splitdir, datastc=_COMAPDATA_):
     """
@@ -37,13 +41,18 @@ def getSplitStructure(splitdir, datastc=_COMAPDATA_):
     for k, v in datastc.items():
         if splitdir in v:
             fields[k] = np.where(np.array(v) == splitdir)[0][0]
-
+    
     return fields
 
 def getSelectStructure(selectdir, index, datastc=_COMAPDATA_):
     """
     selectdir, (integer)
     index, (integer) - index of axis to be selected
+
+    e.g. You have an array described as :
+    d = np.shape([_HORNS_,_FREQUENCY_])
+    You want horns so selectdir = _HORNS_
+    and you only want horn 0, therefore index = 0
     
     Search data structure description (datastc) to see if it contains data in a given direction (horns, time, etc...)
 

@@ -16,12 +16,12 @@ class DataStructure(object):
     def __call__(self,data):
         assert isinstance(data.data, h5py._hl.files.File), 'Data is not a h5py file structure'
         self.run(data)
-        self.plot()
+        self.plot(data)
 
     def run(self,data):
         pass
 
-    def plot(self):
+    def plot(self,data):
         pass
 
     def __str__(self):

@@ -215,6 +215,7 @@ class AmbLoadCal(DataStructure):
         super().__init__()
         self.amb_dir = amb_dir
         self.force = False
+        self.grp = 'AMBIENTLOADS'
         
     def __str__(self):
         return "Applying ambient load calibration"
@@ -238,9 +239,9 @@ class AmbLoadCal(DataStructure):
             else:
                 g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[j]),'r')
 
-            if 'AMBIENTLOADS' in g:
-                gainmjd[i] = g['AMBIENTLOADS/MJD'][0]
-                gainel[i]  = g['AMBIENTLOADS/EL'][0]
+            if self.grp in g:
+                gainmjd[i] = g['{}/MJD'.format(self.grp)][0]
+                gainel[i]  = g['{}/EL'.format(self.grp)][0]
             g.close()
 
         Amass = 1./np.sin(gainel*np.pi/180.)
@@ -260,8 +261,8 @@ class AmbLoadCal(DataStructure):
         else:
             g = h5py.File('{}/{}'.format(self.amb_dir, gainfiles[AmassRange[minmjd]]),'r')
 
-        self.Gain = g['AMBIENTLOADS/Gain'][...]
-        self.GainFreq = g['AMBIENTLOADS/Frequency'][...]
+        self.Gain = g['{}/Gain'.format(self.grp)][...]
+        self.GainFreq = g['{}/Frequency'.format(self.grp)][...]
         g.close()
 
         # DOWNSAMPLE TO THE CORRECT FREQUENCY BINNING
@@ -317,7 +318,7 @@ class NoColdError(Exception):
 class NoHotError(Exception):
     pass
 
-class AmbientLoad(DataStructure):
+class AmbientLoad2Gain(DataStructure):
     """
     Calculate AmbientLoad temperature
     """
@@ -401,8 +402,8 @@ class AmbientLoad(DataStructure):
         self.parsefilename(data.filename)
 
         freq = data.getdset('spectrometer/frequency')
-        tod = data.getdset('spectrometer/tod') # data.data['spectrometer/tod']
-        mjd = data.getdset('spectrometer/MJD') # data.data['spectrometer/MJD'][:]
+        tod  = data.getdset('spectrometer/tod') # data.data['spectrometer/tod']
+        mjd  = data.getdset('spectrometer/MJD') # data.data['spectrometer/MJD'][:]
         self.mjd = np.mean(mjd)
         self.elevation = np.nanmedian(el)
 
@@ -474,4 +475,44 @@ class AmbientLoad(DataStructure):
                       [Types._OTHER_])
         data.setextra('AMBIENTLOADS/EL', 
                       np.array([np.nanmean(el)]),
+                      [Types._OTHER_])
+
+
+from comancpipeline.Tools import CaliModels
+
+class Jupiter2Gain(DataStructure):
+    """
+    Expects Jupiter source fitting to have been performed prior
+    """
+
+    def run(self, data):
+        Pout = data.getextra('JupiterFits/Parameters')
+        freq = data.getextra('JupiterFits/frequency')
+        mjd = data.getdset('spectrometer/MJD')
+        el  = data.getdset('spectrometer/pixel_pointing/pixel_el')
+
+        # Jupiter flux
+        Sjup, dist =  CaliModels.JupiterFlux(freq, np.array([np.mean(mjd)]))
+
+        # Flux scale conversion
+        self.G = Sjup[np.newaxis,...]/Pout[:,:,:,0]
+        
+        JUPITERCAL = 'JUPITERCAL'
+        data.setextra('{}/Gain'.format(JUPITERCAL), 
+                      self.G,
+                      [Types._HORNS_, 
+                       Types._SIDEBANDS_, 
+                       Types._FREQUENCY_])
+        data.setextra('{}/Frequency'.format(JUPITERCAL), 
+                      freq,
+                      [Types._SIDEBANDS_, 
+                       Types._FREQUENCY_])
+        data.setextra('{}/MJD'.format(JUPITERCAL), 
+                      np.array([np.nanmean(mjd)]),
+                      [Types._OTHER_])
+        data.setextra('{}/EL'.format(JUPITERCAL), 
+                      np.array([np.nanmean(el)]),
+                      [Types._OTHER_])
+        data.setextra('{}/DISTANCE'.format(JUPITERCAL), 
+                      np.array([dist]),
                       [Types._OTHER_])

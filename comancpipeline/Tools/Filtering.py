@@ -23,7 +23,11 @@ def estimateBackground(_tod, rms, close=None, sampleRate=50, cutoff=1.):
 
     closeIndex = np.where(close)[0]
     indices = (closeIndex[:-1])[timeSelect]
-    indices = np.concatenate((closeIndex[0:1], indices, (np.where(close)[0][:-1])[timeSelect+1], [closeIndex[-1]]))
+    try:
+        indices = np.concatenate((closeIndex[0:1], indices, (np.where(close)[0][:-1])[timeSelect+1], [closeIndex[-1]]))
+    except IndexError:
+        indices = np.concatenate((closeIndex[0:1], indices, (np.where(close)[0][:-1])[timeSelect], [closeIndex[-1]]))
+
     indices = np.sort(indices)
                 
     # For each source crossing fit a polynomial using the data just before and after

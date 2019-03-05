@@ -13,6 +13,11 @@ from comancpipeline.Tools.WCS import DefineWCS
 from comancpipeline.Tools.WCS import ang2pix
 from comancpipeline.Tools.WCS import ang2pixWCS
 
+from mpi4py import MPI 
+comm = MPI.COMM_WORLD
+
+import os
+
 class JamesBeam:
     """
     Simple beam class that describes how the
@@ -90,7 +95,10 @@ class FitSource(DataStructure):
         ypix = ypix*dy - Dy/2.
         m = np.histogram2d(x, y, xpix, weights=tod)[0]/np.histogram2d(x, y, xpix)[0]
         m = median_filter(m, 3)
-        xmax,ymax = np.unravel_index(np.nanargmax(m),m.shape)
+        try:
+            xmax,ymax = np.unravel_index(np.nanargmax(m),m.shape)
+        except ValueError:
+            return None
         return xpix[xmax], ypix[ymax]
 
     def fit(self,data):
@@ -107,6 +115,8 @@ class FitSource(DataStructure):
 
         nParams = 5
         self.Pout = np.zeros((nHorns, nSBs, nChans, nParams))
+        self.Perr = np.zeros((nHorns, nSBs, nChans, nParams))
+
         for i in range(nHorns):
             good = (np.isnan(ra[i,:]) == False) & (np.isnan(tod[i,0,0]) == False)
             pa = Coordinates.pa(ra[i,good], dec[i,good], mjd[good], self.lon, self.lat)
@@ -116,8 +126,11 @@ class FitSource(DataStructure):
 
             todAvg = np.nanmean(np.nanmean(tod[i,...],axis=0),axis=0)
 
-            fitx0, fity0 = self.initialPeak(todAvg[good], x, y)
+            fitxy = self.initialPeak(todAvg[good], x, y)
+            if isinstance(fitxy, type(None)):
+                continue
 
+            fitx0, fity0 = fitxy
             for j in range(nSBs):
                 for k in range(nChans):
                     todFit = tod[i,j,k,good]
@@ -139,6 +152,9 @@ class FitSource(DataStructure):
                                                         x, y, todFit, 0,0),
                                 disp=False)
 
+                    resid = todFit-Fitting.Gauss2d(fout[0], x, y,0,0)
+                    Cov   = fout[0][:,np.newaxis].dot(fout[0][np.newaxis,:]) / np.nanstd(resid)**2 
+                    self.Perr[i,j,k,:] = np.sqrt(1./np.diag(Cov))
                     self.Pout[i,j,k,:] = fout[0]
                     #pyplot.plot(todFit-Fitting.Gauss2d(fout[0], x, y,0,0))
                     #pyplot.show()
@@ -150,10 +166,62 @@ class FitSource(DataStructure):
                        Types._SIDEBANDS_, 
                        Types._FREQUENCY_,
                        Types._OTHER_])
+        data.setextra('JupiterFits/Uncertainties', 
+                      self.Pout,
+                      [Types._HORNS_, 
+                       Types._SIDEBANDS_, 
+                       Types._FREQUENCY_,
+                       Types._OTHER_])
         data.setextra('JupiterFits/frequency', 
                       nu,
                       [Types._SIDEBANDS_, 
                        Types._FREQUENCY_])
+
+    def plot(self,data):
+        if comm.rank > 0:
+            return None
+
+        tod = data.getdset('spectrometer/tod')
+        mjd = data.getdset('spectrometer/MJD')
+        ra  = data.getdset('spectrometer/pixel_pointing/pixel_ra')
+        dec = data.getdset('spectrometer/pixel_pointing/pixel_dec')
+        el  = data.getdset('spectrometer/pixel_pointing/pixel_el')
+        nu  = data.getdset('spectrometer/frequency')
+        rms  = Filtering.calcRMS(tod)
+
+        nHorns, nSBs, nChans, nSamples = tod.shape
+        for i in range(nHorns):
+            good = (np.isnan(ra[i,:]) == False) & (np.isnan(tod[i,0,0]) == False)
+            pa = Coordinates.pa(ra[i,good], dec[i,good], mjd[good], self.lon, self.lat)
+            x, y = Coordinates.Rotate(ra[i,good], dec[i,good], self.x0, self.y0, -pa)
+
+            r = np.sqrt((x)**2 + (y)**2)
+
+            todAvg = np.nanmean(np.nanmean(tod[i,...],axis=0),axis=0)
+
+            fitxy = self.initialPeak(todAvg[good], x, y)
+            if isinstance(fitxy, type(None)):
+                continue
+
+            prefix = data.data.filename.split('/')[-1].split('.')[0]
+            if not os.path.exists('Plotting/{}'.format(prefix)):
+                os.makedirs('Plotting/{}'.format(prefix))
+            
+            fitx0, fity0 = fitxy
+            for j in range(nSBs):
+                for k in range(nChans):
+                    todFit = tod[i,j,k,good]
+                    close = (r < self.closeR)                      
+                    if self.filtertod:
+                        todFit -= Filtering.estimateBackground(todFit, rms[i,j,k], close)
+
+                    
+                    pyplot.plot(todFit[close], label='data')
+                    pyplot.plot(Fitting.Gauss2d(self.Pout[i,j,k,:], x[close], y[close],0,0),'-k',linewidth=2,label='Best fit')
+                    pyplot.xlabel('Time')
+                    pyplot.ylabel('Antenna Temperature (K)')
+                    pyplot.savefig('Plotting/{}/JupiterFit{}{}{}.png'.format(prefix, i,j,k))
+                    pyplot.clf()
 
 
 class FitPlanet(FitSource):
@@ -174,8 +242,6 @@ class FitPlanet(FitSource):
         self.x0, self.y0, self.dist = self.getJupiter(data)
         self.fit(data)
     
-        
-        
 
 class FitSourceApPhot(FitSource):
 
@@ -258,3 +324,4 @@ class FitPlanetApPhot(FitSourceApPhot):
     def run(self, data):
         self.x0, self.y0, self.dist = self.getJupiter(data)
         self.fit(data)
+
