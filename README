@@ -4,8 +4,7 @@ Requirements:
 • Python 3.0 or higher.
 
 • Compiled shared libraries of the FORTRAN version of the Starlink as-
-tronomical libraries (SLALIB) available from http://starlink.eao.
-hawaii.edu/starlink/2018ADownload.
+tronomical libraries (SLALIB) available from http://starlink.eao.hawaii.edu/starlink/2018ADownload.
 
 • A copy of parallel ready H5Py. Installation instructions can be found
 here http://docs.h5py.org/en/stable/mpi.html. 
