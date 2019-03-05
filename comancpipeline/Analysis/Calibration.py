@@ -62,13 +62,21 @@ class FillPointing(DataStructure):
             else:
                 nHorn, nSB, nChan, nSample = data.data['spectrometer/tod'].shape
             
+            azact = data.getdset('pointing/azActual')
+            elact = data.getdset('pointing/elActual')
+            mjd   = data.getdset('spectrometer/MJD')
+            pmjd  = data.getdset('pointing/MJD')
+
             azval = self.interpAzEl(data.getdset('pointing/azActual'),
                                     data.getdset('pointing/MJD'),
                                     data.getdset('spectrometer/MJD'))
             elval = self.interpAzEl(data.getdset('pointing/elActual'),
                                     data.getdset('pointing/MJD'),
                                     data.getdset('spectrometer/MJD'))
-
+            #print(mjd)
+            #print((np.max(mjd)-np.min(mjd))*24*60, (np.max(pmjd)-np.min(pmjd))*24*60)
+            #pyplot.plot(azval, elval)
+            #pyplot.show()
             
             #az,el, ra, dec = [np.zeros(( nHorn, nSample)) for i in range(4)]
             missingFields = np.sort(np.array(missingFields))

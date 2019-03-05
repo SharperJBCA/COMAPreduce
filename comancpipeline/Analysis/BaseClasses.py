@@ -297,15 +297,17 @@ class H5Data(object):
         self.mode = 'a'
         if comm.size > 1:
             self.data = h5py.File(self.filename, driver='mpio',comm=comm)
+            self.data.atomic = True # keep data files in synch on all processes
         else:
             self.data = h5py.File(self.filename)
-
+        
         self.fullFieldLengths = Types.getFieldFullLength([self.splitType, self.selectType], self.data)
 
         if not isinstance(self.out_dir, type(None)):
             if comm.size > 1:
                 self.output = h5py.File(self.out_dir+'/'+self.data.filename.split('/')[-1],'a',
                                         driver='mpio', comm=comm)
+                self.output.atomic = True # keep data files in synch on all processes
             else:
                 self.output = h5py.File(self.out_dir+'/'+self.data.filename.split('/')[-1],'a')
 
@@ -314,6 +316,7 @@ class H5Data(object):
             if comm.size > 1:
                 self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a',
                                               driver='mpio', comm=comm)#**self.filekwargs)
+                self.outputextras.atomic = True # keep data files in synch on all processes
             else:
                 self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a')
 

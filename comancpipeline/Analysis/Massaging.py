@@ -41,6 +41,12 @@ class CopyDsets(DataStructure):
         else:
             self.data_dir = data_dir
 
+    def __str__(self):
+        if isinstance(self.data_dir, type(None)):
+            return "Copying unused fields from data input to data output"
+        else:
+            return "Copying unused fields to data input from equivalent file in {}".format(self.data_dir)
+
     def run(self, data):
 
         # Determine data target and source
@@ -76,24 +82,29 @@ class CopyDsets(DataStructure):
                 if not name in cpyTarget:
                     cpyTarget.create_group(name)
             elif isinstance(obj, h5py.Dataset):
-                if not (name in cpyTarget) and (comm.rank == 0):
-                    try:
-                        cpyTarget.create_dataset(name, data=obj)
-                    except OSError:
-                        # object to big to copy in one, try splitting
-                        print('Splitting {} once'.format(name), flush=True)
-                        cpyTarget.create_dataset(name, obj.shape)
+                if not (name in cpyTarget):
+                    cpyTarget.create_dataset(name, obj.shape, dtype=obj.dtype)
+                    #print(comm.rank, name, obj.shape)
+                    if (comm.rank == 0):
                         try:
-                            for i in range(obj.shape[0]):
-                                cpyTarget[name][i,...] = obj[i,...]
+                            cpyTarget[name][...] = obj[...]
+                            #print(obj[...])
+                            #print(cpyTarget[name][...])
                         except OSError:
-                            #STILL TOO BIG!
-                            print('Splitting {} again'.format(name), flush=True)
-                            for i in range(obj.shape[0]):
-                                for j in range(obj.shape[1]):
-                                    cpyTarget[name][i,j,...] = obj[i,j,...]
-                elif not (name in cpyTarget) and (comm.rank > 0):
-                    cpyTarget.create_dataset(name, obj.shape)
+                            # object to big to copy in one, try splitting
+                            print('Splitting {} once'.format(name), flush=True)
+                            try:
+                                for i in range(obj.shape[0]):
+                                    cpyTarget[name][i,...] = obj[i,...]
+                            except OSError:
+                                #STILL TOO BIG!
+                                print('Splitting {} again'.format(name), flush=True)
+                                for i in range(obj.shape[0]):
+                                    for j in range(obj.shape[1]):
+                                        cpyTarget[name][i,j,...] = obj[i,j,...]
+
+                    
             return None
 
         cpySource.visititems(copy_dsets)
+        comm.Barrier()
