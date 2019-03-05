@@ -175,7 +175,7 @@ class H5Data(object):
             ndims[splitAxis] = self.hi[field]-self.lo[field]
 
         maxDim = 0
-        maxStep = 1000000 # don't read more than 1000000 values at once?
+        maxStep = 100000 # don't read more than 1000000 values at once?
         Adims = 1
         for i, dim in enumerate(ndims):
             if i != maxDim:
@@ -204,7 +204,16 @@ class H5Data(object):
                 slcin[maxDim] = slice(lo,hi)
 
 
-                self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
+                # Big files need splitting on sidebands too... Maximum read size is 2Gb
+                if (field in Types._COMAPDATA_) and (Types._SIDEBANDS_ in Types._COMAPDATA_[field]):
+                    sidebandaxis = np.where((np.array(Types._COMAPDATA_[field]) == Types._SIDEBANDS_))[0][0]
+                    for j in range(self.data[field].shape[sidebandaxis]):
+                        slc[sidebandaxis] = slice(j,j+1)
+                        slcin[sidebandaxis] = slice(j,j+1)
+                        self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
+                else:
+                    self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
+
         else:
             # Else just read the whole thing at once
 
