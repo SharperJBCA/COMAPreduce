@@ -65,7 +65,7 @@ class H5Data(object):
         if out_extras_dir == 'None':
             out_extras_dir = None
 
-        if isinstance(self.data_dir, type(None)):
+        if isinstance(data_dir, type(None)):
             self.filename = '{}'.format(filename)
         else:
             self.filename = '{}/{}'.format(data_dir,filename)
