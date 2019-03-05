@@ -59,13 +59,17 @@ class H5Data(object):
 
         data_dir = config.get('Inputs','data_dir')
         if data_dir == 'None':
-            data_dir = './'
+            data_dir = None
         if out_dir == 'None':
             out_dir = None
         if out_extras_dir == 'None':
             out_extras_dir = None
 
-        self.filename = '{}/{}'.format(data_dir,filename)
+        if isinstance(self.data_dir, type(None)):
+            self.filename = '{}'.format(filename)
+        else:
+            self.filename = '{}/{}'.format(data_dir,filename)
+
         self.rank = rank
         self.size = size
         self.mode = mode

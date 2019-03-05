@@ -60,7 +60,7 @@ def main(args):
                 pass
 
         
-        BaseClasses.synch(40000)
+        BaseClasses.synch(40000) # Ensure no process tries to open a file before it is deleted...
          
 
         try: # If the file fails to open we just continue to the next...
