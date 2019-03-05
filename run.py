@@ -69,15 +69,19 @@ def main(args):
             print('Could not open file')
             continue
 
-        try: # Check to see if this file has a comment string, no string then no analysis!
-            comment = (h5data.getAttr('comap','comment').lower()).decode('utf-8')
-        except KeyError:
-            print('No comment, skipping...')
-            h5data.close()
-            continue
+        if config.getboolean('Inputs', 'readComment'):
+            try: # Check to see if this file has a comment string, no string then no analysis!
+                comment = (h5data.getAttr('comap','comment').lower()).decode('utf-8')
+                # Does the comment contain a target we are wanting to analyse?
+                check = [t in comment for t in targets]
+            except KeyError:
+                print('No comment, skipping...')
+                h5data.close()
+                continue
+        else:
+            comment = ''
+            check = [True]
 
-        # Does the comment contain a target we are wanting to analyse?
-        check = [t in comment for t in targets]
         if not any(check):
             print('{} does not contain allowed target'.format(comment))
             h5data.close()

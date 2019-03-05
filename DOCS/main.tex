@@ -1,0 +1,93 @@
+\documentclass[11pt]{article}
+\usepackage{graphicx}
+\usepackage{amsmath, amsthm, amssymb}
+\usepackage{epsfig}
+\usepackage{natbib}
+\usepackage{cite}
+\usepackage{url}
+\usepackage[
+  bookmarks=true,
+  bookmarksnumbered=true,
+  colorlinks=true,
+  filecolor=blue,
+  linkcolor=blue,
+  urlcolor=blue,
+  hyperfootnotes=true
+  citecolor=blue
+]{hyperref}
+\begin{document}
+
+\title[COMAP reduce docs]{\bf COMAP Memo 0: COMAP Manchester Reduction Pipeline Documentation}
+\author{Stuart~Harper}
+\date{March 5, 2019}
+\setlength{\topmargin}{-15mm}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Installation}
+
+Requirements:
+\begin{itemize}
+\item \textsc{Python} 3.0 or higher.
+\item Compiled shared libraries of the \texttt{FORTRAN} version of the Starlink astronomical libraries (SLALIB) available from \url{http://starlink.eao.hawaii.edu/starlink/2018ADownload}.
+\item A copy of parallel ready H5Py. Installation instructions can be found here \url{http://docs.h5py.org/en/stable/mpi.html}. N.B.: If you are using an Anaconda packaged version of \textsc{Python} installation you may need to remove the existing \textsc{conda} install of HDF5.
+\item The latest version of \textsc{HealPy} , \textsc{mpi4py} (either openMPI or MPICH work as backends), \textsc{numpy}, \textsc{scipy}, \textsc{matplotlib}, and \textsc{astropy}.
+\end{itemize}
+
+To install the Manchester COMAP reduction pipeline:
+\begin{itemize}
+  \item Clone/download the \texttt{github} repository found here: \url{https://github.com/SharperJBCA/COMAPreduce}.
+  \item Enter the directory: \textit{cd COMAPreduce} and run \textit{python setup.py install}. If your SLALIB libaries are not in standard location you must define the environment variable: $\texttt{SLALIB\_LIBS}$
+  \item To run the COMAP pipeline make a new directory above COMAPreduce (e.g. \textit{cd ../ \&\& mkdir runcomapreduce}) and copy the \textsc{run.py}, and \textsc{\*.ini} files there.
+  \item The pipeline can then be run using the command: \textit{mpirun -n X python run.py -F FILELIST.list -P PARAMETERS.ini}. \textit{FILELIST.list} should contain a list of files with either just the filenames to be processed or the full path to files to be processed. \textit{PARAMETERS.ini} will control the processing to be performed, details of which are described in Sections~\ref{sec:usage} and \ref{sec:classes}.
+\end{itemize}
+
+\section{Usage}\label{sec:usage}
+
+\subsection{Parameter Files}
+
+There are several example parameter files already included:
+\begin{itemize}
+  \item \textsc{AmbLoad.ini}    - This will calculate the $T_\mathrm{sys}$ and gain (e.g. volts per Kelvin) from ambient load stare observations.
+  \item \textsc{Downsample.ini} - This will downsample a data file in frequency by \texttt{factor} times and also check to see if any pointing needs to be added.
+  \item \textsc{FitJupiter.ini} - This will fix the pointing, downsample, and calibrate a Jupiter observation to the ambient load. Then it will fit a Gaussian to the time ordered data to derive amplitude, pointing and beam width measurements. It will also produce a calibration scale in units of Janskys/Kelvin for every horn and frequency channel.
+\end{itemize}
+
+
+\section{Classes}\label{sec:classes}
+
+\subsection{BaseClass.H5Data}
+
+Useful functions for defining new classes:
+\begin{itemize}
+  \item getdset - Retrieve a dataset, if it is not in memory load it.
+  \item setdset - Load a dataset into memory.
+  \item resizedset - Resize a dataset by passing it a new array.
+  \item updatedset - Update a dataset values.
+  \item getAttr    - Get an attribute (stored in output file)
+  \item setAttr    - Set an attribute
+  \item getextra - Get a dataset from the extra outputs
+  \item setextra - Set an array to be assigned to extra outputs (must describe the shape of the array, e.g. which axis refers to horns, frequencies, etc... )
+  \item resizeextra - Change dimensions of an extra dataset.
+\end{itemize}
+N.B. Never write directly to the dset or extras attributes of the H5Data class.
+
+Useful attributes/functions for MPI routines:
+\begin{itemize}
+\item splitType - Axis type being split for MPI purposes (i.e., either Types.\_HORNS\_, Types.\_SIDEBANDS\_, Types.\_FREQUENCY\_, Types.\_TIME\_).
+\item selectType - Axis type being explicity selected (i.e., as above)
+\item selectIndex - Index being selected along selectType axis.
+\item splitFields - Names of fields in COMAP data structure that will contain a split axis.
+\item selectFields - Names of fields in COMAP data structure that will have a selected axis.
+\item hi/lo - Dictionary, for each splitField, defining where in the larger structure this process is accessing data.
+\item ndims - Dictionary containing dimensions of each dataset in memory for this process.
+\item fullFieldLengths - Dictionary containing dimensions of each dataset in memory in total.
+\item getDataRange - Function that returns how to split N values between M processes.
+\end{itemize}
+
+
+
+\end{document}

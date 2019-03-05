@@ -1,6 +1,56 @@
-# Install
+1 Installation
 
-1) Open setup.py and set starlib variable to directory of local starlib libraries.
+Requirements:
+• Python 3.0 or higher.
 
-2) python setup.py install 
+• Compiled shared libraries of the FORTRAN version of the Starlink as-
+tronomical libraries (SLALIB) available from http://starlink.eao.
+hawaii.edu/starlink/2018ADownload.
 
+• A copy of parallel ready H5Py. Installation instructions can be found
+here http://docs.h5py.org/en/stable/mpi.html. 
+N.B.: If you are using an Anaconda packaged version of Python installation you may
+need to remove the existing conda install of HDF5.
+
+• The latest version of HealPy and mpi4py (either openMPI or MPICH
+work as backends).
+
+
+
+To install the Manchester COMAP reduction pipeline:
+• Clone/download the github repository found here: https://github.com/SharperJBCA/COMAPreduce
+
+• Enter the directory: 
+> cd COMAPreduce 
+> run python setup.py install
+If your SLALIB libaries are not in standard location you must define
+the environment variable: SLALIB_LIBS
+
+• To run the COMAP pipeline make a new directory above COMAPreduce 
+> cd ../ && mkdir runcomapreduce
+and copy the run.py, COMAP_FEEDS.dat and .ini files to this directory.
+
+• The pipeline can then be run using the command:
+> mpirun -n X python run.py -F FILELIST.list -P PARAMETERS.ini. FILELIST.list
+should contain a list of files with either just the filenames to be processed or
+the full path to files to be processed. PARAMETERS.ini will con-
+trol the processing to be performed, details of which are described in
+Sections 2 and 3.
+
+• N.B.: You will also need to copy COMAP_FEEDS.dat from COMAPreduce to your working directory.
+
+2 Usage
+2.1 Parameter Files
+
+There are several example parameter files already included:
+• AmbLoad.ini - This will calculate the T sys and gain (e.g. volts per
+Kelvin) from ambient load stare observations.
+
+• Downsample.ini - This will downsample a data file in frequency by
+factor times and also check to see if any pointing needs to be added.
+
+• FitJupiter.ini - This will fix the pointing, downsample, and cali-
+brate a Jupiter observation to the ambient load. Then it will fit a
+Gaussian to the time ordered data to derive amplitude, pointing and
+beam width measurements. It will also produce a calibration scale in
+units of Janskys/Kelvin for every horn and frequency channel.
