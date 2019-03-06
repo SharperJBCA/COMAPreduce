@@ -125,7 +125,7 @@ class H5Data(object):
         """
         Return dataset from hdf5 file and stores it in memory if not already loaded.
         """
-        if field not in self.dsets.keys():
+        if field not in self.dsets:
             self.setdset(field)
 
         return self.dsets[field]
@@ -143,7 +143,7 @@ class H5Data(object):
         ndims = [s for s in self.ndims[field]]
 
         # is this field only having a single axis being selected?
-        if field in self.selectFields.keys():
+        if field in self.selectFields:
             selectAxis  = self.selectFields[field][0]
             selectIndex = self.selectFields[field][1]
             slc[selectAxis]   = slice(selectIndex,
@@ -160,7 +160,7 @@ class H5Data(object):
 
         slcin = [s for s in slc]
         # if this field being split for MPI?
-        if field in self.splitFields.keys():
+        if field in self.splitFields:
             splitAxis = self.splitFields[field] # this will return an integer index
             self.lo[field], self.hi[field] = self.getDataRange(self.ndims[field][splitAxis])
             slc[splitAxis]   = slice(self.lo[field], self.hi[field])
@@ -181,7 +181,7 @@ class H5Data(object):
             if i != maxDim:
                 Adims *= dim
         
-        self.dsets[field] = np.zeros(ndims)
+        self.dsets[field] = np.empty(ndims, dtype=self.data[field].dtype)
         if Adims*ndims[maxDim] > maxStep:
             nsteps = int(Adims*ndims[maxDim]//maxStep)
             if np.mod(Adims*ndims[maxDim],maxStep) != 0:
@@ -205,19 +205,23 @@ class H5Data(object):
 
 
                 # Big files need splitting on sidebands too... Maximum read size is 2Gb
+                
                 if (field in Types._COMAPDATA_) and (Types._SIDEBANDS_ in Types._COMAPDATA_[field]):
                     sidebandaxis = np.where((np.array(Types._COMAPDATA_[field]) == Types._SIDEBANDS_))[0][0]
                     for j in range(self.data[field].shape[sidebandaxis]):
                         slc[sidebandaxis] = slice(j,j+1)
                         slcin[sidebandaxis] = slice(j,j+1)
-                        self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
+                        #print(field, slc, slcin, flush=True)
+                        self.data[field].read_direct(self.dsets[field], source_sel=tuple(slc), dest_sel=tuple(slcin))
+                        #self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
                 else:
-                    self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
+                    #self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
+                    self.data[field].read_direct(self.dsets[field], source_sel=tuple(slc), dest_sel=tuple(slcin))
 
         else:
             # Else just read the whole thing at once
-
-            self.dsets[field] = self.data[field][tuple(slc)]
+            self.data[field].read_direct(self.dsets[field], source_sel=tuple(slc), dest_sel=tuple(slcin))
+            #self.dsets[field] = self.data[field][tuple(slc)]
 
     def resizedset(self,field, d):
         """
@@ -321,7 +325,7 @@ class H5Data(object):
                 self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a')
 
     def getextra(self, field, desc=None):
-        if field not in self.extras.keys():
+        if field not in self.extras:
             return None
 
         return self.extras[field][0]
@@ -432,7 +436,13 @@ class H5Data(object):
         else:
             tmp = self.output.create_dataset(field, ndims)
 
-        tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
+        if field in self.splitFields: # If  in split fields each process has a different dataset
+            tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
+        # If it is not in split fields then all data is the same on each process
+        # therefore only write out from rank == 0.
+        if not (field in self.splitFields) and (comm.rank == 0):
+            tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
+
 
 
     def outputAttrs(self, grp, attr):

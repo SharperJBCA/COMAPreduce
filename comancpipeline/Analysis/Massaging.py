@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
 import h5py
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis.BaseClasses import DataStructure, H5Data
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Tools import Coordinates, Types
 from os import listdir, getcwd
@@ -51,13 +51,14 @@ class CopyDsets(DataStructure):
 
         # Determine data target and source
         if isinstance(self.data_dir, type(None)):
-            cpyTarget = data.output
+            cpyTarget = data
             cpySource = data.data
         else:
             cpyTarget = data.data
             filename = cpyTarget.filename.split('/')[-1]
             if comm.size > 1:
                 cpySource = h5py.File('{}/{}'.format(self.data_dir, filename), driver='mpio', comm=comm)
+                cpySource.atomic = True
             else:
                 cpySource = h5py.File('{}/{}'.format(self.data_dir, filename))
 
@@ -74,7 +75,24 @@ class CopyDsets(DataStructure):
                     if not key in grp.attrs:
                         grp.attrs[key] = val
             return None
-        cpySource.visititems(copy_attrs)
+
+        def copy_attrs_dict(name,obj):
+            if isinstance(obj, h5py.Group):
+                if not name in cpyTarget.attrs:
+                    cpyTarget.attrs[name] = {}
+                #    grp = cpyTarget.create_group(name)
+                #else:
+                #    grp = cpyTarget[name]
+
+                for key, val in obj.attrs.items():
+                    if not key in cpyTarget.attrs[name]:
+                        cpyTarget.attrs[name][key] = val
+            return None
+
+        if isinstance(cpyTarget, H5Data):
+            cpySource.visititems(copy_attrs_dict)
+        else:            
+            cpySource.visititems(copy_attrs)
 
         # COPY DATASETS
         def copy_dsets(name,obj):
@@ -106,5 +124,19 @@ class CopyDsets(DataStructure):
                     
             return None
 
-        cpySource.visititems(copy_dsets)
+
+        def copy_dsets_dict(name,obj):
+            if isinstance(obj, h5py.Dataset):
+                if not (name in cpyTarget.dsets):
+                    cpyTarget.setdset(name)
+
+                    
+            return None
+
+        if isinstance(cpyTarget, H5Data):
+            cpySource.visititems(copy_dsets_dict)
+        else:            
+            cpySource.visititems(copy_dsets)
+
+
         comm.Barrier()
