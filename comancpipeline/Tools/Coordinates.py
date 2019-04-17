@@ -120,16 +120,18 @@ def getPlanetPosition(source, lon, lat, mjdtod):
     """
 
     if 'JUPITER' in source.upper():
-        r0, d0, jdia = rdplan(mjdtod, 5, lon, lat)
-        jdist = planet(mjdtod, 5)
-        edist = planet(mjdtod, 3)
-        rdist = np.sqrt(np.sum((jdist[:3,:] - edist[:3,:])**2,axis=0))
-
-        r0 = np.mean(r0)*180./np.pi
-        d0 = np.mean(d0)*180./np.pi
-        dist = np.mean(rdist)
+        pid = 5
     else:
-        r0, d0, dist = 0, 0, 0
+        pid = 0
+
+    r0, d0, jdia = rdplan(mjdtod, pid, lon, lat)
+    jdist = planet(mjdtod, pid) # Planet heliocentric position
+    edist = planet(mjdtod, 3) # Earth heliocentric position
+    rdist = np.sqrt(np.sum((jdist[:3,:] - edist[:3,:])**2,axis=0))
+
+    r0 = np.mean(r0)*180./np.pi
+    d0 = np.mean(d0)*180./np.pi
+    dist = np.mean(rdist)
 
     return r0, d0, dist
 
@@ -154,6 +156,31 @@ def h2e(az, el, mjd, lon, lat, degrees=True):
     ra, dec = pysla.h2e(az*c, el*c, mjd, lon*c, lat*c)
     return ra/c, dec/c
 
+def e2h(ra, dec, mjd, lon, lat, degrees=True, return_lha=False):
+    """
+    Horizon to equatorial coordinates
+
+    args:
+    az - arraylike, azimuth
+    el - arraylike, elevation
+    mjd- arraylike, modified julian date
+    lon- double, longitude
+    lat- double, latitude
+    """
+
+    if degrees:
+        c = np.pi/180.
+    else:
+        c = 1.
+
+    az, el, lha = pysla.e2h(ra*c, dec*c, mjd, lon*c, lat*c)
+    
+    if return_lha:
+        return az/c, el/c, lha/c
+    else:
+        return az/c, el/c
+
+
 def precess(ra, dec, mjd, degrees=True):
     """
     Precess coodinrate system to FK5 J2000.
@@ -169,8 +196,13 @@ def precess(ra, dec, mjd, degrees=True):
     else:
         c = 1.
 
-    ra, dec = pysla.precess(ra*c, dec*c, mjd)
-    return ra/c, dec/c
+    raout = ra.astype(np.float)*c
+    decout = dec.astype(np.float)*c
+
+    pysla.precess(raout,
+                  decout, 
+                  mjd.astype(np.float))
+    return raout/c, decout/c
 
 def pa(ra, dec, mjd, lon ,lat, degrees=True):
     """

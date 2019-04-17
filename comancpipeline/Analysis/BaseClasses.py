@@ -16,7 +16,10 @@ class DataStructure(object):
     def __call__(self,data):
         assert isinstance(data.data, h5py._hl.files.File), 'Data is not a h5py file structure'
         self.run(data)
-        self.plot(data)
+        try:
+            self.plot(data)
+        except:
+            print('Plotting Failed')
 
     def run(self,data):
         pass
@@ -56,6 +59,9 @@ class H5Data(object):
             self.filekwargs = {'driver':'mpio', 'comm':comm}
         else:
             self.filekwargs = {}
+
+
+        self.extrasprefix = config.get('Inputs','extras_prefix')
 
         data_dir = config.get('Inputs','data_dir')
         if data_dir == 'None':
@@ -318,11 +324,11 @@ class H5Data(object):
         if not isinstance(self.out_extras_dir, type(None)):
             extrasname = self.data.filename.split('/')[-1].split('.h')[0]
             if comm.size > 1:
-                self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a',
+                self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_{}.hd5'.format(self.extrasprefix),'a',
                                               driver='mpio', comm=comm)#**self.filekwargs)
                 self.outputextras.atomic = True # keep data files in synch on all processes
             else:
-                self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_Extras.hd5','a')
+                self.outputextras = h5py.File(self.out_extras_dir+'/'+extrasname+'_{}.hd5'.format(self.extrasprefix),'a')
 
     def getextra(self, field, desc=None):
         if field not in self.extras:

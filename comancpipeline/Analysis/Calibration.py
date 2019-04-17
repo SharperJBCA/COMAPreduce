@@ -128,10 +128,10 @@ class DownSampleFrequency(DataStructure):
         for key, attr in din.data['comap'].attrs.items():
             self.dout['comap'].attrs[key] = attr
 
-        hk    = self.dout.create_group('hk')
-        hkgroups = ['deTracker', 'drivenode', 'env', 'saddlebag', 'vane']
-        for hkgroup in hkgroups:
-            din.data.copy('hk/{}'.format(hkgroup), hk)
+        #hk    = self.dout.create_group('hk')
+        #hkgroups = ['deTracker', 'drivenode', 'env', 'saddlebag', 'vane']
+        #for hkgroup in hkgroups:
+        #    din.data.copy('hk/{}'.format(hkgroup), hk)
 
         din.data.copy('pointing/', self.dout)
 
@@ -400,7 +400,7 @@ class AmbientLoad2Gain(DataStructure):
         #    return None
 
         # Check if elevations shift (e.g., there is a skydip
-        el  = data.getdset('pointing/elEncoder')
+        el  = data.getdset('pointing/elActual')
         e0, e1 = np.nanmin(el), np.nanmax(el)
         if (e1-e0) > self.elLim:
             print('Elevation range exceeds {:.0f} degrees'.format(self.elLim))
@@ -425,8 +425,8 @@ class AmbientLoad2Gain(DataStructure):
         #   return 0
 
 
-        tHot  = data.getdset('hk/env/ambientLoadTemp') + self.tHotOffset
-        hkMJD = data.getdset('hk/env/MJD')
+        tHot  = data.getdset('hk/antenna0/env/ambientLoadTemp') + self.tHotOffset
+        hkMJD = data.getdset('hk/antenna0/env/utc')
         tHot  = gaussian_filter1d(tHot, 35)
         tHot  = interp1d(hkMJD, tHot, bounds_error=False, fill_value=np.nan)(mjd)
 
@@ -503,7 +503,7 @@ class Jupiter2Gain(DataStructure):
         Sjup, dist =  CaliModels.JupiterFlux(freq, np.array([np.mean(mjd)]))
 
         # Flux scale conversion
-        self.G = Sjup[np.newaxis,...]/Pout[:,:,:,0]
+        self.G = Pout[:,:,:,0]/Sjup[np.newaxis,...]
         
         JUPITERCAL = 'JUPITERCAL'
         data.setextra('{}/Gain'.format(JUPITERCAL), 
@@ -524,3 +524,33 @@ class Jupiter2Gain(DataStructure):
         data.setextra('{}/DISTANCE'.format(JUPITERCAL), 
                       np.array([dist]),
                       [Types._OTHER_])
+
+
+class JupCal(AmbLoadCal):
+    """
+    Interpolate Ambient Measurements
+    """
+    def __init__(self, amb_dir='JupiterCals/', force=False):
+        super().__init__()
+        self.amb_dir = amb_dir
+        self.force = False
+        self.grp = 'JUPITERCAL'
+        
+    def __str__(self):
+        return "Applying ambient load calibration"
+
+
+    def run(self, data):
+        # don't want to calibrate multiple times!
+        #if ('comap' in data.data):
+        #    if (not isinstance(data.data['comap'].attrs.get('cal_ambload'), type(None))) and (not self.force):
+        #        print('2 {} is already ambient load calibrated'.format(data.filename.split('/')[-1]))
+        #        return None
+
+        self.Gain, self.GainFreq = self.getNearestGain(data)
+
+        tod = data.getdset('spectrometer/tod')
+        tod *= self.Gain[...,np.newaxis]
+
+
+        data.setAttr('comap', 'cal_jup', True)

@@ -107,6 +107,49 @@ subroutine h2e(az, el, mjd, lon, lat, ra, dec, len_bn)
   
 end subroutine h2e
 
+subroutine e2h(ra, dec, mjd, lon, lat, az, el,lha, len_bn)
+  implicit none
+  
+  integer, intent(in) :: len_bn
+  real*8, intent(in) :: lon
+  real*8, intent(in) :: lat
+  real*8, intent(in) :: ra(len_bn)
+  real*8, intent(in) :: dec(len_bn)
+  real*8, intent(in) :: mjd(len_bn)
+  real*8, intent(out) :: az(len_bn)
+  real*8, intent(out) :: el(len_bn)
+  real*8, intent(out) :: lha(len_bn)
+
+  interface
+     real*8 FUNCTION sla_gmst(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_gmst
+  end interface
+
+
+  interface
+     real*8 FUNCTION sla_dranrm(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dranrm
+  end interface
+
+  !f2py integer len_bn
+  !f2py real*8 lon, lat
+  !f2py real*8 az,el,mjd
+
+  integer :: i
+  real*8 :: gmst
+
+  do i=1, len_bn
+     gmst = sla_gmst(mjd(i))
+     lha(i) = lon+ gmst - ra(i) ! CONVERT TO LHA
+     call sla_de2h(lha(i), dec(i), lat, az(i), el(i))
+  enddo    
+
+  
+end subroutine e2h
+
+
 subroutine precess(ra, dec,mjd, len_bn)
   implicit none
   
@@ -131,6 +174,8 @@ subroutine precess(ra, dec,mjd, len_bn)
   do i=1, len_bn
      epoch = sla_epb(mjd(i))
      call sla_preces('FK5', epoch, 2000D0, ra(i), dec(i))
+
+
   enddo    
 
   

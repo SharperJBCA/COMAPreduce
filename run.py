@@ -55,7 +55,7 @@ def main(args):
                 pass
             try:
                 if not isinstance(h5data.out_extras_dir, type(None)):
-                    os.remove(h5data.out_extras_dir+'/'+filename.split('.h')[0]+'_Extras.hd5')
+                    os.remove(h5data.out_extras_dir+'/'+filename.split('.h')[0]+'_{}.hd5'.format(h5data.extrasprefix))
             except OSError:
                 pass
 
@@ -69,7 +69,7 @@ def main(args):
             print('Could not open file')
             continue
 
-        if config.getboolean('Inputs', 'readComment'):
+        if config.getboolean('Inputs', 'readComment') & ~isinstance(h5data.getAttr('comap','comment'), type(None)):
             try: # Check to see if this file has a comment string, no string then no analysis!
                 comment = (h5data.getAttr('comap','comment').lower()).decode('utf-8')
                 # Does the comment contain a target we are wanting to analyse?
