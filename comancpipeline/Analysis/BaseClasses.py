@@ -75,7 +75,6 @@ class H5Data(object):
             self.filename = '{}'.format(filename)
         else:
             self.filename = '{}/{}'.format(data_dir,filename)
-
         self.rank = rank
         self.size = size
         self.mode = mode
@@ -227,6 +226,7 @@ class H5Data(object):
         else:
             # Else just read the whole thing at once
             self.data[field].read_direct(self.dsets[field], source_sel=tuple(slc), dest_sel=tuple(slcin))
+
             #self.dsets[field] = self.data[field][tuple(slc)]
 
     def resizedset(self,field, d):
@@ -440,7 +440,7 @@ class H5Data(object):
         if type(self.dsets[field].flatten()[0]) == np.bytes_:
             tmp = self.output.create_dataset(field, ndims, dtype='S10')
         else:
-            tmp = self.output.create_dataset(field, ndims)
+            tmp = self.output.create_dataset(field, ndims, dtype=self.dsets[field].dtype)
 
         if field in self.splitFields: # If  in split fields each process has a different dataset
             tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
