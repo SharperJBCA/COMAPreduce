@@ -6,9 +6,167 @@ from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Tools import Coordinates, Types
 from os import listdir, getcwd
 from os.path import isfile, join
-
+from scipy.interpolate import interp1d
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
+
+
+class CoordOffset(DataStructure):
+    """
+    Checks if the pointing has been generated and generates it if not.
+    """
+    
+    def __init__(self, longitude=-118.2941, latitude=37.2314,offset=0, force=True):
+        super().__init__()
+
+        if isinstance(force, type(str)):
+            self.force = (force.lower() == 'true')
+        else:
+            self.force = force
+
+        # stores and write the lon/lat of the telescope to the output file
+        # default is the COMAP telescope geo coordinates
+        self.longitude = longitude
+        self.latitude = latitude
+        self.offset = offset / 1000. / 24./ 3600.
+
+        self.fields = ['spectrometer/pixel_pointing/{}'.format(v) for v in ['pixel_az','pixel_el', 'pixel_ra', 'pixel_dec']]
+
+        self.focalPlane = FocalPlane()
+
+    def __str__(self):
+        return "Adding {}ms offset to encoder timing.".format(self.offset*1000.*24*3600.)
+
+    def run(self,data):
+            
+        self.longitude = data.getdset('hk/antenna0/tracker/siteActual')[0,0]/(60.*60.*1000.)
+        self.latitude  = data.getdset('hk/antenna0/tracker/siteActual')[0,1]/(60.*60.*1000.)
+        nHorn, nSB, nChan, nSample = data.getdset('spectrometer/tod').shape
+
+        az = data.getdset(self.fields[0])
+        el = data.getdset(self.fields[1])
+        ra = data.getdset(self.fields[2])
+        dec= data.getdset(self.fields[3])
+        mjd   = data.getdset('spectrometer/MJD')
+        mjd[:] = mjd[0] + np.arange(nSample)*self.offset # correct to new timing
+
+        if data.splitType == Types._HORNS_:
+            splitFull = data.fullFieldLengths[data.splitType]
+            lo, hi    = data.getDataRange(splitFull)
+        else:
+            lo, hi = 0, nHorn
+
+        for ilocal, i in enumerate(range(lo,hi)):
+
+            def interpC(mjd,pos):
+                azmdl = interp1d(mjd,pos, bounds_error=False)
+                aznew = azmdl(mjd + self.offset)
+                badVals = np.where((np.isnan(aznew)))[0]
+                if len(badVals) > 0:
+                    if np.max(badVals) < az.shape[1]/2.:
+                        aznew[badVals] = aznew[max(badVals)+1]
+                    else:
+                        aznew[badVals] = aznew[min(badVals)-1]
+                    return aznew
+
+            aznew = interpC(mjd, az[i,:])
+            elnew = interpC(mjd, el[i,:])
+            # fill in the ra/dec fields
+            _ra,_dec = Coordinates.h2e(aznew,
+                                       elnew,
+                                       mjd, 
+                                       self.longitude, 
+                                       self.latitude)
+
+            _ra, _dec = Coordinates.precess(_ra,_dec,mjd)
+            ra[i,:] = _ra
+            dec[i,:] = _dec
+
+class FixTiming(CoordOffset):
+    
+    def run(self, data):
+        self.longitude = data.getdset('hk/antenna0/tracker/siteActual')[0,0]/(60.*60.*1000.)
+        self.latitude  = data.getdset('hk/antenna0/tracker/siteActual')[0,1]/(60.*60.*1000.)
+        nHorn, nSB, nChan, nSample = data.getdset('spectrometer/tod').shape
+
+        az = data.getdset(self.fields[0])
+        el = data.getdset(self.fields[1])
+        ra = data.getdset(self.fields[2])
+        dec= data.getdset(self.fields[3])
+        mjd   = data.getdset('spectrometer/MJD')
+
+        tod = data.getdset('spectrometer/tod')
+
+        if data.splitType == Types._HORNS_:
+            splitFull = data.fullFieldLengths[data.splitType]
+            lo, hi    = data.getDataRange(splitFull)
+        else:
+            lo, hi = 0, nHorn
+
+        for ilocal, i in enumerate(range(lo,hi)):
+
+            def interpC(mjd,pos):
+                azmdl = interp1d(mjd,pos, bounds_error=False)
+                aznew = azmdl(mjd + self.offset)
+                badVals = np.where((np.isnan(aznew)))[0]
+                if len(badVals) > 0:
+                    if np.max(badVals) < az.shape[1]/2.:
+                        aznew[badVals] = aznew[max(badVals)+1]
+                    else:
+                        aznew[badVals] = aznew[min(badVals)-1]
+                    return aznew
+
+            aznew = interpC(mjd, az[i,:])
+            elnew = interpC(mjd, el[i,:])
+            # fill in the ra/dec fields
+            _ra,_dec = Coordinates.h2e(aznew,
+                                       elnew,
+                                       mjd, 
+                                       self.longitude, 
+                                       self.latitude)
+
+            _ra, _dec = Coordinates.precess(_ra,_dec,mjd)
+            ra[i,:] = _ra
+            dec[i,:] = _dec
+
+class RefractionCorrection(DataStructure):
+    """
+    Use internal COMAP registers to correct for refraction in elevation
+    """
+    
+    def __init__(self):
+        super().__init__()
+
+        self.fields = ['spectrometer/pixel_pointing/{}'.format(v) for v in ['pixel_az','pixel_el', 'pixel_ra', 'pixel_dec']]
+        self.focalPlane = FocalPlane()
+
+    def __str__(self):
+        return "Correcting for refraction term.".format()
+
+    def interp(self, cval, cmjd, bmjd):
+        mdl = interp1d(cmjd, cval, bounds_error=False, fill_value=np.nan)
+        bval = mdl(bmjd)
+        badVals = np.where((np.isnan(bval)))[0]
+        if len(badVals) > 0:
+            if np.max(badVals) < bmjd.shape[0]/2.:
+                bval[badVals] = bval[max(badVals)+1]
+            else:
+                bval[badVals] = bval[min(badVals)-1]
+        bval[np.isnan(bval)] = 0
+        return bval
+
+    def run(self,data):
+        deg2mas = 1000. * 3600.
+        refraction = data.getdset('hk/antenna0/deTracker/refraction')[:,-1] / deg2mas
+        refracUTC = data.getdset('hk/antenna0/deTracker/utc')
+
+        el = data.getdset(self.fields[1])
+        mjd   = data.getdset('spectrometer/MJD')
+        refraction = self.interp(refraction, refracUTC, mjd) # interpolate to TOD time
+        # correct elevation
+        el += refraction[np.newaxis,:] # do not correct for each horn, we could do that later?
+        print('ELEVATION', np.sum(refraction))
+
 
 class FillPointing(DataStructure):
     """

@@ -2,6 +2,32 @@
 !!It is inaccurate but fine for QUIJOTE accuracy. It downsamples
 !! the data by 100x!
 
+subroutine refro(zd, hm, tdk, pmb, rh, wl, phi, tlr, eps, ref, len_zd)
+  implicit none
+  integer, intent(in) :: len_zd
+  real*8, intent(in) :: zd(len_zd)
+  real*8, intent(out) :: ref(len_zd)
+  real*8, intent(in) :: hm ! height
+  real*8, intent(in) :: tdk ! ambient temp (K)
+  real*8, intent(in) :: pmb ! pressure (mb)
+  real*8, intent(in) :: rh ! relative humidity (0-1)
+  real*8, intent(in) :: wl ! effective wavelength (um)
+  real*8, intent(in) :: tlr ! latitude of observer
+  real*8, intent(in) :: phi ! temperature lapse rate (K/m)
+  real*8, intent(in) :: eps ! precision required (radian)
+
+  !f2py real*8 zd, hm, tdk, pmb, rh, wl, phi, tlr, eps, ref
+  !f2py integer len_zd
+
+  integer :: i
+
+  do i=1, len_zd
+     call sla_refro(zd(i), hm, tdk, pmb, rh, wl, phi, tlr, eps, ref(i))
+  enddo
+
+
+end subroutine refro
+
 subroutine rdplan(jd, np, lon, lat, ra, dec, diam, len_bn)
   implicit none
   

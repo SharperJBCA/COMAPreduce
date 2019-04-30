@@ -30,7 +30,6 @@ def main(args):
         filelist = np.array([options.filename])
     else:
         filelist = np.loadtxt(options.filelist, dtype=str,ndmin=1)
-
     
     # Start main loop over each file
     for i in range(filelist.size):
@@ -43,6 +42,7 @@ def main(args):
         if comm.rank == 0:
             print('Opening: {}'.format(filename.split('/')[-1]),flush=True)
 
+        
         h5data = BaseClasses.H5Data(filename,comm.rank, comm.size, config,
                                     out_extras_dir=config.get('Inputs', 'out_extras_dir'), 
                                     out_dir=config.get('Inputs', 'out_dir'))
@@ -66,7 +66,7 @@ def main(args):
         try: # If the file fails to open we just continue to the next...
             h5data.open()
         except OSError:
-            print('Could not open file')
+            print('Could not open file: Check data_dir in parameter file')
             continue
 
         if config.getboolean('Inputs', 'readComment') & ~isinstance(h5data.getAttr('comap','comment'), type(None)):

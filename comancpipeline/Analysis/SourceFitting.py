@@ -166,8 +166,6 @@ class FitSource(DataStructure):
         dec = data.getdset('spectrometer/pixel_pointing/pixel_dec')
         el  = data.getdset('spectrometer/pixel_pointing/pixel_el')
         nu  = data.getdset('spectrometer/frequency')
-
-        
       
         rms  = Filtering.calcRMS(tod)
         # loop over horns
@@ -176,6 +174,7 @@ class FitSource(DataStructure):
         nParams = 9
         self.Pout = np.zeros((nHorns, nSBs, nChans, nParams))
         self.Perr = np.zeros((nHorns, nSBs, nChans, nParams))
+        peakEl = np.zeros((nHorns, nSBs, nChans))
 
         for i in range(nHorns):
             todAvg = np.nanmean(np.nanmean(tod[i,...],axis=0),axis=0)
@@ -256,8 +255,8 @@ class FitSource(DataStructure):
 
 
                     # Format values:
-                    pyplot.plot(todFit, label='data',zorder=0)
-                    pyplot.plot(Fitting.Gauss2dRotPlane(fout[0], x, y,0,0),'--r',linewidth=2,label='Best fit',zorder=2)
+                    #pyplot.plot(todFit, label='data',zorder=0)
+                    #pyplot.plot(Fitting.Gauss2dRotPlane(fout[0], x, y,0,0),'--r',linewidth=2,label='Best fit',zorder=2)
                     if fout[0][2] > fout[0][4]: # want x to be smaller than y
                         _temp = fout[0][2]*1.
                         fout[0][2] = fout[0][4]*1.
@@ -265,12 +264,18 @@ class FitSource(DataStructure):
                         fout[0][5] = np.mod(fout[0][5] - np.pi/2., np.pi)
                     else:
                         fout[0][5] = np.mod(fout[0][5], np.pi)
-                    print(fout[0][5]*180./np.pi)
-                    pyplot.plot(Fitting.Gauss2dRotPlane(P0, x, y,0,0),'-k',linewidth=2,label='Best fit',zorder=1)
-                    pyplot.show()
+                    #print(fout[0][5]*180./np.pi)
+                    #pyplot.plot(Fitting.Gauss2dRotPlane(P0, x, y,0,0),'-k',linewidth=2,label='Best fit',zorder=1)
+                    #pyplot.show()
 
                     self.Perr[i,j,k,:] = ferr #np.sqrt(1./np.diag(Cov))
                     self.Pout[i,j,k,:] = fout[0]
+
+                    bestfit = Fitting.Gauss2dRotPlane(self.Pout[i,j,k,:],
+                                                      x, 
+                                                      y,0,0)
+                    peakEl[i,j,k]=el[i,np.argmax(bestfit)]
+
         #nHorns, nSBs, nChans, nSamples = data.data['spectrometer/tod'].shape
         data.setextra('FitSource/Parameters', 
                       self.Pout,
@@ -288,6 +293,12 @@ class FitSource(DataStructure):
                       nu,
                       [Types._SIDEBANDS_, 
                        Types._FREQUENCY_])
+        data.setextra('JupiterFits/peakel', 
+                      peakEl,
+                      [Types._HORNS_, 
+                       Types._SIDEBANDS_, 
+                       Types._FREQUENCY_])
+
 
     def plot(self,data):
 
@@ -366,13 +377,19 @@ class FitSourceAlternateScans(FitSource):
         # d1 scans:
         select = np.zeros(x.size).astype(bool)
         for pid in range(scanEdges.size-1):
-            if np.mod(pid, 2) == idir:
-                #select += [np.arange(scanEdges[pid], scanEdges[pid+1]).astype(int)]
+
+            dx = np.gradient(x[scanEdges[pid]:scanEdges[pid+1]])
+            if (idir ==0) & (np.median(dx) > 0):
                 select[scanEdges[pid]:scanEdges[pid+1]] = True
-                #select = np.concatenate(select)
+            elif (idir == 1) & (np.median(dx) < 0):
+                select[scanEdges[pid]:scanEdges[pid+1]] = True
+
         return select
 
     def fit(self,data):
+        self.lon = data.getdset('hk/antenna0/tracker/siteActual')[0,0]/(60.*60.*1000.)
+        self.lat = data.getdset('hk/antenna0/tracker/siteActual')[0,1]/(60.*60.*1000.)
+
         tod = data.getdset('spectrometer/tod')
         mjd = data.getdset('spectrometer/MJD')
         ra  = data.getdset('spectrometer/pixel_pointing/pixel_ra')
@@ -387,6 +404,7 @@ class FitSourceAlternateScans(FitSource):
         nParams = 9
         self.Pout = np.zeros((nHorns, nSBs, nChans, 2, nParams))
         self.Perr = np.zeros((nHorns, nSBs, nChans, 2, nParams))
+        peakEl = np.zeros((nHorns, nSBs, nChans, 2))
 
         for i in range(nHorns):
             todAvg = np.nanmean(np.nanmean(tod[i,...],axis=0),axis=0)
@@ -486,6 +504,12 @@ class FitSourceAlternateScans(FitSource):
                         self.Perr[i,j,k,idir,:] = ferr #np.sqrt(1./np.diag(Cov))
                         self.Pout[i,j,k,idir,:] = fout[0]
 
+                        # BEST FIT MODEL
+                        bestfit = Fitting.Gauss2dRotPlane(self.Pout[i,j,k,idir,:],
+                                                          x, 
+                                                          y,0,0)
+                        peakEl[i,j,k,idir]=el[i,np.argmax(bestfit)]
+
                         # pyplot.plot(Fitting.Gauss2dRotPlane(P0, x, y,0,0),'-k',linewidth=2,label='Best fit',zorder=1)
                         # pyplot.show()
 
@@ -563,6 +587,12 @@ class FitSourceAlternateScans(FitSource):
                           nu,
                           [Types._SIDEBANDS_, 
                            Types._FREQUENCY_])
+            data.setextra('JupiterFits/peakel', 
+                          peakEl,
+                          [Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_])
 
     def plot(self,data):
 
@@ -635,6 +665,9 @@ class FitPlanet(FitSource):
         return 'Fitting {}'.format(self.planet)
 
     def getJupiter(self, data):
+        self.lon = data.getdset('hk/antenna0/tracker/siteActual')[0,0]/(60.*60.*1000.)
+        self.lat = data.getdset('hk/antenna0/tracker/siteActual')[0,1]/(60.*60.*1000.)
+
         mjd = data.getdset('spectrometer/MJD')
         self.x0, self.y0, self.dist = Coordinates.getPlanetPosition(self.planet, self.lon, self.lat, mjd)
         return self.x0, self.y0, self.dist

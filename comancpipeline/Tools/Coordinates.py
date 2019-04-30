@@ -34,7 +34,6 @@ def Rotate(ra, dec, r0, d0, p0):
     All inputs in degrees
 
     """
-    print(np.min(dec), np.max(dec))
     skyVec = hp.ang2vec((90.-dec)*np.pi/180., ra*np.pi/180.)
 
     outVec = RotatePhi(skyVec, r0)

@@ -17,7 +17,8 @@ class DataStructure(object):
         assert isinstance(data.data, h5py._hl.files.File), 'Data is not a h5py file structure'
         self.run(data)
         try:
-            self.plot(data)
+            #self.plot(data)
+            pass
         except:
             print('Plotting Failed')
 
