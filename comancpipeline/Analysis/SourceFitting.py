@@ -135,8 +135,19 @@ class FitSource(DataStructure):
 
     def run(self,data):
 
+        self.checkVane(data)
         self.fit(data)
         
+    def checkVane(self,data):
+        
+        vane = data.getdset('hk/antenna0/vane/state')
+        vutc = data.getdset('hk/antenna0/vane/utc')
+        utc  = data.getdset('spectrometer/MJD')
+
+        # interp vane data
+        vaneFull = interp1d(vutc, vane, bounds_error=False, fill_value=0)(utc)
+        data.dsets['spectrometer/vane']= vaneFull
+
     def initialPeak(self,tod, x, y):
         
         rms  = Filtering.calcRMS(tod)
@@ -155,7 +166,7 @@ class FitSource(DataStructure):
         try:
             xmax,ymax = np.unravel_index(np.nanargmax(m),m.shape)
         except ValueError:
-            return None
+            return 0,0
         return xpix[xmax], ypix[ymax]
 
 
@@ -166,7 +177,8 @@ class FitSource(DataStructure):
         dec = data.getdset('spectrometer/pixel_pointing/pixel_dec')
         el  = data.getdset('spectrometer/pixel_pointing/pixel_el')
         nu  = data.getdset('spectrometer/frequency')
-      
+        vane = data.getdset('spectrometer/vane')
+
         rms  = Filtering.calcRMS(tod)
         # loop over horns
         nHorns, nSBs, nChans, nSamples = tod.shape
@@ -210,7 +222,7 @@ class FitSource(DataStructure):
             for j in range(nSBs):
                 for k in range(nChans):
                     todFit = tod[i,j,k,good]
-                    mask = np.isnan(todFit)
+                    mask = np.isnan(todFit) | (vane[good] > 0)
                     if all(mask):
                         continue
                     
@@ -219,11 +231,9 @@ class FitSource(DataStructure):
                                                  np.flatnonzero(~mask), 
                                                  todFit[~mask])
 
-
                     if self.filtertod:                      
-                        pmdl = np.poly1d(np.polyfit(np.where(~vclose)[0], todFit[~vclose],1))
+                        pmdl = np.poly1d(np.polyfit(np.where(~vclose)[0], todFit[~vclose],5))
                         todFit -= pmdl(np.arange(todFit.size))
-
 
                     P0 = [np.max(todFit) - np.median(todFit),
                           fitx0 - 0/60.,
@@ -238,12 +248,12 @@ class FitSource(DataStructure):
                     fout = leastsq(Fitting.ErrorLstSq, P0,
                                    Dfun = Fitting.DFuncGaussRotPlaneLstSq,
                                    full_output=True, 
-                                   maxfev = 5000*(len(P0) + 1),
-                                   ftol = 1e-15,
+                                   maxfev = 100,#*(len(P0) + 1),
+                                   #ftol = 1e-15,
                                    args=(Fitting.Gauss2dRotPlane,
                                          Fitting.Gauss2dRotPlaneLimits,
                                          x, y, todFit, 0,0))
-
+                    #print(fout)
                     fout[0][5] = np.mod(fout[0][5], 2*np.pi)
                     cov = fout[1]
                     if isinstance(cov, type(None)):
@@ -312,6 +322,7 @@ class FitSource(DataStructure):
         el  = data.getdset('spectrometer/pixel_pointing/pixel_el')
         nu  = data.getdset('spectrometer/frequency')
         rms  = Filtering.calcRMS(tod)
+        vane = data.getdset('spectrometer/vane')
 
         nHorns, nSBs, nChans, nSamples = tod.shape
         for i in range(nHorns):
@@ -338,16 +349,30 @@ class FitSource(DataStructure):
             for j in range(nSBs):
                 for k in range(nChans):
                     todFit = tod[i,j,k,good]
-                    close = (r < self.closeR)                      
+                    mask = np.isnan(todFit) | (vane[good] > 0)
+                    if all(mask):
+                        continue
+                    
+                    if any(mask):
+                        todFit[mask] = np.interp(np.flatnonzero(mask), 
+                                                 np.flatnonzero(~mask), 
+                                                 todFit[~mask])
+
+                    close = (r < self.closeR)  
+                    vclose = (r < self.vClose)
+
                     if self.filtertod:
-                        todFit -= Filtering.estimateBackground(todFit, rms[i,j,k], close)
+                        #todFit -= Filtering.estimateBackground(todFit, rms[i,j,k], close)
+                        pmdl = np.poly1d(np.polyfit(np.where(~vclose)[0], todFit[~vclose],5))
+                        todFit -= pmdl(np.arange(todFit.size))
 
                     
                     pyplot.plot(todFit[close], label='data')
                     pyplot.plot(Fitting.Gauss2dRotPlane(self.Pout[i,j,k,:], x[close], y[close],0,0),'-k',linewidth=2,label='Best fit')
                     pyplot.xlabel('Time')
                     pyplot.ylabel('Antenna Temperature (K)')
-                    pyplot.savefig('Plotting/{}/JupiterFit{}{}{}.png'.format(prefix, i,j,k))
+                    pyplot.savefig('Plotting/{}/SourceFit{}{}{}.png'.format(prefix, i,j,k))
+                    #pyplot.show()
                     pyplot.clf()
 
 
@@ -361,27 +386,38 @@ class FitSourceAlternateScans(FitSource):
         """
         assert idir < 2
 
-        dx = np.gradient(np.gradient(x))
+        #dx = np.gradient(np.gradient(x))
         rms = np.std(x[1::2] - x[:-1:2]) /np.sqrt(2)
         cutdx = rms*3
 
         edges = ffuncs.scanedges(x, rms)
         edges = edges[edges != 0]
+        diff = (edges[1:] - edges[:-1])
+        bad = np.where(diff < 5)[0]
+        edges = np.delete(edges, bad)
 
+        #peaks = np.concatenate((np.where((np.abs(dx) > cutdx))[0], np.array([dx.size])))
 
-        peaks = np.concatenate((np.where((np.abs(dx) > cutdx))[0], np.array([dx.size])))
-
-        sepPeaks = peaks[1:] - peaks[:-1]
-        whePeaks = np.where(sepPeaks > 300)[0]
+        #sepPeaks = peaks[1:] - peaks[:-1]
+        #whePeaks = np.where(sepPeaks > 300)[0]
         scanEdges = edges.astype(int) #peaks[whePeaks]
         # d1 scans:
         select = np.zeros(x.size).astype(bool)
+        #pyplot.plot(x)
+
+        time = np.arange(x.size)
         for pid in range(scanEdges.size-1):
 
-            dx = np.gradient(x[scanEdges[pid]:scanEdges[pid+1]])
-            if (idir ==0) & (np.median(dx) > 0):
+            try:
+                dx = np.gradient(x[scanEdges[pid]:scanEdges[pid+1]])
+            except ValueError:
+                print(scanEdges[pid], scanEdges[pid+1])
+                pyplot.plot(x)
+                pyplot.show()
+
+            if (idir ==0) & (x[scanEdges[pid]] < x[scanEdges[pid+1]-1]): #CW
                 select[scanEdges[pid]:scanEdges[pid+1]] = True
-            elif (idir == 1) & (np.median(dx) < 0):
+            elif (idir == 1) & (x[scanEdges[pid]] > x[scanEdges[pid+1]-1]): #CCW
                 select[scanEdges[pid]:scanEdges[pid+1]] = True
 
         return select
@@ -396,7 +432,8 @@ class FitSourceAlternateScans(FitSource):
         dec = data.getdset('spectrometer/pixel_pointing/pixel_dec')
         el  = data.getdset('spectrometer/pixel_pointing/pixel_el')
         nu  = data.getdset('spectrometer/frequency')
-      
+        az  = data.getdset('spectrometer/pixel_pointing/pixel_az')
+
         rms  = Filtering.calcRMS(tod)
         # loop over horns
         nHorns, nSBs, nChans, nSamples = tod.shape
@@ -405,6 +442,8 @@ class FitSourceAlternateScans(FitSource):
         self.Pout = np.zeros((nHorns, nSBs, nChans, 2, nParams))
         self.Perr = np.zeros((nHorns, nSBs, nChans, 2, nParams))
         peakEl = np.zeros((nHorns, nSBs, nChans, 2))
+        peakAz = np.zeros((nHorns, nSBs, nChans, 2))
+        peakMJD = np.zeros((nHorns, nSBs, nChans, 2))
 
         for i in range(nHorns):
             todAvg = np.nanmean(np.nanmean(tod[i,...],axis=0),axis=0)
@@ -415,13 +454,17 @@ class FitSourceAlternateScans(FitSource):
 
 
             if all(np.isnan(todAvg)):
+                print('TOD ALL NAN')
                 continue
             try:
                 fitxy = self.initialPeak(todAvg[good], x[good], y[good])
             except IndexError:
-                continue
+                fitxy = None
+
             if isinstance(fitxy, type(None)):
+                print('FITXY IS NONE')
                 continue
+
             fitx0, fity0 = fitxy
             r = np.sqrt((x)**2 + (y)**2)
 
@@ -433,8 +476,9 @@ class FitSourceAlternateScans(FitSource):
             r = np.sqrt((x-fitx0)**2 + (y-fity0)**2)
             vclose = (r < self.vClose)
 
-            close = (r < self.closeR)                      
+            close = (r < self.closeR)  
             for j in range(nSBs):
+
                 for k in range(nChans):
                     todFit = tod[i,j,k,good]
 
@@ -443,10 +487,10 @@ class FitSourceAlternateScans(FitSource):
                     titles = ['Forward', 'Backward']
                     for idir in range(2): # fit each direction in az seperately
                         select = selects[idir]
-
                         
                         mask = np.isnan(todFit)
                         if all(mask):
+                            print('ALL NaN Values in todFit')
                             continue
                     
                         if any(mask):
@@ -471,9 +515,12 @@ class FitSourceAlternateScans(FitSource):
                               0.,
                               0.]
 
+                        #pyplot.plot(x[select],  todFit[select])
+                        #pyplot.show()
                         fout = leastsq(Fitting.ErrorLstSq, P0,
                                        Dfun = Fitting.DFuncGaussRotPlaneLstSq,
                                        full_output=True, 
+                                       maxfev = 100,
                                        args=(Fitting.Gauss2dRotPlane,
                                              Fitting.Gauss2dRotPlaneLimits,
                                              x[select], y[select], todFit[select], 0,0))
@@ -488,6 +535,7 @@ class FitSourceAlternateScans(FitSource):
                             ferr = np.sqrt(np.diag(cov))
 
                         nx, ny = 50, 50
+
                         m, w = makemap(todFit[select],x[select],y[select], nxpix=nx,nypix=ny, cd=1.5/60.)
 
                         # Format values:
@@ -509,6 +557,8 @@ class FitSourceAlternateScans(FitSource):
                                                           x, 
                                                           y,0,0)
                         peakEl[i,j,k,idir]=el[i,np.argmax(bestfit)]
+                        peakAz[i,j,k,idir]=az[i,np.argmax(bestfit)]
+                        peakMJD[i,j,k,idir]=mjd[np.argmax(bestfit)]
 
                         # pyplot.plot(Fitting.Gauss2dRotPlane(P0, x, y,0,0),'-k',linewidth=2,label='Best fit',zorder=1)
                         # pyplot.show()
@@ -522,6 +572,7 @@ class FitSourceAlternateScans(FitSource):
                             pyplot.title(titles[idir])
                             pyplot.grid()
                     if (j ==0) & (k==0):
+                        nx, ny = 50, 50
 
                         m, w = makemap(todFit,x,y, nxpix=nx,nypix=ny, cd=1.5/60.)
 
@@ -546,29 +597,6 @@ class FitSourceAlternateScans(FitSource):
                         pyplot.savefig('TauA_{}_Horn0.png'.format(prefix),bbox_inches='tight')
                         pyplot.clf()
 
-
-                    #     if comm.rank == 0:
-                    #         print(P0)
-                    #         print(fout[0])
-                    #         print(fout[0][[1,3]]*60.,flush=True)
-                    #         print(fitx0*60, fity0*60., flush=True)
-                    #         print('----', flush=True)
-                    #     pyplot.plot(ra[i,select], Fitting.Gauss2dRotPlane(fout[0], x[select], y[select],0,0),'-', color=colors[idir],
-                    #                 linewidth=2,label='Best fit', zorder=10)
-
-                    #     # pyplot.plot((Fitting.Gauss2dRotPlane(fout[0], 
-                    #     #                                      x[select],
-                    #     #                                      y[select],
-                    #     #                                      0,0) - todFit[select]) ,'-',
-                    #     #             linewidth=2,label='Best fit', alpha=0.5)
-                    #     pyplot.plot(ra[i,select],todFit[select],'-',
-                    #                 linewidth=2,label='Best fit',zorder=1)
-                    # pyplot.xlabel('Time')
-                    # pyplot.ylabel('Antenna Temperature (K)')
-                    # pyplot.title(comm.rank)
-                    # pyplot.show()
-                
-            #nHorns, nSBs, nChans, nSamples = data.data['spectrometer/tod'].shape
             data.setextra('JupiterFits/Parameters', 
                           self.Pout,
                           [Types._HORNS_, 
@@ -593,11 +621,34 @@ class FitSourceAlternateScans(FitSource):
                            Types._SIDEBANDS_, 
                            Types._FREQUENCY_,
                            Types._OTHER_])
+            data.setextra('JupiterFits/peakaz', 
+                          peakAz,
+                          [Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_])
+            data.setextra('JupiterFits/peakmjd', 
+                          peakMJD,
+                          [Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_])
+            data.setextra('JupiterFits/dT', 
+                          (peakMJD-mjd[0])*86400.,
+                          [Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_])
+
+
 
     def plot(self,data):
 
         if comm.rank > 0:
             return None
+
+        if True:
+            return
 
         tod = data.getdset('spectrometer/tod')
         mjd = data.getdset('spectrometer/MJD')
@@ -636,11 +687,13 @@ class FitSourceAlternateScans(FitSource):
                         select = self.scanEdges(x, idir)
 
                         todFit = tod[i,j,k,good]*1.
-                        close = (r[select] < self.closeR)                      
+                        close = (r[select] < self.closeR)    
+                        
                         if self.filtertod:
                             #todFit -= Filtering.estimateBackground(todFit, rms[i,j,k], close)
                             pmdl = np.poly1d(np.polyfit(np.where(~close)[0], (todFit[select])[~close],1))
-                            todFit[select] -= pmdl(np.arange(select.size))
+                            #print(select, np.arange(select.size))
+                            todFit[select] -= pmdl(np.where(select)[0])
 
                     
                         pyplot.plot(x[select[close]]*60, todFit[select[close]], label='data {}'.format(idir), color=colordata[idir])
@@ -653,6 +706,268 @@ class FitSourceAlternateScans(FitSource):
                     pyplot.legend(loc='best', prop={'size':10})
                     pyplot.savefig('Plotting/{}/JupiterFit-SepScans_{:02d}-{:02d}-{:02d}.png'.format(prefix, i,j,k))
                     pyplot.clf()
+
+
+class FitMultiSourceAlternateScans(FitSourceAlternateScans):
+    """
+    If there are multiple passes of a point source seperated by calibration loads then this
+    method will first split each scan up, and fit for each pass over the source.
+
+    Example observation ids: 6156, 6157, 6172, 6190, 6191 - Tau A raster observations to assess timing issue
+    
+    """
+    
+    def vaneEdges(self, x, mindist = 5000):
+        """
+        Find samples where the vane is in
+        """
+        
+        vaneIn = np.where(x > 0)[0]
+        dVaneIn = vaneIn[1:] - vaneIn[:-1]
+        # anywhere dVaneIn is > 0 is a transition point
+        #remove points where the separation is less the mindist
+        outVanePos = []
+        #if x[0] == 0:
+        #    outVanePos += [0]
+
+        for i in range(dVaneIn.size):
+            if dVaneIn[i] > mindist:
+                outVanePos += [[vaneIn[i],vaneIn[i+1]]]
+
+        #if x[-1] == 0:
+        #    outVanePos += [x.size]
+
+        return outVanePos
+
+
+    def fit(self,data):        
+
+        self.lon = data.getdset('hk/antenna0/tracker/siteActual')[0,0]/(60.*60.*1000.)
+        self.lat = data.getdset('hk/antenna0/tracker/siteActual')[0,1]/(60.*60.*1000.)
+
+        _tod = data.getdset('spectrometer/tod')
+        _mjd = data.getdset('spectrometer/MJD')
+        _ra  = data.getdset('spectrometer/pixel_pointing/pixel_ra')
+        _dec = data.getdset('spectrometer/pixel_pointing/pixel_dec')
+        _el  = data.getdset('spectrometer/pixel_pointing/pixel_el')
+        _nu  = data.getdset('spectrometer/frequency')
+        _az  = data.getdset('spectrometer/pixel_pointing/pixel_az')
+
+        vaneUTC   = data.getdset('hk/antenna0/vane/utc')
+        vaneState = data.getdset('hk/antenna0/vane/state')
+        vaneState = interp1d(vaneUTC, vaneState, fill_value=0, bounds_error=False)(_mjd)
+        scanRanges = self.vaneEdges(vaneState)
+        nPasses = len(scanRanges)
+        rms  = Filtering.calcRMS(_tod)
+        # loop over horns
+        nHorns, nSBs, nChans, nSamples = _tod.shape
+
+        nParams = 9
+        self.Pout = np.zeros((nPasses, nHorns, nSBs, nChans, 2, nParams))
+        self.Perr = np.zeros((nPasses, nHorns, nSBs, nChans, 2, nParams))
+        peakEl    = np.zeros((nPasses, nHorns, nSBs, nChans, 2))
+        peakAz    = np.zeros((nPasses, nHorns, nSBs, nChans, 2))
+        peakMJD   = np.zeros((nPasses, nHorns, nSBs, nChans, 2))
+
+
+        prefix = data.data.filename.split('/')[-1].split('.')[0]
+        if not os.path.exists('Plotting/{}'.format(prefix)):
+            os.makedirs('Plotting/{}'.format(prefix))
+            
+
+        for ipass, (t0, t1) in enumerate(scanRanges):
+            tod = _tod[...,t0:t1]
+            mjd = _mjd[...,t0:t1]
+            ra  = _ra[...,t0:t1]
+            dec =_dec[...,t0:t1]
+            el  = _el[...,t0:t1]
+            nu  = _nu[...,t0:t1]
+            az  = _az[...,t0:t1]
+
+            for i in range(nHorns):
+                todAvg = np.nanmean(np.nanmean(tod[i,...],axis=0),axis=0)
+
+                good = (np.isnan(ra[i,:]) == False) & (np.isnan(todAvg) == False)
+                pa = Coordinates.pa(ra[i,:], dec[i,:], mjd[:], self.lon, self.lat)
+                x, y = Coordinates.Rotate(ra[i,:], dec[i,:], self.x0, self.y0, -pa)
+
+                if all(np.isnan(todAvg)):
+                    print('TOD ALL NAN')
+                    continue
+                try:
+                    fitxy = self.initialPeak(todAvg[good], x[good], y[good])
+                except IndexError:
+                    fitxy = None
+
+                if isinstance(fitxy, type(None)):
+                    print('FITXY IS NONE')
+                    continue
+
+                fitx0, fity0 = fitxy
+                r = np.sqrt((x)**2 + (y)**2)
+
+                good = (r < self.closeR) & (np.isnan(ra[i,:]) == False) & (np.isnan(todAvg) == False)
+                x, y = Coordinates.Rotate(ra[i,good], dec[i,good], self.x0, self.y0, -pa[good])
+                selects = [self.scanEdges(x, idir) for idir in range(2)]
+                
+                close = (r < self.closeR)       
+                r = np.sqrt((x-fitx0)**2 + (y-fity0)**2)
+                vclose = (r < self.vClose)
+
+                close = (r < self.closeR)  
+                for j in range(nSBs):
+
+                    for k in range(nChans):
+                        todFit = tod[i,j,k,good]
+                        
+                        time = np.arange(x.size)
+                        colors = ['r','g']
+                        titles = ['Forward', 'Backward']
+                        for idir in range(2): # fit each direction in az seperately
+                            select = selects[idir]
+                        
+                            mask = np.isnan(todFit)
+                            if all(mask):
+                                print('ALL NaN Values in todFit')
+                                continue
+                    
+                            if any(mask):
+                                todFit[mask] = np.interp(np.flatnonzero(mask), 
+                                                         np.flatnonzero(~mask), 
+                                                         todFit[~mask])
+
+
+                            if self.filtertod:   
+                                from scipy.signal import medfilt
+                                stepSize = int(50*10)
+                                nSteps = int(todFit.size//stepSize)
+                                indices = np.arange(todFit.size).astype(int)
+                                for istep in range(nSteps):
+                                    if istep < nSteps-1:
+                                        hi = (istep+1)*stepSize
+                                    else:
+                                        hi = todFit.size
+                                        
+                                    notClose = (indices[istep*stepSize:hi])[~vclose[istep*stepSize:hi]]
+
+                                    pmdl = np.poly1d(np.polyfit(indices[notClose], todFit[notClose],1))
+                                    todFit[istep*stepSize:hi] -= pmdl(indices[istep*stepSize:hi]) #np.median(todFit[notClose])
+                            
+                                #bkgd = todFit[~vclose]
+                                #pmdl = np.poly1d(np.polyfit(np.where(~vclose)[0], todFit[~vclose],1))
+                                #todFit -= pmdl(np.arange(todFit.size))
+                            #pyplot.plot(todFit)
+                            #pyplot.show()
+
+
+                            P0 = [np.max(todFit) - np.median(todFit),
+                                  fitx0,
+                                  4./60./2.355,
+                                  fity0,
+                                  4./60./2.355,
+                                  np.pi/2.,
+                                  np.median(todFit),
+                                  0.,
+                                  0.]
+
+                            #pyplot.plot(x[select],  todFit[select])
+                            #pyplot.show()
+                            fout = leastsq(Fitting.ErrorLstSq, P0,
+                                           Dfun = Fitting.DFuncGaussRotPlaneLstSq,
+                                           full_output=True, 
+                                           maxfev = 100,
+                                           args=(Fitting.Gauss2dRotPlane,
+                                                 Fitting.Gauss2dRotPlaneLimits,
+                                                 x[select], y[select], todFit[select], 0,0))
+
+                            fout[0][5] = np.mod(fout[0][5], 2*np.pi)
+                            cov = fout[1]
+                            if isinstance(cov, type(None)):
+                                ferr = fout[0]*0.
+                            else:
+                                resid = np.std(todFit[select]-Fitting.Gauss2d(fout[0], x, y,0,0)[select])
+                                cov *= resid**2
+                                ferr = np.sqrt(np.diag(cov))
+
+
+                            # Format values:
+                            if fout[0][2] > fout[0][4]: # want x to be smaller than y
+                                _temp = fout[0][2]*1.
+                                fout[0][2] = fout[0][4]*1.
+                                fout[0][4] = _temp
+                                fout[0][5] = np.mod(fout[0][5] - np.pi/2., np.pi)
+                            else:
+                                fout[0][5] = np.mod(fout[0][5], np.pi)
+
+                            self.Perr[ipass,i,j,k,idir,:] = ferr #np.sqrt(1./np.diag(Cov))
+                            self.Pout[ipass,i,j,k,idir,:] = fout[0]
+                            
+                            # BEST FIT MODEL
+                            bestfit = Fitting.Gauss2dRotPlane(self.Pout[ipass,i,j,k,idir,:],
+                                                              x, 
+                                                              y,0,0)
+                            peakEl[ipass,i,j,k,idir]=el[i,np.argmax(bestfit)]
+                            peakAz[ipass,i,j,k,idir]=az[i,np.argmax(bestfit)]
+                            peakMJD[ipass,i,j,k,idir]=mjd[np.argmax(bestfit)]
+
+                            # pyplot.plot(todFit[select])
+                            # pyplot.plot(Fitting.Gauss2dRotPlane(self.Pout[ipass,i,j,k,idir,:],x[select],y[select],0,0))
+                            # if idir == 0:
+                            #     pyplot.savefig('Plotting/{}/JupiterFit_Pass-{}_SepScans_{:02d}-{:02d}-{:02d}-CW.png'.format(prefix,ipass, i,j,k))
+                            # else:
+                            #     pyplot.savefig('Plotting/{}/JupiterFit_Pass-{}_SepScans_{:02d}-{:02d}-{:02d}-CCW.png'.format(prefix,ipass, i,j,k))
+
+                            # pyplot.clf()
+
+
+            data.setextra('JupiterFits/Parameters', 
+                          self.Pout,
+                          [Types._OTHER_,
+                           Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_,
+                           Types._OTHER_])
+            data.setextra('JupiterFits/Uncertainties', 
+                          self.Perr,
+                          [Types._OTHER_,
+                           Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_,
+                           Types._OTHER_])
+            data.setextra('JupiterFits/frequency', 
+                          nu,
+                          [Types._SIDEBANDS_, 
+                           Types._FREQUENCY_])
+            data.setextra('JupiterFits/peakel', 
+                          peakEl,
+                          [Types._OTHER_,
+                           Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_])
+            data.setextra('JupiterFits/peakaz', 
+                          peakAz,
+                          [Types._OTHER_,
+                           Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_])
+            data.setextra('JupiterFits/peakmjd', 
+                          peakMJD,
+                          [Types._OTHER_,
+                           Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_])
+            data.setextra('JupiterFits/dT', 
+                          (peakMJD-mjd[0])*86400.,
+                          [Types._OTHER_,
+                           Types._HORNS_, 
+                           Types._SIDEBANDS_, 
+                           Types._FREQUENCY_,
+                           Types._OTHER_])
 
 
 class FitPlanet(FitSource):

@@ -16,6 +16,7 @@ class DataStructure(object):
     def __call__(self,data):
         assert isinstance(data.data, h5py._hl.files.File), 'Data is not a h5py file structure'
         self.run(data)
+        self.plot(data)
         try:
             #self.plot(data)
             pass
@@ -213,12 +214,14 @@ class H5Data(object):
                 # Big files need splitting on sidebands too... Maximum read size is 2Gb
                 
                 if (field in Types._COMAPDATA_) and (Types._SIDEBANDS_ in Types._COMAPDATA_[field]):
-                    sidebandaxis = np.where((np.array(Types._COMAPDATA_[field]) == Types._SIDEBANDS_))[0][0]
-                    for j in range(self.data[field].shape[sidebandaxis]):
-                        slc[sidebandaxis] = slice(j,j+1)
-                        slcin[sidebandaxis] = slice(j,j+1)
-                        #print(field, slc, slcin, flush=True)
-                        self.data[field].read_direct(self.dsets[field], source_sel=tuple(slc), dest_sel=tuple(slcin))
+                    self.data[field].read_direct(self.dsets[field], source_sel=tuple(slc), dest_sel=tuple(slcin))
+
+                    # sidebandaxis = np.where((np.array(Types._COMAPDATA_[field]) == Types._SIDEBANDS_))[0][0]
+                    # for j in range(self.data[field].shape[sidebandaxis]):
+                    #     slc[sidebandaxis] = slice(j,j+1)
+                    #     slcin[sidebandaxis] = slice(j,j+1)
+                    #     #print(field, slc, slcin, flush=True)
+                    #     self.data[field].read_direct(self.dsets[field], source_sel=tuple(slc), dest_sel=tuple(slcin))
                         #self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]
                 else:
                     #self.dsets[field][tuple(slcin)] = self.data[field][tuple(slc)]

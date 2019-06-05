@@ -48,7 +48,6 @@ class CoordOffset(DataStructure):
         ra = data.getdset(self.fields[2])
         dec= data.getdset(self.fields[3])
         mjd   = data.getdset('spectrometer/MJD')
-        mjd[:] = mjd[0] + np.arange(nSample)*self.offset # correct to new timing
 
         if data.splitType == Types._HORNS_:
             splitFull = data.fullFieldLengths[data.splitType]
@@ -61,6 +60,7 @@ class CoordOffset(DataStructure):
             def interpC(mjd,pos):
                 azmdl = interp1d(mjd,pos, bounds_error=False)
                 aznew = azmdl(mjd + self.offset)
+                
                 badVals = np.where((np.isnan(aznew)))[0]
                 if len(badVals) > 0:
                     if np.max(badVals) < az.shape[1]/2.:
@@ -68,10 +68,13 @@ class CoordOffset(DataStructure):
                     else:
                         aznew[badVals] = aznew[min(badVals)-1]
                     return aznew
+                else:
+                    return aznew
 
             aznew = interpC(mjd, az[i,:])
             elnew = interpC(mjd, el[i,:])
             # fill in the ra/dec fields
+
             _ra,_dec = Coordinates.h2e(aznew,
                                        elnew,
                                        mjd, 
@@ -83,10 +86,25 @@ class CoordOffset(DataStructure):
             dec[i,:] = _dec
 
 class FixTiming(CoordOffset):
-    
+
+    def interpAzEl(self, cval, cmjd, todmjd):
+        mdl = interp1d(cmjd, cval, bounds_error=False, fill_value=np.nan)
+        posout = mdl(todmjd)
+        badVals = np.where((np.isnan(posout)))[0]
+        if len(badVals) > 0:
+            if np.max(badVals) < todmjd.size/2.:
+                posout[badVals] = posout[max(badVals)+1]
+            else:
+                posout[badVals] = posout[min(badVals)-1]
+            return posout
+        else:
+            return posout
+
     def run(self, data):
         self.longitude = data.getdset('hk/antenna0/tracker/siteActual')[0,0]/(60.*60.*1000.)
         self.latitude  = data.getdset('hk/antenna0/tracker/siteActual')[0,1]/(60.*60.*1000.)
+        self.focalPlane = FocalPlane()
+
         nHorn, nSB, nChan, nSample = data.getdset('spectrometer/tod').shape
 
         az = data.getdset(self.fields[0])
@@ -94,6 +112,17 @@ class FixTiming(CoordOffset):
         ra = data.getdset(self.fields[2])
         dec= data.getdset(self.fields[3])
         mjd   = data.getdset('spectrometer/MJD')
+        mjd = mjd[0] + np.arange(mjd.size)*self.offset # new timing offsets
+        azact = data.getdset('pointing/azActual')
+        elact = data.getdset('pointing/elActual')
+        pmjd  = data.getdset('pointing/MJD')
+
+        azcen = self.interpAzEl(azact,
+                                pmjd,
+                                mjd)
+        elcen = self.interpAzEl(elact,
+                                pmjd,
+                                mjd)
 
         tod = data.getdset('spectrometer/tod')
 
@@ -104,29 +133,18 @@ class FixTiming(CoordOffset):
             lo, hi = 0, nHorn
 
         for ilocal, i in enumerate(range(lo,hi)):
+            el[i,:] = elcen+self.focalPlane.offsets[i][1] - self.focalPlane.eloff
+            az[i,:] = azcen+self.focalPlane.offsets[i][0]/np.cos(el[i,:]*np.pi/180.) - self.focalPlane.azoff
 
-            def interpC(mjd,pos):
-                azmdl = interp1d(mjd,pos, bounds_error=False)
-                aznew = azmdl(mjd + self.offset)
-                badVals = np.where((np.isnan(aznew)))[0]
-                if len(badVals) > 0:
-                    if np.max(badVals) < az.shape[1]/2.:
-                        aznew[badVals] = aznew[max(badVals)+1]
-                    else:
-                        aznew[badVals] = aznew[min(badVals)-1]
-                    return aznew
-
-            aznew = interpC(mjd, az[i,:])
-            elnew = interpC(mjd, el[i,:])
             # fill in the ra/dec fields
-            _ra,_dec = Coordinates.h2e(aznew,
-                                       elnew,
+            _ra,_dec = Coordinates.h2e(az[i,:],
+                                       el[i,:],
                                        mjd, 
                                        self.longitude, 
                                        self.latitude)
 
             _ra, _dec = Coordinates.precess(_ra,_dec,mjd)
-            ra[i,:] = _ra
+            ra[i,:]  = _ra
             dec[i,:] = _dec
 
 class RefractionCorrection(DataStructure):
@@ -368,6 +386,10 @@ class DownSampleFrequency(DataStructure):
                 todOut[i,j,:,:] = np.transpose(np.nanmean(temp,axis=-1),(1,0))
                 #print(i,j,'Time taken {}'.format(time.time()-start))
 
+        #        pyplot.plot(np.nanmean(todOut[i,j,:,:],axis=-1))
+        #print(tod.shape,flush=True)
+
+        #pyplot.show()
         Types._SHAPECHANGES_[Types._FREQUENCY_] = True
         data.resizedset(field, todOut)
         data.setAttr('comap', 'cal_downsampfreq', True)
