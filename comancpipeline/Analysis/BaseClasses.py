@@ -270,7 +270,12 @@ class H5Data(object):
             self.setdset(field)
         else:
             self.dsets[field] = d
-
+            # First store shape of original data for outputting
+            self.ndims[field] = [s for s in self.data[field].shape]
+            if field in self.splitFields:
+                splitAxis = self.splitFields[field] # this will return an integer index
+                self.lo[field], self.hi[field] = self.getDataRange(self.ndims[field][splitAxis])
+                print(field, self.lo[field], self.hi[field], flush=True)
 
     def getAttr(self,grp, attr):
         """
@@ -447,12 +452,25 @@ class H5Data(object):
             tmp = self.output.create_dataset(field, ndims, dtype=self.dsets[field].dtype)
 
         if field in self.splitFields: # If  in split fields each process has a different dataset
-            tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
+            try:
+                tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
+            except OSError:
+                # failed write, so try splitting it up
+                start, stop= slcin[splitAxis].start,slcin[splitAxis].stop
+                for i in range(start, stop):
+                    slc[splitAxis] = slice(self.lo[field]+i,self.lo[field]+i+1)
+                    slcin[splitAxis] = slice(i,i+1)
+                    tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
+
+                #print('Failed to write {}'.format(field), flush=True)
+
         # If it is not in split fields then all data is the same on each process
         # therefore only write out from rank == 0.
         if not (field in self.splitFields) and (comm.rank == 0):
-            tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
-
+            try:
+                tmp[tuple(slc)] = self.dsets[field][tuple(slcin)]
+            except OSError:
+                print('Failed to write {}'.format(field), flush=True)
 
 
     def outputAttrs(self, grp, attr):

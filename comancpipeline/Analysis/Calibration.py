@@ -399,10 +399,9 @@ class AmbLoadCal(DataStructure):
     """
     Interpolate Ambient Measurements
     """
-    def __init__(self, amb_dir='AmbientLoads/', amb_prefix='EXTRAS', force=False):
+    def __init__(self, amb_dir='AmbientLoads/', force=False):
         super().__init__()
         self.amb_dir = amb_dir
-        self.amb_prefix = amb_prefix
         self.force = False
         self.grp = 'AMBIENTLOADS'
         
@@ -413,11 +412,10 @@ class AmbLoadCal(DataStructure):
         meanmjd = np.nanmean(data.getdset('pointing/MJD'))
 
         # First get the mean MJD of the data
-        conditions = lambda f: (('hd5' in f) | ('hdf5' in f)) & (self.amb_prefix in f)
-        obsids = np.array([int(f.split('-')[-5]) for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if conditions(f) ])
+        obsids = np.array([int(f.split('-')[-5]) for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if ('hd5' in f) | ('hdf5' in f) ])
         obsid  = int(data.filename.split('-')[-5])
 
-        gainfiles = [f for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if conditions(f)]
+        gainfiles = [f for f in listdir(self.amb_dir) if isfile(join(self.amb_dir, f)) if ('hd5' in f) | ('hdf5' in f) ]
 
         # find the 10 closest obsids:
         argmins = np.argsort((obsids - obsid)**2)[:10]
