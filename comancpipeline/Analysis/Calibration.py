@@ -7,6 +7,9 @@ from comancpipeline.Tools import Coordinates, Types
 from os import listdir, getcwd
 from os.path import isfile, join
 from scipy.interpolate import interp1d
+import datetime
+from tqdm import tqdm
+import pandas as pd
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
 
@@ -526,14 +529,6 @@ class AmbientLoad2Gain(DataStructure):
     def __str__(self):
         return "Calculating Tsys and Gain from Ambient Load observation."
 
-    def parsefilename(self, filename):
-        """
-        We want to save ambient load information separately for calibration purposes,
-        therefore we must parse the filename.
-        """
-        prefix = filename.split('/')[-1].split('.h')[0]
-        self.filename = '{}/{}{}.hdf5'.format(self.output_dir, prefix, self.suffix)
-
     def findHotCold(self, mtod):
         """
         Find the hot/cold sections of the ambient load scan
@@ -570,8 +565,23 @@ class AmbientLoad2Gain(DataStructure):
 
         snips = int(np.min(np.where(X)[0])), int(np.max(np.where(X)[0]))
         idCold = (mtodArgsort[groupCold])[X]
+        idCold = np.sort(idCold)
+        # Just find cold AFTER calvane
+        diffCold = idCold[1:] - idCold[:-1]
+        jumps = np.where((diffCold > 50))[0]
+
+        if len(jumps) == 0:
+            snip = 0
+        else:
+            snip = int(jumps[0])
         
-        return idHot, idCold
+        return idHot, idCold[snip:]
+
+    def TsysRMS(self,tod):
+        N = (tod.shape[0]//2)*2
+        diff = tod[1:N:2,:] - tod[:N:2,:]
+        rms = np.nanstd(diff,axis=0)/np.sqrt(2)
+        return rms
 
     def run(self,data):
 
@@ -579,92 +589,119 @@ class AmbientLoad2Gain(DataStructure):
         #   print('Not an ambient load scan')
         #    return None
 
-        # Check if elevations shift (e.g., there is a skydip
-        el  = data.getdset('pointing/elActual')
-        e0, e1 = np.nanmin(el), np.nanmax(el)
-        if (e1-e0) > self.elLim:
-            print('Elevation range exceeds {:.0f} degrees'.format(self.elLim))
-            return None
-        
+        # Read in data that is required:
+        freq = data['spectrometer/frequency'][...]
+        mjd  = data['spectrometer/MJD'][:] # data.data['spectrometer/MJD'][:]
+        el  = data['pointing/elActual'][:]        
 
-        self.parsefilename(data.filename)
-
-        freq = data.getdset('spectrometer/frequency')
-        tod  = data.getdset('spectrometer/tod') # data.data['spectrometer/tod']
-        mjd  = data.getdset('spectrometer/MJD') # data.data['spectrometer/MJD'][:]
         self.mjd = np.mean(mjd)
         self.elevation = np.nanmedian(el)
 
-        # Create output containers
+        # Keep TOD as a file object to avoid reading it all in
+        tod  = data['spectrometer/tod'] 
+        btod  = data['spectrometer/band_average'] 
         nHorns, nSBs, nChan, nSamps = tod.shape
 
+
+        # Create output containers
         self.Tsys = np.zeros((nHorns, nSBs, nChan))
-        self.G    = self.Tsys*0.
+        self.Gain    = self.Tsys*0.
+        self.RMS    = self.Tsys*0.
 
-        #if nSamps < self.minSamples:
-        #   return 0
+        # Setup for calculating the calibration factors, interpolate temperatures
+        tHot  = data['hk/antenna0/env/ambientLoadTemp'][:]/100. + self.tHotOffset
+        hkMJD = data['hk/antenna0/env/utc'][:]
+        #tHot  = gaussian_filter1d(tHot, 35)
+        #tHot  = interp1d(hkMJD, tHot, bounds_error=False, fill_value=np.nan)(mjd)
+        tHot = np.nanmean(tHot)
 
+        # Need to count how many calvane events occur, look for features 2**13
+        features = np.floor(np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
+        justDiodes = np.where((features == 13))[0]
+        nSamples2 = int((justDiodes.size//2)*2)
+        diffFeatures = justDiodes[1:] - justDiodes[:-1]
+        # Anywhere where diffFeatures > 60 seconds must be another event
+        timeDiodes = int(60*50) # seconds * sample_rate
+        events = justDiodes[np.where((diffFeatures > timeDiodes))[0]]
+        # add start and end
+        splitDiodes = np.concatenate((justDiodes[0:1], events, justDiodes[-2:-1]))
+        nDiodes = len(splitDiodes) - 2
 
-        tHot  = data.getdset('hk/antenna0/env/ambientLoadTemp') + self.tHotOffset
-        hkMJD = data.getdset('hk/antenna0/env/utc')
-        tHot  = gaussian_filter1d(tHot, 35)
-        tHot  = interp1d(hkMJD, tHot, bounds_error=False, fill_value=np.nan)(mjd)
+        if nDiodes <= 0:
+            return 
 
-        # Fill in any NaNs that we we might encounter
-        ambNan = np.where(np.isnan(tHot))[0]
-        if len(ambNan) > 0:
-            lowAmbNan = ambNan[ambNan < tHot.size//2]
-            hiAmbNan  = ambNan[ambNan > tHot.size//2]
-            if len(lowAmbNan) > 0:
-                tHot[lowAmbNan] = tHot[max(lowAmbNan)+1]
-            if len(hiAmbNan) > 0:
-                tHot[hiAmbNan]  = tHot[min(hiAmbNan)- 1]
+        self.deltaTs = np.zeros(nDiodes)
 
-        tHot = np.mean(tHot)
-
-
-        for i in range(nHorns):
-            if (nSamps//2 - self.minSamples//2 < 0):
-                continue
-            itod = tod[i,:,:,:]
+        # Now loop over each event:
+        for horn in tqdm(range(nHorns)):
             
-            try:
-                idHot, idCold = self.findHotCold(np.nanmedian(itod[0,:,:],axis=0))
-            except (NoHotError, NoColdError):
-                continue
+            for diode_event in range(nDiodes):
+                start, end = splitDiodes[diode_event], splitDiodes[diode_event+1]
 
-            for j in range(nSBs):
-                vHot = np.nanmean(itod[j,:,idHot],axis=0)
-                vCold= np.nanmean(itod[j,:,idCold],axis=0)
-                Y = vHot/vCold
-                #if (j==0) | (j==2):
-                #    step = -1
-                #else:
-                #    step = 1
-                self.Tsys[i,j,:] = ((tHot - self.tCold)/(Y - 1.) - self.tCold )#[::step]
-                self.G[i,j,:] = ((vHot - vCold)/(tHot - self.tCold))#[::step]
+                # Get the mean time of the event
+                if horn == 0:
+                    self.deltaTs[diode_event] = int((np.mean(mjd[start:end])-mjd[0])*24*3600)
 
-        data.setextra('AMBIENTLOADS/Gain', 
-                      self.G,
-                      [Types._HORNS_, 
-                       Types._SIDEBANDS_, 
-                       Types._FREQUENCY_])
-        data.setextra('AMBIENTLOADS/Tsys', 
-                      self.Tsys,
-                      [Types._HORNS_, 
-                       Types._SIDEBANDS_, 
-                       Types._FREQUENCY_])
-        data.setextra('AMBIENTLOADS/Frequency', 
-                      freq,
-                      [Types._SIDEBANDS_, 
-                       Types._FREQUENCY_])
-        data.setextra('AMBIENTLOADS/MJD', 
-                      np.array([np.nanmean(mjd)]),
-                      [Types._OTHER_])
-        data.setextra('AMBIENTLOADS/EL', 
-                      np.array([np.nanmean(el)]),
-                      [Types._OTHER_])
+                tod_slice = tod[horn,:,:,start:end]
+                btod_slice = btod[horn,:,start:end]
 
+                try:
+                    idHot, idCold = self.findHotCold(btod_slice[0,:])
+                except (NoHotError, NoColdError):
+                    continue
+
+                hotcold = np.zeros(tod_slice.shape[-1])
+                hotcold[idHot] = 2
+                hotcold[idCold] = 1
+
+                for sb in range(nSBs):
+                    vHot = np.nanmedian(tod_slice[sb,:,idHot],axis=0)
+                    vCold= np.nanmedian(tod_slice[sb,:,idCold],axis=0)
+                    Y = vHot/vCold
+                    self.Tsys[horn,sb,:] = ((tHot - self.tCold)/(Y - 1.) )
+                    self.Gain[horn,sb,:] = ((vHot - vCold)/(tHot - self.tCold))
+
+                    tod_slice[sb,:,:] /= self.Gain[horn,sb,:,np.newaxis]
+                    self.RMS[horn,sb,:] = self.TsysRMS(tod_slice[sb,:,idCold])
+
+    def write(self,data):
+        """
+        Write the Tsys, Gain and RMS to a pandas data frame for each hdf5 file.
+        """        
+        nHorns, nSBs, nChan, nSamps = data['spectrometer/tod'].shape
+
+        # Structure:
+        #                                    Frequency (GHz)
+        # Date, DeltaT, Mode, Horn, SideBand     
+        freq = data['spectrometer/frequency'][...]
+        startDate = Types.Filename2DateTime(data.filename)
+
+        # Reorder the data
+        horns = data['spectrometer/feeds'][:]
+        sidebands = np.arange(4).astype(int)
+        modes = ['Tsys', 'Gain', 'RMS']
+        iterables = [[startDate], self.deltaTs, modes, horns, sidebands]
+        names = ['Date', 'DeltaT','Mode','Horn','Sideband']
+        index = pd.MultiIndex.from_product(iterables, names=names)
+
+        df = pd.DataFrame(index=index, columns=np.arange(nChan))
+        idx = pd.IndexSlice
+        
+        df.loc(axis=0)[idx[:,:,'Tsys',:,:]] = np.reshape(self.Tsys, (nHorns*nSBs, nChan))
+        df.loc(axis=0)[idx[:,:,'Gain',:,:]] = np.reshape(self.Gain, (nHorns*nSBs, nChan))
+        df.loc(axis=0)[idx[:,:,'RMS',:,:]]  = np.reshape(self.RMS,  (nHorns*nSBs, nChan))
+
+        # save the dataframe
+        # outfilename = '{}/DataFrame_TsysGainRMS.pkl'.format(self.output_dir)
+        # if os.path.exists(outfilename):
+        #     dfAll = df.read_pickle(outfilname)
+        #     dfAll = dfAll.append(df)
+        # else:
+        #     dfAll = df
+        prefix = data.filename.split('/')[-1].split('.hd5')[0]
+        df.to_pickle('{}/{}_TsysGainRMS.pkl'.format(self.output_dir,prefix))
+
+        
 
 from comancpipeline.Tools import CaliModels
 

@@ -175,7 +175,6 @@ subroutine e2h(ra, dec, mjd, lon, lat, az, el,lha, len_bn)
   
 end subroutine e2h
 
-
 subroutine precess(ra, dec,mjd, len_bn)
   implicit none
   
@@ -200,12 +199,42 @@ subroutine precess(ra, dec,mjd, len_bn)
   do i=1, len_bn
      epoch = sla_epb(mjd(i))
      call sla_preces('FK5', epoch, 2000D0, ra(i), dec(i))
-
-
   enddo    
-
   
 end subroutine precess
+
+
+subroutine precess_year(ra, dec,mjd, len_bn)
+  implicit none
+  
+  integer, intent(in) :: len_bn
+  real*8, intent(in) :: mjd(len_bn)
+  real*8, intent(inout) :: ra(len_bn)
+  real*8, intent(inout) :: dec(len_bn)
+
+  interface
+     real*8 FUNCTION sla_epb(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_epb
+  end interface
+
+  !f2py integer len_bn
+  !f2py real*8 mjd
+  !f2py real*8 ra,dec
+
+  integer :: i
+  real*8 :: epoch
+
+  do i=1, len_bn
+     epoch = sla_epb(mjd(i))
+     call sla_preces('FK5', 2000D0, epoch, ra(i), dec(i))
+  enddo    
+  
+end subroutine precess_year
+
+
+
+
 
 subroutine pa(ra, dec,mjd, lon,lat,pang, len_bn)
   implicit none

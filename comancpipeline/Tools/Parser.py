@@ -1,6 +1,6 @@
 # Scripts for parsing the parameter file.
-
-import configparser
+import numpy as np
+from comancpipeline.Tools import ParserClass
 from  comancpipeline import Analysis 
 
 def checkTypes(valDict):
@@ -24,39 +24,46 @@ def checkTypes(valDict):
         #... then it is a str
 
 def getClass(strname):
+    """
+    Returns uninitalise class instance with modulename.classname format
+    """
     
     modulename, classname = strname.split('.')
     module_ = getattr(Analysis,modulename)
     class_  = getattr(module_,classname)
     return class_
+        
 
 def parse_parameters(filename):
+    """
+    Take a parameter file, return list of initalised objects (jobs) and input parameters 
+    """
 
-    Parameters = configparser.ConfigParser()
-    Parameters.read(filename)
+    # read in the parameters
+    mainInput = ParserClass.Parser(filename)
 
-    order = Parameters.get('Inputs', 'order').split(',')
+    # Generate a filelist to loop over
+    filelist = np.loadtxt(mainInput['Inputs']['filelist'],dtype=str,ndmin=1)
+    filelist = ['{}/{}'.format(mainInput['Inputs']['data_dir'],
+                               filename.split('/')[-1]) for filename in filelist]
+                               
+    # Some items should always be a list
+    if not isinstance(mainInput['Inputs']['pipeline'], list):
+        mainInput['Inputs']['pipeline'] = [mainInput['Inputs']['pipeline']]
+    # Get the class names (modulename, classname)
+    jobnames = [c for c in mainInput['Inputs']['pipeline']]
 
-    try:
-        targets = Parameters.get('Inputs', 'targets').split(',')
-    except configparser.NoOptionError:
-        targets = ['']
-    targets = [t.lower() for t in targets]
+    print(mainInput['Inputs']['pipeline'])
 
-    selectors = []
-    for key in order:
-        if Parameters.has_section(key):
-            valDict = dict(Parameters.items(key))
-            checkTypes(valDict)
+    # Read the class parameter file
+    classInput = ParserClass.Parser(mainInput['Inputs']['classParameters'])
 
-            c = getClass(key)
-            
-            selectors += [c(**valDict)]
-        else:
-            c = getClass(key)
-            selectors += [c()]
+    # Initalise the classes : classInput are the kwargs to initiate classes
+    jobs = []
+    for job in jobnames:
+        jobs += [getClass(job)(**classInput[job])]
 
-    return selectors, targets, Parameters
+    return jobs, filelist, mainInput, classInput
 
 def parse_split(config, field):
 

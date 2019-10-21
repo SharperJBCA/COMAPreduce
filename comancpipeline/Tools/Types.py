@@ -1,9 +1,27 @@
 import numpy as np
 
+# Date Format from files:
+
+DateFmt = '%Y-%m-%d-%H%M%S'
+
+import datetime
+
+def Filename2DateTime(filename):
+    filename  = filename.split('/')[-1]
+    date = datetime.datetime.strptime(filename[14:-4],DateFmt)
+    return date
+
+def DateTime2Filename(date, obsID=0):
+     filename = 'comap-{:05d}-{}.hd5'.format(obsID,datetime.datetime.strftime(DateFmt))
+
+     return filename
+
+
+#
 _OTHER_       = -1
 _HORNS_       = 0
 _SIDEBANDS_   = 1
-_FREQUENCY_ = 2
+_FREQUENCY_   = 2
 _TIME_        = 3
 
 # DESCRIPTION OF COMAP DATA FILES TO ALLOW FOR MPI TO EFFICIENTLY SPLIT DATA

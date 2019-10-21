@@ -9,14 +9,15 @@ comm = MPI.COMM_WORLD
 class DataStructure(object):
 
     def __init__(self):
-        self.mode = 'a'
+        self.mode = 'r'
         self.fields = None
         pass
 
     def __call__(self,data):
-        assert isinstance(data.data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
         self.run(data)
-        self.plot(data)
+        #self.plot(data)
+        self.write(data)
         try:
             #self.plot(data)
             pass
@@ -24,6 +25,9 @@ class DataStructure(object):
             print('Plotting Failed')
 
     def run(self,data):
+        pass
+
+    def write(self, data):
         pass
 
     def plot(self,data):

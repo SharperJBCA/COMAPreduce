@@ -2,6 +2,16 @@ from comancpipeline.Tools import pysla
 import numpy as np
 import healpy as hp
 
+# List of sources used for calibration
+# Ephem objects have None, calculated on the fly
+CalibratorList = {
+    'TauA': [(5 + 34./60. + 31.94/60.**2)*15, 22 + 0 + 52.2/60.**2],
+    'CasA': [(23 + 23./60. + 24./60.**2)*15, 58 + 48/60. + 54./60.**2],
+    'CygA': [(19. + 59/60. + 28.356/60.**2)*15, 40 + 44./60. + 2.097/60.**2],
+    'jupiter': None,
+    'sun':None
+}
+
 def RotatePhi(skyVec, objRa):
     outVec = skyVec*0.
     # Rotate first RA
@@ -107,7 +117,7 @@ def planet(mjd, planet):
 
     return pysla.planet(mjd, planet)
 
-def getPlanetPosition(source, lon, lat, mjdtod):
+def getPlanetPosition(source, lon, lat, mjdtod, allpos=False):
     """
     Get ra, dec and earth-source distance
 
@@ -128,12 +138,34 @@ def getPlanetPosition(source, lon, lat, mjdtod):
     edist = planet(mjdtod, 3) # Earth heliocentric position
     rdist = np.sqrt(np.sum((jdist[:3,:] - edist[:3,:])**2,axis=0))
 
-    r0 = np.mean(r0)*180./np.pi
-    d0 = np.mean(d0)*180./np.pi
-    dist = np.mean(rdist)
+    if allpos:
+        return r0, d0, rdist
+    else:
+        r0 = np.mean(r0)*180./np.pi
+        d0 = np.mean(d0)*180./np.pi
+        dist = np.mean(rdist)
+        return r0, d0, dist
 
-    return r0, d0, dist
+def sourcePosition(src, mjd, lon, lat):
+    """
+    Get the J2000 RA/Dec position of a source defined in CalibratorList
+    """
 
+    skypos = CalibratorList[src]
+
+    if isinstance(skypos,type(None)):
+        # we must have Sun/Jupiter
+        #_mjd = mjd[::10]
+        #_mjd[-1] = mjd[-1]
+        r0, d0, dist = getPlanetPosition(src, lon, lat, mjd, allpos=True)
+        #r0 = np.interp(mjd,_mjd,r0)
+        #d0 = np.interp(mjd,_mjd,d0)
+    else:
+        r0, d0 = mjd*0 + skypos[0], mjd*0 + skypos[1]
+        r0, d0 = precess2year(r0,d0,mjd)
+
+    az, el = e2h(r0,d0,mjd,lon ,lat)
+    return az, el
 
 def h2e(az, el, mjd, lon, lat, degrees=True):
     """
@@ -202,6 +234,31 @@ def precess(ra, dec, mjd, degrees=True):
                   decout, 
                   mjd.astype(np.float))
     return raout/c, decout/c
+
+def precess2year(ra, dec, mjd, degrees=True):
+    """
+    Precess coodinrate system to FK5 J2000.
+    
+    args:
+    ra - arraylike, right ascension
+    dec- arraylike, declination
+    mjd- arraylike
+    """
+
+    if degrees:
+        c = np.pi/180.
+    else:
+        c = 1.
+
+    raout = ra.astype(np.float)*c
+    decout = dec.astype(np.float)*c
+
+    pysla.precess_year(raout,
+                       decout, 
+                       mjd.astype(np.float))
+    return raout/c, decout/c
+
+
 
 def pa(ra, dec, mjd, lon ,lat, degrees=True):
     """
