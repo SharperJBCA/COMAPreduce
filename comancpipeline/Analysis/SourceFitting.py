@@ -77,6 +77,14 @@ def doFit(todFitAll, x, y, chan):
         
 
 def makemap(d,x,y,ra0=0,dec0=0, cd=1./60., nxpix=600, nypix=400):
+    """
+    Quick binning routine for generating a map of single observation,
+    useful for finding peaks if the pointing is really bad.
+
+    d - 1d-numpy array of receiver data
+    x - x-coordinate system per TOD
+    y - y-coordinate system per TOD
+    """
 
     xy = np.zeros((x.size,2))
     xy[:,0] = x.flatten()
@@ -125,6 +133,9 @@ class JamesBeam:
 beams = {'JamesBeam': JamesBeam}
 
 def fisher(_x,_y,P):
+    """
+    Fisher matrix for 2D gaussian fit with (non-rotated) elliptical beam + offset
+    """
     
     x, y = np.meshgrid(np.linspace(-1,1,100),np.linspace(-1,1,100))
     x = x.flatten()
@@ -156,7 +167,12 @@ class FitSource(DataStructure):
     Beam fitting functions.
     """
 
-    def __init__(self, output_dir='', x0=0, y0=0, lon=-118.2941, lat=37.2314, filtertod=False):
+    def __init__(self, output_dir='', nworkers= 1, average_width=512,calvanedir='AncillaryData/CalVanes',
+                 x0=0, y0=0, lon=-118.2941, lat=37.2314, filtertod=False):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
         self.x0 = x0
         self.y0 = y0
         self.lon = lon
@@ -166,7 +182,10 @@ class FitSource(DataStructure):
         self.mainBeam = 5./60.
         self.filterel = True
         self.output_dir = output_dir
-       
+
+        self.nworkers = int(nworkers)
+        self.average_width = int(average_width)
+        self.calvanedir = calvanedir
     def __str__(self):
         return 'Fitting source'
 
@@ -196,26 +215,59 @@ class FitSource(DataStructure):
         if not self.source in Coordinates.CalibratorList:
             return
 
-        #rms  = Filtering.calcRMS(tod)
-        # loop over horns
         nHorns, nSBs, nChans, nSamples = alltod.shape
 
-        # Average down the data
-        calvane = pd.read_pickle('AncillaryData/CalVanes/{}_TsysGainRMS.pkl'.format(data.filename.split('/')[-1].split('.hd5')[0]))
+        # --- Average down the data
+        calvane = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, data.filename.split('/')[-1].split('.hd5')[0]))
         idx = pd.IndexSlice
-        width = 64
+        width = self.average_width
         tod = np.zeros((nHorns, nSBs, nChans//width, nSamples))
         nHorns, nSBs, nChans, nSamples = tod.shape
+
+        # --- Tuples of values to loop over
+        # loopvals = []
+        # for horn in range(nHorns):
+        #     for sb in range(nSBs):
+        #         for chan in range(nChans):
+        #             loopvals += [(horn,feeds[horn],sb,chan)]
+
+        # def AvgFunc(alltod, width, loopvals):
+        #     horn, feed, sb, chan = loopvals
+
+        #     weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',feed,sb]].values.flatten().astype(float)**2#.groupby(level=['Date']).mean().values
+        #     weights[np.isinf(weights)] = 0
+        #     gain = calvane.loc(axis=0)[idx[:,:,'Gain',feed,sb]].values.flatten().astype(float)#.groupby(level=['Date']).mean().values
+        #     try:
+        #         bot = np.nansum(weights[chan*width:(chan+1)*width])
+        #     except:
+        #         return None
+        #     tod = np.sum(alltod[horn,sb,chan*width:(chan+1)*width,:]*weights[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
+        #     gainAvg = np.nansum(gain[chan*width:(chan+1)*width]*weights[chan*width:(chan+1)*width])/bot 
+        #     tod[horn,sb,chan,:] /= gainAvg
+
+        # AvgFuncPartial = Partial(AvgFunc, alltod, width)
+
+        # # --- Parallelise the fitting procedure for each channel
+        # with concurrent.futures.ProcessPoolExecutor(max_workers=self.nworkers) as executor:
+        #     for output in executor.map(AvgFuncPartial, loopvals, chunksize=len(loopvals)//self.nworkers//2):
+        #         if not isinstance(output, type(None)):
+        #             tod_out,horn,sb,chan = output
+        #             tod[horn,sb,chan,:] = tod_out
+
         for horn, feed in zip(range(nHorns),feeds):
             for sb in tqdm(range(nSBs)):
-                weights = calvane.loc(axis=0)[idx[:,:,'RMS',feed,sb]].values.flatten()**2#.groupby(level=['Date']).mean().values
+                weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',feed,sb]].values.flatten().astype(float)**2#.groupby(level=['Date']).mean().values
+                weights[np.isinf(weights)] = 0
+                gain = calvane.loc(axis=0)[idx[:,:,'Gain',feed,sb]].values.flatten().astype(float)#.groupby(level=['Date']).mean().values
                 for chan in range(nChans):
                     try:
-                        bot = np.sum(1./weights[chan*width:(chan+1)*width])
+                        bot = np.nansum(weights[chan*width:(chan+1)*width])
                     except:
                         continue
                     tod[horn,sb,chan,:] = np.sum(alltod[horn,sb,chan*width:(chan+1)*width,:]*weights[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
-        
+                    gainAvg = np.nansum(gain[chan*width:(chan+1)*width]*weights[chan*width:(chan+1)*width])/bot 
+                    tod[horn,sb,chan,:] /= gainAvg
+
         # Setup the outputs (we also should store the peak az/el fitted)
         nParams = 9
         self.Pout = np.zeros((nHorns, nSBs, nChans, nParams))
@@ -244,12 +296,17 @@ class FitSource(DataStructure):
                 continue
             todFitSBChan = np.transpose(tod[horn,:,:,good],(1,2,0))
             for sb in range(nSBs):
-                print(todFitSBChan.shape, x.shape,y.shape)
+
+                # --- func is a partial function containing doFit that takes three arguments
+                # : todFitSBChan[sb,...],x, y, and channel
+                # channel is passed in the parallised loop, while the first three are passed in full
+                # ...yikes D: 
                 func = partial(doFit, todFitSBChan[sb,:,:],x,y)
                 pbar = tqdm(total = nChans)
-                nworkers = 8 
-                with concurrent.futures.ProcessPoolExecutor(max_workers=nworkers) as executor:
-                    for result, errors, chan in executor.map(func, range(nChans), chunksize=nChans//nworkers//2): #1024//12):
+
+                # --- Parallelise the fitting procedure for each channel
+                with concurrent.futures.ProcessPoolExecutor(max_workers=self.nworkers) as executor:
+                    for result, errors, chan in executor.map(func, range(nChans), chunksize=nChans//self.nworkers):
                         
                         pbar.update(1)
                         self.Perr[horn,sb,chan,:] = errors
@@ -279,7 +336,7 @@ class FitSource(DataStructure):
         Write the Tsys, Gain and RMS to a pandas data frame for each hdf5 file.
         """        
         nHorns, nSBs, nChan, nSamps = data['spectrometer/tod'].shape
-        nChan = 16 # need to capture the fact the data is averaged
+        nChan = int(nChan//self.average_width) # need to capture the fact the data is averaged
         nParams = 9
 
         if not hasattr(self,'Pout'):
@@ -304,7 +361,6 @@ class FitSource(DataStructure):
         df = pd.DataFrame(index=index, columns=colnames+addnames)
         idx = pd.IndexSlice
 
-        
         df.loc[idx[:,:,'Fits',:,:,:],colnames]   = np.reshape(self.Pout, (nHorns*nSBs*nChan,nParams))
         df.loc[idx[:,:,'Errors',:,:,:],colnames] = np.reshape(self.Perr, (nHorns*nSBs*nChan,nParams))
         df.loc[idx[:,:,'Fits',:,:,:],addnames]  = np.reshape(self.PeakAzEl, (nHorns*nSBs*nChan,2))
