@@ -15,7 +15,7 @@ pysla = Extension(name = 'comancpipeline.Tools.pysla',
                   libraries=['sla'],
                   library_dirs =['{}'.format(slalib_path)],
                   f2py_options = [],
-                  extra_f90_compile_args=['-L{}'.format(slalib_path),'-lsla'])
+                  extra_f90_compile_args=['-L{}'.format(slalib_path),'{}/libsla.so.1.0'.format(slalib_path)])
 
 ffuncs = Extension(name = 'comancpipeline.Tools.ffuncs', 
                   sources = ['comancpipeline/Tools/ffuncs.f90'])
