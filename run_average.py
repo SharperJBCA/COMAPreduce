@@ -12,9 +12,9 @@ import os
 
 import click
 @click.command()
-@click.option('--classinfo' ,default=None,type=str)
-@click.option('--parameters',default=None,type=str)
-def main(classinfo, parameters):
+@click.argument('parameters')
+@click.option('--classinfo' ,default='ClassParameters.ini',type=str)
+def main(parameters,classinfo):
 
     # Get the inputs:
     jobobjs, filelist, mainConfig, classConfig = Parser.parse_parameters(parameters)
