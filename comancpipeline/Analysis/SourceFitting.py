@@ -239,26 +239,33 @@ class FitSource(DataStructure):
         try:
             calvane = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, data.filename.split('/')[-1].split('.hd5')[0]))
             idx = pd.IndexSlice
-            weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.flatten().astype(float)**2
-            gain = calvane.loc(axis=0)[idx[:,:,'Gain',feed,sb]].values.flatten().astype(float)
-            #weights = np.reshape(weights,(
-        except:
-            print('No calibration file found, assuming equal weights')
-            weights = np.ones(nChans*width)
-            weights[:5] = 0
-            weights[:-5] = 0
-            gain = np.ones(nChans*width)
+            calvane = calvane.loc(axis=0)[idx[:,:,:,self.feeds,:]]
+            calhorns = calvane.index.get_level_values(level='Horn').unique().values
+            calsbs = calvane.index.get_level_values(level='Sideband').unique().values
+            weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.astype(float)**2
+            gain = calvane.loc(axis=0)[idx[:,:,'Gain',:,:]].values.astype(float)
+            
+            gain = np.reshape(gain,(len(calhorns), len(calsbs), gain.size//(len(calhorns)*len(calsbs))))
+            weights = np.reshape(weights,(len(calhorns), len(calsbs), weights.size//(len(calhorns)*len(calsbs))))
 
+        except IOError:
+            print('No calibration file found, assuming equal weights')
+            weights = np.ones((nHorns, nSBs, nChans*width))
+            weights[:,:,:5] = 0
+            weights[:,:,:-5] = 0
+            gain = np.ones((nHorns, nSBs, nChans*width))
+
+        weights[np.isinf(weights)] = 0
         for horn, feed in zip(range(nHorns),feeds):
             for sb in tqdm(range(nSBs)):
-                weights[np.isinf(weights)] = 0
+                w, g = weights[horn, sb, :], gain[horn, sb, :]
                 for chan in range(nChans):
                     try:
-                        bot = np.nansum(weights[chan*width:(chan+1)*width])
+                        bot = np.nansum(w[chan*width:(chan+1)*width])
                     except:
                         continue
-                    tod[horn,sb,chan,:] = np.sum(alltod[horn,sb,chan*width:(chan+1)*width,:]*weights[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
-                    gainAvg = np.nansum(gain[chan*width:(chan+1)*width]*weights[chan*width:(chan+1)*width])/bot 
+                    tod[horn,sb,chan,:] = np.sum(alltod[horn,sb,chan*width:(chan+1)*width,:]*w[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
+                    gainAvg = np.nansum(g[chan*width:(chan+1)*width]*w[chan*width:(chan+1)*width])/bot 
                     tod[horn,sb,chan,:] /= gainAvg
 
         # Setup the outputs (we also should store the peak az/el fitted)
