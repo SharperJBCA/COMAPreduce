@@ -158,6 +158,8 @@ def sourcePosition(src, mjd, lon, lat):
         #_mjd = mjd[::10]
         #_mjd[-1] = mjd[-1]
         r0, d0, dist = getPlanetPosition(src, lon, lat, mjd, allpos=True)
+        r0 *= 180./np.pi
+        d0 *= 180./np.pi
         #r0 = np.interp(mjd,_mjd,r0)
         #d0 = np.interp(mjd,_mjd,d0)
     else:

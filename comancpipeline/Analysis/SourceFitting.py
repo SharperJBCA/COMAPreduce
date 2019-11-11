@@ -167,12 +167,16 @@ class FitSource(DataStructure):
     Beam fitting functions.
     """
 
-    def __init__(self, output_dir='', nworkers= 1, average_width=512,calvanedir='AncillaryData/CalVanes',
+    def __init__(self, feeds='all', output_dir='', nworkers= 1, average_width=512,calvanedir='AncillaryData/CalVanes',
                  x0=0, y0=0, lon=-118.2941, lat=37.2314, filtertod=False):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
         """
+
+        self.feeds = feeds
+        
+
         self.x0 = x0
         self.y0 = y0
         self.lon = lon
@@ -200,7 +204,16 @@ class FitSource(DataStructure):
         # Get data structures we need
         alltod = data['spectrometer/tod']
         btod = data['spectrometer/band_average']
-        feeds = data['spectrometer/feeds'][:]
+        if self.feeds == 'all':
+            feeds = data['spectrometer/feeds'][:]
+        else:
+            if not isinstance(self.feeds,list):
+                self.feeds = [int(self.feeds)]
+                feeds = self.feeds
+            else:
+                feeds = [int(f) for f in self.feeds]
+
+        self.feed = feeds
         mjd = data['spectrometer/MJD'][:]
         az  = data['spectrometer/pixel_pointing/pixel_az'][:]
         el  = data['spectrometer/pixel_pointing/pixel_el'][:]
@@ -216,49 +229,29 @@ class FitSource(DataStructure):
             return
 
         nHorns, nSBs, nChans, nSamples = alltod.shape
+        nHorns = len(feeds)
 
         # --- Average down the data
-        calvane = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, data.filename.split('/')[-1].split('.hd5')[0]))
-        idx = pd.IndexSlice
         width = self.average_width
         tod = np.zeros((nHorns, nSBs, nChans//width, nSamples))
         nHorns, nSBs, nChans, nSamples = tod.shape
-
-        # --- Tuples of values to loop over
-        # loopvals = []
-        # for horn in range(nHorns):
-        #     for sb in range(nSBs):
-        #         for chan in range(nChans):
-        #             loopvals += [(horn,feeds[horn],sb,chan)]
-
-        # def AvgFunc(alltod, width, loopvals):
-        #     horn, feed, sb, chan = loopvals
-
-        #     weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',feed,sb]].values.flatten().astype(float)**2#.groupby(level=['Date']).mean().values
-        #     weights[np.isinf(weights)] = 0
-        #     gain = calvane.loc(axis=0)[idx[:,:,'Gain',feed,sb]].values.flatten().astype(float)#.groupby(level=['Date']).mean().values
-        #     try:
-        #         bot = np.nansum(weights[chan*width:(chan+1)*width])
-        #     except:
-        #         return None
-        #     tod = np.sum(alltod[horn,sb,chan*width:(chan+1)*width,:]*weights[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
-        #     gainAvg = np.nansum(gain[chan*width:(chan+1)*width]*weights[chan*width:(chan+1)*width])/bot 
-        #     tod[horn,sb,chan,:] /= gainAvg
-
-        # AvgFuncPartial = Partial(AvgFunc, alltod, width)
-
-        # # --- Parallelise the fitting procedure for each channel
-        # with concurrent.futures.ProcessPoolExecutor(max_workers=self.nworkers) as executor:
-        #     for output in executor.map(AvgFuncPartial, loopvals, chunksize=len(loopvals)//self.nworkers//2):
-        #         if not isinstance(output, type(None)):
-        #             tod_out,horn,sb,chan = output
-        #             tod[horn,sb,chan,:] = tod_out
+        nHorns = len(feeds)
+        try:
+            calvane = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, data.filename.split('/')[-1].split('.hd5')[0]))
+            idx = pd.IndexSlice
+            weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.flatten().astype(float)**2
+            gain = calvane.loc(axis=0)[idx[:,:,'Gain',feed,sb]].values.flatten().astype(float)
+            #weights = np.reshape(weights,(
+        except:
+            print('No calibration file found, assuming equal weights')
+            weights = np.ones(nChans*width)
+            weights[:5] = 0
+            weights[:-5] = 0
+            gain = np.ones(nChans*width)
 
         for horn, feed in zip(range(nHorns),feeds):
             for sb in tqdm(range(nSBs)):
-                weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',feed,sb]].values.flatten().astype(float)**2#.groupby(level=['Date']).mean().values
                 weights[np.isinf(weights)] = 0
-                gain = calvane.loc(axis=0)[idx[:,:,'Gain',feed,sb]].values.flatten().astype(float)#.groupby(level=['Date']).mean().values
                 for chan in range(nChans):
                     try:
                         bot = np.nansum(weights[chan*width:(chan+1)*width])
@@ -336,6 +329,7 @@ class FitSource(DataStructure):
         Write the Tsys, Gain and RMS to a pandas data frame for each hdf5 file.
         """        
         nHorns, nSBs, nChan, nSamps = data['spectrometer/tod'].shape
+        nHorns = len(self.feeds)
         nChan = int(nChan//self.average_width) # need to capture the fact the data is averaged
         nParams = 9
 
@@ -348,7 +342,8 @@ class FitSource(DataStructure):
         startDate = Types.Filename2DateTime(data.filename)
 
         # Reorder the data
-        horns = data['spectrometer/feeds'][:]
+        
+        horns = self.feeds
         sidebands = np.arange(nSBs).astype(int)
         channels  = np.arange(nChan).astype(int)
         modes = ['Fits', 'Errors']
@@ -434,6 +429,8 @@ class FitSource(DataStructure):
                     pyplot.clf()
 
 
+
+# ---  OLD
 
 class FitSourceAlternateScans(FitSource):
     def __init__(self, beammodel = 'JamesBeam', x0=0, y0=0, lon=-118.2941, lat=37.2314, filtertod=False):
