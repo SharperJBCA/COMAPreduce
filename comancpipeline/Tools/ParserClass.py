@@ -34,7 +34,7 @@ class Parser(object):
 
     def __setitem__(self,k,v):
         self.parameters[k] = v
-    
+     
     def __getitem__(self,k):
         try:
             return self.parameters[k]

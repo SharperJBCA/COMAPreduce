@@ -33,7 +33,7 @@ def getClass(strname):
     class_  = getattr(module_,classname)
     return class_
         
-
+ 
 def parse_parameters(filename):
     """
     Take a parameter file, return list of initalised objects (jobs) and input parameters 

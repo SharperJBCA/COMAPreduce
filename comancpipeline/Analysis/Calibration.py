@@ -609,7 +609,7 @@ class AmbientLoad2Gain(DataStructure):
         self.RMS    = self.Tsys*0.
 
         # Setup for calculating the calibration factors, interpolate temperatures
-        tHot  = data['hk/antenna0/vane/Tvane'][:]/100. + self.tHotOffset
+        tHot  = data['hk/antenna0/vane/Tvane'][:]/100. + self.tHotOffset 
         hkMJD = data['hk/antenna0/vane/utc'][:]
         #tHot  = gaussian_filter1d(tHot, 35)
         #tHot  = interp1d(hkMJD, tHot, bounds_error=False, fill_value=np.nan)(mjd)

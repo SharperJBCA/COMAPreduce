@@ -236,7 +236,7 @@ class FitSource(DataStructure):
             else:
                 feeds = [int(f) for f in self.feeds]
 
-        self.feeds = feeds
+        self.feed = feeds
         mjd = data['spectrometer/MJD'][:]
         az  = data['spectrometer/pixel_pointing/pixel_az'][:]
         el  = data['spectrometer/pixel_pointing/pixel_el'][:]
@@ -597,7 +597,7 @@ class FitSourceAlternateScans(FitSource):
         sidebands = np.arange(nSBs).astype(int)
         channels  = np.arange(nChan).astype(int)
         modes = ['Fits', 'Errors']
-        direction = ['CW','CCW']
+        direction = ['CW','CCW'] 
         iterables = [[startDate],[self.source],direction, modes, horns, sidebands, channels]
         names = ['Date','Source','Direction', 'Mode','Horn','Sideband','Channel']
         index = pd.MultiIndex.from_product(iterables, names=names)
