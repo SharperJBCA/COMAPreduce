@@ -44,8 +44,11 @@ def parse_parameters(filename):
 
     # Generate a filelist to loop over
     filelist = np.loadtxt(mainInput['Inputs']['filelist'],dtype=str,ndmin=1)
-    filelist = ['{}/{}'.format(mainInput['Inputs']['data_dir'],
-                               filename.split('/')[-1]) for filename in filelist]
+    if isinstance(mainInput['Inputs']['data_dir'], type(None)):
+        filelist = [filename for filename in filelist]
+    else:
+        filelist = ['{}/{}'.format(mainInput['Inputs']['data_dir'],
+                                   filename.split('/')[-1]) for filename in filelist]
                                
     # Some items should always be a list
     if not isinstance(mainInput['Inputs']['pipeline'], list):
