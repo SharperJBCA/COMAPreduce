@@ -236,7 +236,7 @@ class FitSource(DataStructure):
             else:
                 feeds = [int(f) for f in self.feeds]
 
-        self.feed = feeds
+        self.feeds = feeds
         mjd = data['spectrometer/MJD'][:]
         az  = data['spectrometer/pixel_pointing/pixel_az'][:]
         el  = data['spectrometer/pixel_pointing/pixel_el'][:]
