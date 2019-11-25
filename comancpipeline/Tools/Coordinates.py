@@ -57,6 +57,27 @@ def Rotate(ra, dec, r0, d0, p0):
     _ra[_ra > 180] -= 360.
     return _ra, _dec
 
+def UnRotate(ra, dec, r0, d0, p0):
+    """
+    Rotate coordinates to be relative to some ra/dec and sky rotation pang
+    
+    All inputs in degrees
+
+    """
+    skyVec = hp.ang2vec((90.-dec)*np.pi/180., ra*np.pi/180.)
+
+    outVec = RotateR(skyVec, p0)
+    outVec = RotateTheta(outVec, d0)
+    outVec = RotatePhi(outVec, r0)
+
+    _dec, _ra = hp.vec2ang(outVec)
+    _dec = (np.pi/2. - _dec)*180./np.pi
+    _ra = _ra * 180./np.pi
+
+    _ra[_ra > 360] -= 360.
+    _ra[_ra < 0] += 360.
+    return _ra, _dec
+
 
 def rdplan(mjd, planet, lon, lat, degrees=True):
     """

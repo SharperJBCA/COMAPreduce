@@ -29,6 +29,9 @@ import os
 def doFit(todFitAll, _x, _y, sbc,bootstrap=False):
     """
     Fitting function within the fit routine, allows for try/excepts
+
+    Separated off to allow for parallelisation 
+
     """
     sb, chan = sbc
     todFit = todFitAll[int(sb),int(chan),:]
@@ -67,15 +70,15 @@ def doFit(todFitAll, _x, _y, sbc,bootstrap=False):
 
 def fitproc(todFit,x,y):
     
-    P0 = [np.max(todFit) - np.median(todFit),
-          0/60.,
-          4./60./2.355,
-          0/60.,
-          9./60./2.355,
-          50*np.pi/180.,
-          np.median(todFit),
-          0.,
-          0.]
+    P0 = [np.max(todFit) - np.median(todFit), # amplitude
+          0/60., # az offset
+          4./60./2.355, # az sigma
+          0/60., # el offset
+          9./60./2.355, # el sigma
+          50*np.pi/180., # rotation
+          np.median(todFit), # offset
+          0., # az gradient
+          0.] # el gradient
 
     fout = leastsq(Fitting.ErrorLstSq, P0,
                    Dfun = Fitting.DFuncGaussRotPlaneLstSq,
@@ -372,14 +375,28 @@ class FitSource(DataStructure):
                         pyplot.xticks(size=10)
                         pyplot.yticks(size=10)
 
+                        select = np.where(good)[0]
                         peakAz, peakEl, peakMJD = az[horn,np.argmax(bestfit)],el[horn,np.argmax(bestfit)],mjd[np.argmax(bestfit)]
+                        azsource = azSource[good]
+                        elsource = elSource[good]
+                        peakAz, peakEl = Coordinates.UnRotate(np.ones(azsource.shape)*result[1],
+                                                              np.ones(azsource.shape)*result[3], 
+                                                              -azsource, -elsource, 0)
                         
                         # Calculate the peak Ra/Dec coordinates in J2000
-                        peakRa, peakDec = Coordinates.h2e(peakAz, peakEl, peakMJD, self.lon,self.lat)
-                        peakRa, peakDec = Coordinates.precess(peakRa,peakDec,peakMJD)
+                        
+                        peakRa, peakDec = Coordinates.h2e(peakAz, peakEl, mjd[good], self.lon,self.lat)
+                        if self.source != 'jupiter':
+                            peakRa, peakDec = Coordinates.precess(peakRa,peakDec,peakMJD)
+                        dRa, dDec = Coordinates.Rotate(peakRa, peakDec,
+                                                       raSource[good], 
+                                                       decSource[good], 0)
+            
 
-                        self.PeakAzEl[horn,sb,chan,:]= peakAz, peakEl
-                        self.PeakRaDec[horn,sb,chan,:]= peakRa-raSource[np.argmax(bestfit)], peakDec-decSource[np.argmax(bestfit)], peakMJD
+
+                        self.PeakAzEl[horn,sb,chan,:]= peakAz[np.argmax(bestfit)], peakEl[np.argmax(bestfit)]
+                        self.PeakRaDec[horn,sb,chan,:]= dRa[np.argmax(bestfit)],dDec[np.argmax(bestfit)],mjd[select[np.argmax(bestfit)]]
+                        #peakRa-raSource[np.argmax(bestfit)], peakDec-decSource[np.argmax(bestfit)], peakMJD
 
                         obsid = filename.split('/')[-1].split('-')[1]
                         pyplot.suptitle('{} Horn {:02d} SB {:02d}'.format(obsid,horn, sb))
