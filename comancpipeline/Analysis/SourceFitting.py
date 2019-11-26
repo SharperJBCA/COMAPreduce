@@ -252,13 +252,24 @@ class FitSource(DataStructure):
             return
         self.source = src[0]
         if self.source in Coordinates.CalibratorList:
-            tod = self.average(filename,alltod)
+            tod = self.average(filename,data,alltod)
             self.fit(filename,tod,az,el,mjd,src,features)
 
-    def average(self,filename, alltod):
+    def average(self,filename,data, alltod):
         """
         Average TOD together
         """
+        if self.feeds == 'all':
+            feeds = data['spectrometer/feeds'][:]
+        else:
+            if not isinstance(self.feeds,list):
+                self.feeds = [int(self.feeds)]
+                feeds = self.feeds
+            else:
+                feeds = [int(f) for f in self.feeds]
+
+        self.feeds = feeds
+
         nHorns, nSBs, nChans, nSamples = alltod.shape
         nHorns = len(self.feeds)
 
@@ -386,13 +397,9 @@ class FitSource(DataStructure):
                         # Calculate the peak Ra/Dec coordinates in J2000
                         
                         peakRa, peakDec = Coordinates.h2e(peakAz, peakEl, mjd[good], self.lon,self.lat)
-                        if self.source != 'jupiter':
-                            peakRa, peakDec = Coordinates.precess(peakRa,peakDec,peakMJD)
                         dRa, dDec = Coordinates.Rotate(peakRa, peakDec,
                                                        raSource[good], 
                                                        decSource[good], 0)
-            
-
 
                         self.PeakAzEl[horn,sb,chan,:]= peakAz[np.argmax(bestfit)], peakEl[np.argmax(bestfit)]
                         self.PeakRaDec[horn,sb,chan,:]= dRa[np.argmax(bestfit)],dDec[np.argmax(bestfit)],mjd[select[np.argmax(bestfit)]]
@@ -563,7 +570,7 @@ class FitSourceAlternateScans(FitSource):
             else:
                 feeds = [int(f) for f in self.feeds]
 
-        self.feed = feeds
+        self.feeds = feeds
         mjd = data['spectrometer/MJD'][:]
         az  = data['spectrometer/pixel_pointing/pixel_az'][:]
         el  = data['spectrometer/pixel_pointing/pixel_el'][:]
@@ -578,7 +585,7 @@ class FitSourceAlternateScans(FitSource):
 
         self.outputs = {}
         if self.source in Coordinates.CalibratorList:
-            tod = self.average(filename,alltod)
+            tod = self.average(filename,data,alltod)
 
             cwbools = self.scanEdges(az[0,:], idir=0) # Get the CW scans (~cwbools is CCW scans)
             modes = {'CW':True,'CCW':False}
