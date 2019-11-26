@@ -13,6 +13,14 @@ import pandas as pd
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
 
+class CreateLevel2Cont(DataStructure):
+    """
+    Takes level 1 files, bins and calibrates them for continuum analysis.
+    """
+
+    def __init__(self):
+        pass
+
 
 class CoordOffset(DataStructure):
     """
