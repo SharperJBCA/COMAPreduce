@@ -239,7 +239,7 @@ class FitSource(DataStructure):
             else:
                 feeds = [int(f) for f in self.feeds]
 
-        self.feed = feeds
+        self.feeds = feeds
         mjd = data['spectrometer/MJD'][:]
         az  = data['spectrometer/pixel_pointing/pixel_az'][:]
         el  = data['spectrometer/pixel_pointing/pixel_el'][:]
@@ -259,16 +259,16 @@ class FitSource(DataStructure):
         """
         Average TOD together
         """
-        if self.feeds == 'all':
-            feeds = data['spectrometer/feeds'][:]
-        else:
-            if not isinstance(self.feeds,list):
-                self.feeds = [int(self.feeds)]
-                feeds = self.feeds
-            else:
-                feeds = [int(f) for f in self.feeds]
+        #if self.feeds == 'all':
+        #    feeds = data['spectrometer/feeds'][:]
+        #else:
+        #    if not isinstance(self.feeds,list):
+        #        self.feeds = [int(self.feeds)]
+        #        feeds = self.feeds
+        #    else:
+        #        feeds = [int(f) for f in self.feeds]
 
-        self.feeds = feeds
+        #self.feeds = feeds
 
         nHorns, nSBs, nChans, nSamples = alltod.shape
         nHorns = len(self.feeds)
