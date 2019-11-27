@@ -11,6 +11,7 @@ import datetime
 from tqdm import tqdm
 import pandas as pd
 from mpi4py import MPI 
+import os
 comm = MPI.COMM_WORLD
 
 class CreateLevel2Cont(DataStructure):
@@ -18,9 +19,107 @@ class CreateLevel2Cont(DataStructure):
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, feeds='all', output_dir='', nworkers= 1, average_width=512,calvanedir='AncillaryData/CalVanes'):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
 
+        self.feeds = feeds
+        
+        self.output_dir = output_dir
+
+        self.nworkers = int(nworkers)
+        self.average_width = int(average_width)
+        self.calvanedir = calvanedir
+
+
+    def run(self,data):
+        # Get data structures we need
+        alltod = data['spectrometer/tod']
+        btod = data['spectrometer/band_average']
+        if self.feeds == 'all':
+            feeds = data['spectrometer/feeds'][:]
+        else:
+            if not isinstance(self.feeds,list):
+                self.feeds = [int(self.feeds)]
+                feeds = self.feeds
+            else:
+                feeds = [int(f) for f in self.feeds]
+
+        self.feeds = feeds
+        mjd = data['spectrometer/MJD'][:]
+        az  = data['spectrometer/pixel_pointing/pixel_az'][:]
+        el  = data['spectrometer/pixel_pointing/pixel_el'][:]
+        features = (np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
+        filename = data.filename
+        # Make sure we are actually using a calibrator scan
+        self.downsampled_tod = self.average(filename,data,alltod)
+
+    def average(self,filename,data, alltod):
+        """
+        Average TOD together
+        """
+        nHorns, nSBs, nChans, nSamples = alltod.shape
+        nHorns = len(self.feeds)
+
+        # --- Average down the data
+        width = self.average_width
+        tod = np.zeros((nHorns, nSBs, nChans//width, nSamples))
+        nHorns, nSBs, nChans, nSamples = tod.shape
+        nHorns = len(self.feeds)
+
+        # Averaging the data either using a Tsys/Calvane measurement or assume equal weights
+        try:
+            calvane = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, filename.split('/')[-1].split('.hd5')[0]))
+            idx = pd.IndexSlice
+            calvane = calvane.loc(axis=0)[idx[:,:,:,self.feeds,:]]
+            calhorns = calvane.index.get_level_values(level='Horn').unique().values
+            calsbs = calvane.index.get_level_values(level='Sideband').unique().values
+            weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.astype(float)**2
+            gain = calvane.loc(axis=0)[idx[:,:,'Gain',:,:]].values.astype(float)
+            
+            gain = np.reshape(gain,(len(calhorns), len(calsbs), gain.size//(len(calhorns)*len(calsbs))))
+            weights = np.reshape(weights,(len(calhorns), len(calsbs), weights.size//(len(calhorns)*len(calsbs))))
+        except IOError:
+            print('No calibration file found, assuming equal weights')
+            weights = np.ones((nHorns, nSBs, nChans*width))
+            weights[:,:,:5] = 0
+            weights[:,:,:-5] = 0
+            gain = np.ones((nHorns, nSBs, nChans*width))
+
+        weights[np.isinf(weights)] = 0
+        for horn, feed in zip(range(nHorns),self.feeds):
+            for sb in tqdm(range(nSBs)):
+                w, g = weights[horn, sb, :], gain[horn, sb, :]
+                for chan in range(nChans):
+                    try:
+                        bot = np.nansum(w[chan*width:(chan+1)*width])
+                    except:
+                        continue
+                    tod[horn,sb,chan,:] = np.sum(alltod[horn,sb,chan*width:(chan+1)*width,:]*w[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
+                    gainAvg = np.nansum(g[chan*width:(chan+1)*width]*w[chan*width:(chan+1)*width])/bot 
+                    tod[horn,sb,chan,:] /= gainAvg
+
+        return tod
+                    
+    def write(self,data):
+        """
+        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        """        
+
+        prefix = data.filename.split('/')[-1].split('.hd5')[0]
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+        outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+        if os.path.isfile(outfilename):
+            os.remove(outfilename)
+
+        outfile = h5py.File(outfilename)
+        lvl2 = outfile.create_group('level2')
+        lvl2.create_dataset('averaged_tod',data=self.downsampled_tod)
+        outfile['level1'] = h5py.ExternalLink(data.filename,'/')
+        outfile.close()
 
 class CoordOffset(DataStructure):
     """
