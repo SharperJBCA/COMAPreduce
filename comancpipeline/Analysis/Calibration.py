@@ -41,7 +41,7 @@ class CreateLevel2Cont(DataStructure):
         if self.feeds == 'all':
             feeds = data['spectrometer/feeds'][:]
         else:
-            if not isinstance(self.feeds,list):
+            if (not isinstance(self.feeds,list)) & (not isinstance(self.feeds,np.ndarray)) :
                 self.feeds = [int(self.feeds)]
                 feeds = self.feeds
             else:
