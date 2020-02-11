@@ -7,8 +7,8 @@ from comancpipeline.Tools import Coordinates, Types
 from os import listdir, getcwd
 from os.path import isfile, join
 
-from mpi4py import MPI 
-comm = MPI.COMM_WORLD
+#from mpi4py import MPI 
+#comm = MPI.COMM_WORLD
 
 class CheckDsetSizes(DataStructure):
     """

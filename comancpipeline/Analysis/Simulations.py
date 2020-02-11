@@ -17,8 +17,8 @@ from statsmodels import robust
 from astropy import wcs as wcsModule
 import h5py
 
-from mpi4py import MPI 
-comm = MPI.COMM_WORLD
+#from mpi4py import MPI 
+#comm = MPI.COMM_WORLD
 
 import os
 import healpy as hp
@@ -165,6 +165,8 @@ class SimulateObservation(DataStructure):
     def write(self,data):
 
         filename = data.filename.split('/')[-1]
+        if os.path.exists('{}/{}'.format(self.outputdir,filename)):
+            os.remove('{}/{}'.format(self.outputdir,filename))
         out = h5py.File('{}/{}'.format(self.outputdir,filename))
 
         out.create_dataset('spectrometer/band_average',data=self.tod)
@@ -204,10 +206,10 @@ class SimulateDiffuse(SimulateObservation):
         self.beta = 1e9
 
         self.noisecov = np.loadtxt('/scratch/nas_comap1/tjrennie/Stuart/OBS:8502CORMATRIX:BAND0',delimiter=',')
-        self.Trec = 20
+        self.Trec = 40 * np.sqrt(2)
 
         # Get the VGPS data
-        MJysr2K = 20e-6
+        MJysr2K = 40e-6
         self.skymap = hp.read_map('/local/scratch/sharper/TemplateFittingNew/MAPS/IRIS_combined_SFD_really_nohole_nosource_4_2048.fits')*MJysr2K
 
     def VGPS(self,ra, dec):
@@ -225,8 +227,8 @@ class SimulateDiffuse(SimulateObservation):
         print(self.vgps_wcs.naxis,self.vgps_wcs.cdelt,self.vgps_wcs.crval,self.vgps_wcs.crpix,self.vgps_wcs.ctype)
         print( self.vgps_wcs.all_pix2world(7113,513,0))
         #pyplot.plot(gl,gb,'.')
-        pyplot.plot(glpix,gbpix,',')
-        pyplot.show()     
+        #pyplot.plot(glpix,gbpix,',')
+        #pyplot.show()     
 
     def Diffuse(self,ra, dec):
         rot = hp.rotator.Rotator(coord=['C','G'])
@@ -263,12 +265,12 @@ class SimulateDiffuse(SimulateObservation):
                 self.tod[i,j,:] += self.Diffuse(self.ra[i,:],self.dec[i,:])
                 self.tod[i,j,:] += self.Trec
                 #self.tod[i,j,:] += self.Atmos(self.el[i,:])
-                #self.tod[i,j,:] += self.ReceiverNoise(self.tod[i,j,:])
-            ft = self.corrnoise(self.tod.shape[-1])/10
-            self.tod[:17,j,:] += ft
-            pyplot.plot(self.tod[0,0,:]-np.nanmedian(self.tod[0,0,:]))
-            pyplot.plot(self.Diffuse(self.ra[0,:],self.dec[0,:]))
-            pyplot.show()
+                self.tod[i,j,:] += self.ReceiverNoise(self.tod[i,j,:])
+            #ft = self.corrnoise(self.tod.shape[-1])/10
+            #self.tod[:17,j,:] += ft
+            #pyplot.plot(self.tod[0,0,:]-np.nanmedian(self.tod[0,0,:]))
+            #pyplot.plot(self.Diffuse(self.ra[0,:],self.dec[0,:]))
+            #pyplot.show()
 
 class SimulateNoise(DataStructure):
     """

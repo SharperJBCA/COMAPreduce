@@ -1,10 +1,10 @@
 import h5py
-from mpi4py import MPI
+#from mpi4py import MPI
 from comancpipeline.Tools import Parser, Types
 import numpy as np
 import configparser
 import time
-comm = MPI.COMM_WORLD
+#comm = MPI.COMM_WORLD
 
 class DataStructure(object):
 

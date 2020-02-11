@@ -10,9 +10,9 @@ from scipy.interpolate import interp1d
 import datetime
 from tqdm import tqdm
 import pandas as pd
-from mpi4py import MPI 
+#from mpi4py import MPI 
 import os
-comm = MPI.COMM_WORLD
+#comm = MPI.COMM_WORLD
 
 class CreateLevel2Cont(DataStructure):
     """
@@ -69,11 +69,10 @@ class CreateLevel2Cont(DataStructure):
         nHorns, nSBs, nChans, nSamples = tod.shape
         nHorns = len(self.feeds)
 
-        # Averaging the data either using a Tsys/Calvane measurement or assume equal weights
         try:
             calvane = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, filename.split('/')[-1].split('.hd5')[0]))
             idx = pd.IndexSlice
-            calvane = calvane.loc(axis=0)[idx[:,:,:,self.feeds,:]]
+            calvane = calvane.loc(axis=0)[idx[:,0,:,self.feeds,:]]
             calhorns = calvane.index.get_level_values(level='Horn').unique().values
             calsbs = calvane.index.get_level_values(level='Sideband').unique().values
             weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.astype(float)**2
@@ -81,6 +80,10 @@ class CreateLevel2Cont(DataStructure):
             
             gain = np.reshape(gain,(len(calhorns), len(calsbs), gain.size//(len(calhorns)*len(calsbs))))
             weights = np.reshape(weights,(len(calhorns), len(calsbs), weights.size//(len(calhorns)*len(calsbs))))
+            weights[:,:,:5] = 0
+            weights[:,:-5:] = 0
+            weights[np.isinf(weights)]=0
+
         except IOError:
             print('No calibration file found, assuming equal weights')
             weights = np.ones((nHorns, nSBs, nChans*width))
@@ -666,6 +669,7 @@ class AmbientLoad2Gain(DataStructure):
         idHot = (mtodArgsort[groupHot])[X]
 
         coldTod = mtod[(mtodArgsort[groupCold])]
+
         X =  np.abs((coldTod - np.median(coldTod))/rms) < 1
         if np.sum(X) == 0:
             raise NoColdError('No cold load data found')
@@ -691,11 +695,12 @@ class AmbientLoad2Gain(DataStructure):
         return rms
 
     def run(self,data):
+        """
+        Calculate the cal vane calibration factors for observations after
+        June 14 2019 (MJD: 58635) after which corrections to the calvane features
+        were made.
 
-        #if not b'Tsys' in data.data['comap'].attrs['comment']:
-        #   print('Not an ambient load scan')
-        #    return None
-
+        """
         # Read in data that is required:
         freq = data['spectrometer/frequency'][...]
         mjd  = data['spectrometer/MJD'][:] # data.data['spectrometer/MJD'][:]
@@ -710,44 +715,61 @@ class AmbientLoad2Gain(DataStructure):
         nHorns, nSBs, nChan, nSamps = tod.shape
 
 
-        # Create output containers
-        self.Tsys = np.zeros((nHorns, nSBs, nChan))
-        self.Gain    = self.Tsys*0.
-        self.RMS    = self.Tsys*0.
 
         # Setup for calculating the calibration factors, interpolate temperatures
         tHot  = data['hk/antenna0/vane/Tvane'][:]/100. + self.tHotOffset 
         hkMJD = data['hk/antenna0/vane/utc'][:]
-        #tHot  = gaussian_filter1d(tHot, 35)
-        #tHot  = interp1d(hkMJD, tHot, bounds_error=False, fill_value=np.nan)(mjd)
         tHot = np.nanmean(tHot)
 
         # Need to count how many calvane events occur, look for features 2**13
-        features = np.floor(np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
-        justDiodes = np.where((features == 13))[0]
+        if mjd[0] > 58648: # The cal vane feature bit can be trusted after 14 June 2019
+            features = np.floor(np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
+            justDiodes = np.where((features == 13))[0]
+        else: # Must use cal vane angle to calculate the diode positions
+            angles = np.interp(mjd,hkMJD, data['hk/antenna0/vane/angle'][:])
+            justDiodes = np.where((angles < 21000))[0]
+
+        if len(justDiodes) == 0:
+            self.nodata = True
+            return 
+        else:
+            self.nodata = False
+
         nSamples2 = int((justDiodes.size//2)*2)
         diffFeatures = justDiodes[1:] - justDiodes[:-1]
         # Anywhere where diffFeatures > 60 seconds must be another event
         timeDiodes = int(60*50) # seconds * sample_rate
-        events = justDiodes[np.where((diffFeatures > timeDiodes))[0]]
-        # add start and end
-        splitDiodes = np.concatenate((justDiodes[0:1], events, justDiodes[-2:-1]))
-        nDiodes = len(splitDiodes) - 2
+        events = np.where((diffFeatures > timeDiodes))[0]
 
-        if nDiodes <= 0:
-            return 
+        nDiodes = len(events) + 1
+
+        # Calculate the cal vane start and end positions
+        diodePositions = []
+        for i in range(nDiodes):
+            if i == 0:
+                low = justDiodes[0]
+            else:
+                low = justDiodes[events[i-1]+1]
+            if i < nDiodes-1:
+                high = justDiodes[events[i]]
+            else:
+                high = justDiodes[-1]
+            diodePositions += [[low,high]]
+
 
         self.deltaTs = np.zeros(nDiodes)
+        # Create output containers
+        self.Tsys = np.zeros((nDiodes, nHorns, nSBs, nChan))
+        self.Gain    = self.Tsys*0.
+        self.RMS    = self.Tsys*0.
 
         # Now loop over each event:
         for horn in tqdm(range(nHorns)):
             
-            for diode_event in range(nDiodes):
-                start, end = splitDiodes[diode_event], splitDiodes[diode_event+1]
-
+            for diode_event, (start, end) in enumerate(diodePositions):
                 # Get the mean time of the event
                 if horn == 0:
-                    self.deltaTs[diode_event] = int((np.mean(mjd[start:end])-mjd[0])*24*3600)
+                    self.deltaTs[diode_event] = int(diode_event) #int((np.mean(mjd[start:end])-mjd[0])*24*3600)
 
                 tod_slice = tod[horn,:,:,start:end]
                 btod_slice = btod[horn,:,start:end]
@@ -761,20 +783,25 @@ class AmbientLoad2Gain(DataStructure):
                 hotcold[idHot] = 2
                 hotcold[idCold] = 1
 
+                time= np.arange(tod_slice.shape[-1])
                 for sb in range(nSBs):
                     vHot = np.nanmedian(tod_slice[sb,:,idHot],axis=0)
                     vCold= np.nanmedian(tod_slice[sb,:,idCold],axis=0)
                     Y = vHot/vCold
-                    self.Tsys[horn,sb,:] = ((tHot - self.tCold)/(Y - 1.) )
-                    self.Gain[horn,sb,:] = ((vHot - vCold)/(tHot - self.tCold))
+                    self.Tsys[diode_event,horn,sb,:] = ((tHot - self.tCold)/(Y - 1.) ) - self.tCold
+                    self.Gain[diode_event,horn,sb,:] = ((vHot - vCold)/(tHot - self.tCold))
 
-                    tod_slice[sb,:,:] /= self.Gain[horn,sb,:,np.newaxis]
-                    self.RMS[horn,sb,:] = self.TsysRMS(tod_slice[sb,:,idCold])
+
+                    tod_slice[sb,:,:] /= self.Gain[diode_event,horn,sb,:,np.newaxis]
+                    self.RMS[diode_event,horn,sb,:] = self.TsysRMS(tod_slice[sb,:,idCold])
 
     def write(self,data):
         """
         Write the Tsys, Gain and RMS to a pandas data frame for each hdf5 file.
         """        
+        if self.nodata:
+            return
+
         nHorns, nSBs, nChan, nSamps = data['spectrometer/tod'].shape
 
         # Structure:
@@ -794,9 +821,10 @@ class AmbientLoad2Gain(DataStructure):
         df = pd.DataFrame(index=index, columns=np.arange(nChan))
         idx = pd.IndexSlice
         
-        df.loc(axis=0)[idx[:,:,'Tsys',:,:]] = np.reshape(self.Tsys, (nHorns*nSBs, nChan))
-        df.loc(axis=0)[idx[:,:,'Gain',:,:]] = np.reshape(self.Gain, (nHorns*nSBs, nChan))
-        df.loc(axis=0)[idx[:,:,'RMS',:,:]]  = np.reshape(self.RMS,  (nHorns*nSBs, nChan))
+        for i in range(self.Tsys.shape[0]):
+            df.loc(axis=0)[idx[:,i,'Tsys',:,:]] = np.reshape(self.Tsys[i,...], (nHorns*nSBs, nChan))
+            df.loc(axis=0)[idx[:,i,'Gain',:,:]] = np.reshape(self.Gain[i,...], (nHorns*nSBs, nChan))
+            df.loc(axis=0)[idx[:,i,'RMS',:,:]]  = np.reshape(self.RMS[i,...],  (nHorns*nSBs, nChan))
 
         # save the dataframe
         # outfilename = '{}/DataFrame_TsysGainRMS.pkl'.format(self.output_dir)

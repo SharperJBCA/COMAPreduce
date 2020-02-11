@@ -20,8 +20,8 @@ from tqdm import tqdm
 
 from functools import partial
 
-from mpi4py import MPI 
-comm = MPI.COMM_WORLD
+#from mpi4py import MPI 
+#comm = MPI.COMM_WORLD
 
 import os
 
@@ -109,7 +109,7 @@ def fitproc(todFit,x,y):
     return fout[0], ferr
         
 
-def makemap(d,x,y,ra0=0,dec0=0, cd=1./60., nxpix=600, nypix=400):
+def makemap(d,x,y,ra0=0,dec0=0, cd=1./60., nxpix=600, nypix=600):
     """
     Quick binning routine for generating a map of single observation,
     useful for finding peaks if the pointing is really bad.
@@ -281,22 +281,22 @@ class FitSource(DataStructure):
 
         # Averaging the data either using a Tsys/Calvane measurement or assume equal weights
         try:
-            calvane = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, filename.split('/')[-1].split('.hd5')[0]))
+            calvane  = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, filename.split('/')[-1].split('.hd5')[0]))
             idx = pd.IndexSlice
-            calvane = calvane.loc(axis=0)[idx[:,:,:,self.feeds,:]]
+            calvane  = calvane.loc(axis=0)[idx[:,:,:,self.feeds,:]]
             calhorns = calvane.index.get_level_values(level='Horn').unique().values
-            calsbs = calvane.index.get_level_values(level='Sideband').unique().values
-            weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.astype(float)**2
+            calsbs   = calvane.index.get_level_values(level='Sideband').unique().values
+            weights  = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.astype(float)**2
             gain = calvane.loc(axis=0)[idx[:,:,'Gain',:,:]].values.astype(float)
             
-            gain = np.reshape(gain,(len(calhorns), len(calsbs), gain.size//(len(calhorns)*len(calsbs))))
+            gain    = np.reshape(gain   ,(len(calhorns), len(calsbs),    gain.size//(len(calhorns)*len(calsbs))))
             weights = np.reshape(weights,(len(calhorns), len(calsbs), weights.size//(len(calhorns)*len(calsbs))))
         except IOError:
             print('No calibration file found, assuming equal weights')
             weights = np.ones((nHorns, nSBs, nChans*width))
-            weights[:,:,:5] = 0
+            weights[:,:,:5]  = 0
             weights[:,:,:-5] = 0
-            gain = np.ones((nHorns, nSBs, nChans*width))
+            gain    = np.ones((nHorns, nSBs, nChans*width))
 
         weights[np.isinf(weights)] = 0
         for horn, feed in zip(range(nHorns),self.feeds):
@@ -332,7 +332,7 @@ class FitSource(DataStructure):
         azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
 
         fig = pyplot.figure(figsize=(16,12))
-        for horn in range(nHorns):
+        for horn, feed in enumerate(self.feeds):
 
 
             # We will need the average TOD for a first guess:
@@ -365,52 +365,65 @@ class FitSource(DataStructure):
                 pbar = tqdm(total = sbs.size)
 
                 # --- Parallelise the fitting procedure for each channel
-                with concurrent.futures.ProcessPoolExecutor(max_workers=self.nworkers) as executor:
-                   #for result, errors, chan in executor.map(func, range(nChans), chunksize=nChans//self.nworkers):
-                    for result, errors, chan,sb in executor.map(func, sbchan, chunksize=sbs.size//self.nworkers):
+                try:
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=self.nworkers) as executor:
+                        #for result, errors, chan in executor.map(func, range(nChans), chunksize=nChans//self.nworkers):
+                        for result, errors, chan,sb in executor.map(func, sbchan, chunksize=sbs.size//self.nworkers):
 
-                #if True: # Uncomment these three lines to remove parallel processing
-                #    for chan in range(nChans):
-                #        result, errors, chan=func(chan)
-                        pbar.update(1)
-                        self.Perr[horn,sb,chan,:] = errors
-                        self.Pout[horn,sb,chan,:] = result
+                            #if True: # Uncomment these three lines to remove parallel processing
+                            #    for chan in range(nChans):
+                            #        result, errors, chan=func(chan)
+                            pbar.update(1)
+                            self.Perr[horn,sb,chan,:] = errors
+                            self.Pout[horn,sb,chan,:] = result
 
-                        bestfit = Fitting.Gauss2dRotPlane(self.Pout[horn,sb,chan,:],
-                                                          x, 
-                                                          y,0,0)
+                            bestfit = Fitting.Gauss2dRotPlane(self.Pout[horn,sb,chan,:],
+                                                              x, 
+                                                              y,0,0)
 
-                        fig.add_subplot(4,4,chan+1)
-                        pyplot.plot(todFitSBChan[sb,chan,:],'k')
-                        pyplot.plot(bestfit,'r')
-                        pyplot.xticks(size=10)
-                        pyplot.yticks(size=10)
+                            #fig.add_subplot(4,4,chan+1)
+                            residual, w = makemap(todFitSBChan[sb,chan,:]-bestfit,x,y, cd=1.5/60.,nxpix=80,nypix=80)
+                            orig, w = makemap(todFitSBChan[sb,chan,:]-np.nanmedian(todFitSBChan[sb,chan,:]),x,y, cd=1.5/60.,nxpix=80,nypix=80)
 
-                        select = np.where(good)[0]
-                        peakAz, peakEl, peakMJD = az[horn,np.argmax(bestfit)],el[horn,np.argmax(bestfit)],mjd[np.argmax(bestfit)]
-                        azsource = azSource[good]
-                        elsource = elSource[good]
-                        peakAz, peakEl = Coordinates.UnRotate(np.ones(azsource.shape)*result[1],
-                                                              np.ones(azsource.shape)*result[3], 
-                                                              -azsource, -elsource, 0)
+                            pyplot.subplot(121)
+                            pyplot.imshow(np.reshape(residual,(80,80)))
+                            pyplot.colorbar(label='K')
+                            pyplot.subplot(122)
+                            pyplot.imshow(np.reshape(orig,(80,80)))
+                            pyplot.colorbar(label='K')
+
+                            #pyplot.plot(bestfit,'r')
+                            #pyplot.xticks(size=10)
+                            #pyplot.yticks(size=10)
+
+                            select = np.where(good)[0]
+                            peakAz, peakEl, peakMJD = az[horn,np.argmax(bestfit)],el[horn,np.argmax(bestfit)],mjd[np.argmax(bestfit)]
+                            azsource = azSource[good]
+                            elsource = elSource[good]
+                            peakAz, peakEl = Coordinates.UnRotate(np.ones(azsource.shape)*result[1],
+                                                                  np.ones(azsource.shape)*result[3], 
+                                                                  -azsource, -elsource, 0)
                         
-                        # Calculate the peak Ra/Dec coordinates in J2000
+                            # Calculate the peak Ra/Dec coordinates in J2000
                         
-                        peakRa, peakDec = Coordinates.h2e(peakAz, peakEl, mjd[good], self.lon,self.lat)
-                        dRa, dDec = Coordinates.Rotate(peakRa, peakDec,
-                                                       raSource[good], 
-                                                       decSource[good], 0)
+                            peakRa, peakDec = Coordinates.h2e(peakAz, peakEl, mjd[good], self.lon,self.lat)
+                            dRa, dDec = Coordinates.Rotate(peakRa, peakDec,
+                                                           raSource[good], 
+                                                           decSource[good], 0)
 
-                        self.PeakAzEl[horn,sb,chan,:]= peakAz[np.argmax(bestfit)], peakEl[np.argmax(bestfit)]
-                        self.PeakRaDec[horn,sb,chan,:]= dRa[np.argmax(bestfit)],dDec[np.argmax(bestfit)],mjd[select[np.argmax(bestfit)]]
-                        #peakRa-raSource[np.argmax(bestfit)], peakDec-decSource[np.argmax(bestfit)], peakMJD
+                            self.PeakAzEl[horn,sb,chan,:]= peakAz[np.argmax(bestfit)], peakEl[np.argmax(bestfit)]
+                            self.PeakRaDec[horn,sb,chan,:]= dRa[np.argmax(bestfit)],dDec[np.argmax(bestfit)],mjd[select[np.argmax(bestfit)]]
+                            #peakRa-raSource[np.argmax(bestfit)], peakDec-decSource[np.argmax(bestfit)], peakMJD
 
-                        obsid = filename.split('/')[-1].split('-')[1]
-                        pyplot.suptitle('{} Horn {:02d} SB {:02d}'.format(obsid,horn, sb))
-                        pyplot.tight_layout(rect=[0,0.03,1,0.95])
-                        pyplot.savefig('{}/Plots/Fit-{}_{:02d}_{:02d}.png'.format(self.output_dir, obsid, horn, sb),bbox_inches='tight')
-                        pyplot.clf()
-                pbar.close()
+                            obsid = filename.split('/')[-1].split('-')[1]
+                            pyplot.suptitle('{} Horn {:02d} SB {:02d}'.format(obsid,horn, sb))
+                            pyplot.tight_layout(rect=[0,0.03,1,0.95])
+                            pyplot.savefig('{}/Plots/Residual-{}_{:02d}_{:02d}.png'.format(self.output_dir, obsid, horn, sb),bbox_inches='tight')
+                            pyplot.clf()
+                    pbar.close()
+                except ValueError:
+                    print('Something went wrong, skipping')
+                    
 
         
     def write(self,data):
