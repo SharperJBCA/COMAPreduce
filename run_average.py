@@ -1,5 +1,5 @@
-from mpi4py import MPI 
-comm = MPI.COMM_WORLD
+#from mpi4py import MPI 
+#comm = MPI.COMM_WORLD
 
 import numpy as np
 #from comancpipeline.Tools import *
