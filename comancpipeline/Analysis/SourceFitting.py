@@ -287,10 +287,14 @@ class FitSource(DataStructure):
             calhorns = calvane.index.get_level_values(level='Horn').unique().values
             calsbs   = calvane.index.get_level_values(level='Sideband').unique().values
             weights  = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.astype(float)**2
-            gain = calvane.loc(axis=0)[idx[:,:,'Gain',:,:]].values.astype(float)
-            
-            gain    = np.reshape(gain   ,(len(calhorns), len(calsbs),    gain.size//(len(calhorns)*len(calsbs))))
-            weights = np.reshape(weights,(len(calhorns), len(calsbs), weights.size//(len(calhorns)*len(calsbs))))
+            gain = calvane.loc(axis=0)[idx[:,:,'Gain',:,:]]#.values.astype(float)
+            ngains = len(gain.index.levels[1])
+
+            gain = gain.values.astype(float)
+            gain    = np.reshape(gain   ,(ngains, len(calhorns), len(calsbs),    gain.size//(len(calhorns)*len(calsbs)*ngains )))
+            weights = np.reshape(weights,(ngains,len(calhorns), len(calsbs), weights.size//(len(calhorns)*len(calsbs)*ngains  )))
+            gain = np.mean(gain,axis=0)
+            weights = np.mean(weights,axis=0)
         except IOError:
             print('No calibration file found, assuming equal weights')
             weights = np.ones((nHorns, nSBs, nChans*width))
@@ -302,6 +306,7 @@ class FitSource(DataStructure):
         for horn, feed in zip(range(nHorns),self.feeds):
             for sb in tqdm(range(nSBs)):
                 w, g = weights[horn, sb, :], gain[horn, sb, :]
+                gvals = np.zeros(nChans)
                 for chan in range(nChans):
                     try:
                         bot = np.nansum(w[chan*width:(chan+1)*width])
@@ -309,6 +314,7 @@ class FitSource(DataStructure):
                         continue
                     tod[horn,sb,chan,:] = np.sum(alltod[horn,sb,chan*width:(chan+1)*width,:]*w[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
                     gainAvg = np.nansum(g[chan*width:(chan+1)*width]*w[chan*width:(chan+1)*width])/bot 
+                    gvals[chan] = gainAvg
                     tod[horn,sb,chan,:] /= gainAvg
 
         return tod
