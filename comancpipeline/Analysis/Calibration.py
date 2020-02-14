@@ -3,6 +3,8 @@ from matplotlib import pyplot
 import h5py
 from comancpipeline.Analysis.BaseClasses import DataStructure
 from comancpipeline.Analysis.FocalPlane import FocalPlane
+from comancpipeline.Analysis import SourceFitting
+
 from comancpipeline.Tools import Coordinates, Types
 from os import listdir, getcwd
 from os.path import isfile, join
@@ -14,7 +16,7 @@ import pandas as pd
 import os
 #comm = MPI.COMM_WORLD
 
-class CreateLevel2Cont(DataStructure):
+class CreateLevel2Cont(SourceFitting.FitSource):
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
@@ -48,64 +50,20 @@ class CreateLevel2Cont(DataStructure):
                 feeds = [int(f) for f in self.feeds]
 
         self.feeds = feeds
+        self.feedlist = data['spectrometer/feeds'][:]
+        self.feeddict = {feedid:feedindex for feedindex, feedid in enumerate(self.feedlist)}
+
         mjd = data['spectrometer/MJD'][:]
         az  = data['spectrometer/pixel_pointing/pixel_az'][:]
         el  = data['spectrometer/pixel_pointing/pixel_el'][:]
         features = (np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
         filename = data.filename
         # Make sure we are actually using a calibrator scan
+
+        # self.average is inherited from SourceFitting.FitSource to keep both
+        # methods consistent.
         self.downsampled_tod = self.average(filename,data,alltod)
 
-    def average(self,filename,data, alltod):
-        """
-        Average TOD together
-        """
-        nHorns, nSBs, nChans, nSamples = alltod.shape
-        nHorns = len(self.feeds)
-
-        # --- Average down the data
-        width = self.average_width
-        tod = np.zeros((nHorns, nSBs, nChans//width, nSamples))
-        nHorns, nSBs, nChans, nSamples = tod.shape
-        nHorns = len(self.feeds)
-
-        try:
-            calvane = pd.read_pickle('{}/{}_TsysGainRMS.pkl'.format(self.calvanedir, filename.split('/')[-1].split('.hd5')[0]))
-            idx = pd.IndexSlice
-            calvane = calvane.loc(axis=0)[idx[:,0,:,self.feeds,:]]
-            calhorns = calvane.index.get_level_values(level='Horn').unique().values
-            calsbs = calvane.index.get_level_values(level='Sideband').unique().values
-            weights = 1./calvane.loc(axis=0)[idx[:,:,'RMS',:,:]].values.astype(float)**2
-            gain = calvane.loc(axis=0)[idx[:,:,'Gain',:,:]].values.astype(float)
-            
-            gain = np.reshape(gain,(len(calhorns), len(calsbs), gain.size//(len(calhorns)*len(calsbs))))
-            weights = np.reshape(weights,(len(calhorns), len(calsbs), weights.size//(len(calhorns)*len(calsbs))))
-            weights[:,:,:5] = 0
-            weights[:,:-5:] = 0
-            weights[np.isinf(weights)]=0
-
-        except IOError:
-            print('No calibration file found, assuming equal weights')
-            weights = np.ones((nHorns, nSBs, nChans*width))
-            weights[:,:,:5] = 0
-            weights[:,:,:-5] = 0
-            gain = np.ones((nHorns, nSBs, nChans*width))
-
-        weights[np.isinf(weights)] = 0
-        for horn, feed in zip(range(nHorns),self.feeds):
-            for sb in tqdm(range(nSBs)):
-                w, g = weights[horn, sb, :], gain[horn, sb, :]
-                for chan in range(nChans):
-                    try:
-                        bot = np.nansum(w[chan*width:(chan+1)*width])
-                    except:
-                        continue
-                    tod[horn,sb,chan,:] = np.sum(alltod[horn,sb,chan*width:(chan+1)*width,:]*w[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
-                    gainAvg = np.nansum(g[chan*width:(chan+1)*width]*w[chan*width:(chan+1)*width])/bot 
-                    tod[horn,sb,chan,:] /= gainAvg
-
-        return tod
-                    
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
@@ -686,7 +644,9 @@ class AmbientLoad2Gain(DataStructure):
         else:
             snip = int(jumps[0])
         
-        return idHot, idCold[snip:]
+        idHot = np.sort(idHot)
+        idCold = np.sort(idCold[snip:])
+        return idHot[50:-50], idCold[50:-50]
 
     def TsysRMS(self,tod):
         N = (tod.shape[0]//2)*2
@@ -705,7 +665,7 @@ class AmbientLoad2Gain(DataStructure):
         freq = data['spectrometer/frequency'][...]
         mjd  = data['spectrometer/MJD'][:] # data.data['spectrometer/MJD'][:]
         el  = data['pointing/elActual'][:]        
-
+        self.feeds = data['spectrometer/feeds'][:]
         self.mjd = np.mean(mjd)
         self.elevation = np.nanmedian(el)
 
@@ -764,8 +724,8 @@ class AmbientLoad2Gain(DataStructure):
         self.RMS    = self.Tsys*0.
 
         # Now loop over each event:
-        for horn in tqdm(range(nHorns)):
-            
+        for horn, feedid in enumerate(tqdm(self.feeds)):
+
             for diode_event, (start, end) in enumerate(diodePositions):
                 # Get the mean time of the event
                 if horn == 0:
@@ -791,10 +751,16 @@ class AmbientLoad2Gain(DataStructure):
                     self.Tsys[diode_event,horn,sb,:] = ((tHot - self.tCold)/(Y - 1.) ) - self.tCold
                     self.Gain[diode_event,horn,sb,:] = ((vHot - vCold)/(tHot - self.tCold))
 
+                    #t = np.arange(btod_slice.shape[-1])
+                    #pyplot.plot(tod_slice[sb,-30,:])
+                    #pyplot.plot(t[hotcold == 2], tod_slice[sb,-30,hotcold==2])
+                    #pyplot.plot(t[hotcold == 1], tod_slice[sb,-30,hotcold==1])
+                    #pyplot.title(horn)
+                    #pyplot.show()
 
                     tod_slice[sb,:,:] /= self.Gain[diode_event,horn,sb,:,np.newaxis]
                     self.RMS[diode_event,horn,sb,:] = self.TsysRMS(tod_slice[sb,:,idCold])
-
+            
     def write(self,data):
         """
         Write the Tsys, Gain and RMS to a pandas data frame for each hdf5 file.

@@ -139,21 +139,29 @@ def Gauss2dRotPlane(P, x, y, ra_c, dec_c):
     model = A * np.exp( - 0.5 * (Xr**2 + Yr**2)) + B + Gx*(x-x0) + Gy*(y-y0)
     return model
 
+def Gauss2dSymmetricPlane(P, x, y, ra_c, dec_c):
+    A, x0, y0, sig, B, Gx, Gy = P
+    Xr = (x - x0)/sig 
+    Yr = (y - y0)/sig
+
+    model = A * np.exp( - 0.5 * (Xr**2 + Yr**2)) + B + Gx*(x-x0) + Gy*(y-y0)
+    return model
+
+
 def Gauss2dRotPlaneLimits(P):
     A, x0, sigx, y0, sigy, a, B, Gx, Gy = P
 
-    #limits = [(sigx > 10./60./2.355) | (sigx < 0),
-    #         (sigy > 10./60./2.355) | (sigy < 0),
-    #         (A < 0),
-    #         (np.sqrt(x0**2 + y0**2) > 1),
-    #         (a < 0) | (a > np.pi)]
-
     limits = [(A < 0)]
-              #(sigx > sigy),
-              #(a > np.pi) | (a < 0)]
-
               
     return any(np.array(limits))
+
+def Gauss2dSymmetricPlaneLimits(P):
+    A, x0, y0, sig, B, Gx, Gy = P
+
+    limits = [(A < 0) , (sig < 0)]
+              
+    return any(np.array(limits))
+
 
 
 
