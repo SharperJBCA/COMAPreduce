@@ -37,9 +37,19 @@ class CreateLevel2Cont(SourceFitting.FitSource):
 
 
     def run(self,data):
+        """
+        Sets up feeds that are needed to be called,
+        grabs the pointer to the time ordered data,
+        and calls the averaging routine in SourceFitting.FitSource.average(*args)
+
+        """
         # Get data structures we need
         alltod = data['spectrometer/tod']
-        btod = data['spectrometer/band_average']
+
+        # Setup feed indexing
+        # self.feeds : feed horn ID (in array indexing, only chosen feeds)
+        # self.feedlist : all feed IDs in data file (in lvl1 indexing)
+        # self.feeddict : map between feed ID and feed array index in lvl1
         if self.feeds == 'all':
             feeds = data['spectrometer/feeds'][:]
         else:
@@ -53,34 +63,36 @@ class CreateLevel2Cont(SourceFitting.FitSource):
         self.feedlist = data['spectrometer/feeds'][:]
         self.feeddict = {feedid:feedindex for feedindex, feedid in enumerate(self.feedlist)}
 
-        mjd = data['spectrometer/MJD'][:]
-        az  = data['spectrometer/pixel_pointing/pixel_az'][:]
-        el  = data['spectrometer/pixel_pointing/pixel_el'][:]
-        features = (np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
-        filename = data.filename
-        # Make sure we are actually using a calibrator scan
+
+        # Setup output file here, we will have to write in sections.
+        prefix = data.filename.split('/')[-1].split('.hd5')[0]
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+        if os.path.isfile(self.outfilename):
+            os.remove(self.outfilename)
+
+
+        # Opening file here to write out data bit by bit
+        self.outfile = h5py.File(self.outfilename)
+        lvl2 = self.outfile.create_group('level2')
+        avg_tod_shape = (alltod.shape[0], alltod.shape[1], alltod.shape[2]//self.average_width, alltod.shape[3])
+        tod = lvl2.create_dataset('averaged_tod',avg_tod_shape, dtype=alltod.dtype)
 
         # self.average is inherited from SourceFitting.FitSource to keep both
         # methods consistent.
-        self.downsampled_tod = self.average(filename,data,alltod)
+        self.average(data.filename,data,alltod, tod)
 
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """        
 
-        prefix = data.filename.split('/')[-1].split('.hd5')[0]
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
-        outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
-        if os.path.isfile(outfilename):
-            os.remove(outfilename)
 
-        outfile = h5py.File(outfilename)
-        lvl2 = outfile.create_group('level2')
-        lvl2.create_dataset('averaged_tod',data=self.downsampled_tod)
-        outfile['level1'] = h5py.ExternalLink(data.filename,'/')
-        outfile.close()
+        #lvl2 = outfile.create_group('level2')
+        #lvl2.create_dataset('averaged_tod',data=self.downsampled_tod)
+        self.outfile['level1'] = h5py.ExternalLink(data.filename,'/')
+        self.outfile.close()
 
 class CoordOffset(DataStructure):
     """

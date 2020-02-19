@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 from functools import partial
 from scipy.signal import medfilt
+import copy 
 
 #from mpi4py import MPI 
 #comm = MPI.COMM_WORLD
@@ -260,31 +261,23 @@ class FitSource(DataStructure):
             return
         self.source = src[0]
         if self.source in Coordinates.CalibratorList:
-            tod = self.average(filename,data,alltod)
+            nHorns, nSBs, nChans, nSamples = alltod.shape
+
+            tod = np.zeros((nHorns, nSBs, nChans//self.average_width, nSamples))
+            self.average(filename,data,alltod, tod)
             
             self.fit(filename,tod,az,el,mjd,src,features)
 
-    def average(self,filename,data, alltod):
+    def average(self,filename,data, alltod, tod):
         """
         Average TOD together
         """
-        #if self.feeds == 'all':
-        #    feeds = data['spectrometer/feeds'][:]
-        #else:
-        #    if not isinstance(self.feeds,list):
-        #        self.feeds = [int(self.feeds)]
-        #        feeds = self.feeds
-        #    else:
-        #        feeds = [int(f) for f in self.feeds]
-
-        #self.feeds = feeds
 
         nHorns, nSBs, nChans, nSamples = alltod.shape
         nHorns = len(self.feeds)
 
         # --- Average down the data
         width = self.average_width
-        tod = np.zeros((nHorns, nSBs, nChans//width, nSamples))
         nHorns, nSBs, nChans, nSamples = tod.shape
         nHorns = len(self.feeds)
 
@@ -298,7 +291,6 @@ class FitSource(DataStructure):
             weights  = 1./calvane.loc(axis=0)[idx[:,:,'Tsys',:,:]].values.astype(float)**2
             gain = calvane.loc(axis=0)[idx[:,:,'Gain',:,:]]#.values.astype(float)
             ngains = len(gain.index.levels[1])
-            import copy 
             gain2 = copy.copy(gain)
             gain = gain.values.astype(float)
             gain    = np.reshape(gain   ,(ngains, len(calhorns), len(calsbs),   
@@ -336,7 +328,6 @@ class FitSource(DataStructure):
                         tod[ifeed,sb,chan,:] = np.sum(caltod*w[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
                     else:
                         tod[ifeed,sb,chan,:] = caltod
-        return tod
                     
     def fit(self,filename,tod,az,el,mjd,src,features):
         """
