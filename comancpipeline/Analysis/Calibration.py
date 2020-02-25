@@ -616,7 +616,7 @@ class AmbientLoad2Gain(DataStructure):
 
         nSamps = mtod.size
         # Assuming there is a big step we take mid-value
-        midVal = (np.nanmax(mtod)-np.nanmin(mtod))/2.
+        midVal = (np.nanmax(mtod)+np.nanmin(mtod))/2.
 
         # Sort the tod...
         mtodSort = np.sort(mtod)
@@ -633,12 +633,13 @@ class AmbientLoad2Gain(DataStructure):
         hotTod = mtod[(mtodArgsort[groupHot])]
         X =  np.abs((hotTod - np.median(hotTod))/rms) < 1
         if np.sum(X) == 0:
-            raise NoHotError('No cold load data found')
+            raise NoHotError('No hot load data found')
 
         snips = int(np.min(np.where(X)[0])), int(np.max(np.where(X)[0]))
         idHot = (mtodArgsort[groupHot])[X]
 
         coldTod = mtod[(mtodArgsort[groupCold])]
+
 
         X =  np.abs((coldTod - np.median(coldTod))/rms) < 1
         if np.sum(X) == 0:
@@ -647,6 +648,7 @@ class AmbientLoad2Gain(DataStructure):
         snips = int(np.min(np.where(X)[0])), int(np.max(np.where(X)[0]))
         idCold = (mtodArgsort[groupCold])[X]
         idCold = np.sort(idCold)
+
         # Just find cold AFTER calvane
         diffCold = idCold[1:] - idCold[:-1]
         jumps = np.where((diffCold > 50))[0]
@@ -746,10 +748,11 @@ class AmbientLoad2Gain(DataStructure):
                 tod_slice = tod[horn,:,:,start:end]
                 btod_slice = btod[horn,:,start:end]
 
-                try:
-                    idHot, idCold = self.findHotCold(btod_slice[0,:])
-                except (NoHotError, NoColdError):
-                    continue
+
+                #try:
+                idHot, idCold = self.findHotCold(btod_slice[0,:])
+                #except (NoHotError, NoColdError):
+                #    continue
 
                 hotcold = np.zeros(tod_slice.shape[-1])
                 hotcold[idHot] = 2
