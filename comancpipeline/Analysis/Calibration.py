@@ -83,6 +83,21 @@ class CreateLevel2Cont(SourceFitting.FitSource):
         # methods consistent.
         self.average(data.filename,data,alltod, tod)
 
+
+    def __call__(self,data):
+        """
+        Modify baseclass __call__ to change file from the level1 file to the level2 file.
+        """
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        self.run(data)
+        self.write(data)
+
+        # Now change to the level2 file for all future analyses.
+        data.close()
+        data = self.outfile
+
+        return self.outfile
+
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
@@ -92,7 +107,6 @@ class CreateLevel2Cont(SourceFitting.FitSource):
         #lvl2 = outfile.create_group('level2')
         #lvl2.create_dataset('averaged_tod',data=self.downsampled_tod)
         self.outfile['level1'] = h5py.ExternalLink(data.filename,'/')
-        self.outfile.close()
 
 class CoordOffset(DataStructure):
     """

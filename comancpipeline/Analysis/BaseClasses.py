@@ -24,6 +24,8 @@ class DataStructure(object):
         except:
             print('Plotting Failed')
 
+        return data
+
     def run(self,data):
         pass
 
@@ -36,6 +38,18 @@ class DataStructure(object):
     def __str__(self):
         return "Unknown COMAP Reduce Module"
 
+    def featureBits(self,features, target, trim=1000):
+        """
+        Return list of features encoded into feature bit
+        """
+        
+        features[features == 0] = 0.1
+        p2 = np.floor(np.log(features)/np.log(2))
+        
+        select = (p2 == target)
+        a = np.where(select)[0]
+        select[a[:trim]] = False
+        return select
 
 class DummyTest(DataStructure):
     

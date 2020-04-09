@@ -1,5 +1,5 @@
-#from mpi4py import MPI 
-#comm = MPI.COMM_WORLD
+from mpi4py import MPI 
+comm = MPI.COMM_WORLD
 
 import numpy as np
 #from comancpipeline.Tools import *
@@ -25,7 +25,7 @@ def main(parameters,classinfo):
         print('Opening : {}'.format(filename))
         dh5 = h5py.File(filename, 'r')
         for job in jobobjs:
-            job(dh5)
+            dh5 = job(dh5)
         dh5.close()
 
 if __name__ == "__main__": 
