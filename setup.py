@@ -26,10 +26,19 @@ pysla = Extension(name = 'comancpipeline.Tools.pysla',
 ffuncs = Extension(name = 'comancpipeline.Tools.ffuncs', 
                   sources = ['comancpipeline/Tools/ffuncs.f90'])
 
+alglib = Extension('comancpipeline.Tools.alglib_optimize',
+                   ['comancpipeline/Tools/alglib_optimize.pyx'],
+                   library_dirs=["/local/scratch/sharper/etc/lib"],
+                   include_dirs=["."],
+                   language="c++",
+                   extra_compile_args=['-lAlglib','-fopenmp'],
+                   extra_link_args=['-lAlglib','-fopenmp']
+               )
+
 config = {'name':'comancpipeline',
           'version':'0.1dev',
           'packages':['comancpipeline','comancpipeline.Analysis','comancpipeline.Tools'],
-          'ext_modules':cythonize([ffuncs,pysla, filters])}
+          'ext_modules':cythonize([ffuncs,pysla, filters,alglib])}
 
 
 
@@ -39,3 +48,4 @@ setup(**config)
 #    version='0.1dev',
 #    packages=['comancpipeline.Analysis','comancpipeline.Tools'])
 
+ 

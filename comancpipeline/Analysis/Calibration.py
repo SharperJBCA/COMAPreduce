@@ -15,6 +15,8 @@ import pandas as pd
 #from mpi4py import MPI 
 import os
 #comm = MPI.COMM_WORLD
+from astropy.time import Time
+from datetime import datetime
 
 class CreateLevel2Cont(SourceFitting.FitSource):
     """
@@ -602,6 +604,8 @@ class NoColdError(Exception):
     pass
 class NoHotError(Exception):
     pass
+class NoDiodeError(Exception):
+    pass
 
 class AmbientLoad2Gain(DataStructure):
     """
@@ -705,7 +709,10 @@ class AmbientLoad2Gain(DataStructure):
 
 
         # Setup for calculating the calibration factors, interpolate temperatures
-        tHot  = data['hk/antenna0/vane/Tvane'][:]/100. + self.tHotOffset 
+        if mjd[0] < Time(datetime(2019,8,23),format='datetime').mjd:
+            tHot  = data['hk/antenna0/env/ambientLoadTemp'][:]/100. + self.tHotOffset 
+        else:
+            tHot  = data['hk/antenna0/vane/Tvane'][:]/100. + self.tHotOffset 
         hkMJD = data['hk/antenna0/vane/utc'][:]
         tHot = np.nanmean(tHot)
 
@@ -719,7 +726,7 @@ class AmbientLoad2Gain(DataStructure):
 
         if len(justDiodes) == 0:
             self.nodata = True
-            return 
+            raise NoDiodeError('No diode feature found')
         else:
             self.nodata = False
 

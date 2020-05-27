@@ -22,12 +22,16 @@ from functools import partial
 from scipy.signal import medfilt
 import copy 
 
+import h5py
+
 #from mpi4py import MPI 
 #comm = MPI.COMM_WORLD
 
 import os
 
+from comancpipeline.Tools import alglib_optimize
 
+import time
 def doFit(todFit, _x, _y, sbc,bootstrap=False):
     """
     Fitting function within the fit routine, allows for try/excepts
@@ -67,17 +71,6 @@ def doFit(todFit, _x, _y, sbc,bootstrap=False):
 
 
 def fitproc(todFit,x,y):
-    # Parameters for 9 parameter ellipital gaussian beam fit
-    # P0 = [np.max(todFit) - np.median(todFit), # amplitude
-    #       0/60., # az offset
-    #       4./60./2.355, # az sigma
-    #       0/60., # el offset
-    #       9./60./2.355, # el sigma
-    #       50*np.pi/180., # rotation
-    #       np.median(todFit), # offset
-    #       0., # az gradient
-    #       0.] # el gradient
-
     P0 = [np.max(todFit) - np.median(todFit), # amplitude
           0/60., # az offset
           0/60., # el offset
@@ -207,7 +200,8 @@ class FitSource(DataStructure):
     Beam fitting functions.
     """
 
-    def __init__(self, feeds='all', output_dir='', nworkers= 1, average_width=512,calvanedir='AncillaryData/CalVanes',
+    def __init__(self, feeds='all', output_dir='', nworkers= 1,
+                 average_width=512,calvanedir='AncillaryData/CalVanes',
                  x0=0, y0=0, lon=-118.2941, lat=37.2314, filtertod=False):
         """
         nworkers - how many threads to use to parallise the fitting loop
@@ -233,12 +227,32 @@ class FitSource(DataStructure):
     def __str__(self):
         return 'Fitting source'
 
+    def __call__(self,data):
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        allowed_sources = ['jupiter','TauA','CasA','CygA','mars']
+
+        print(data.keys())
+        source = data['level1/comap'].attrs['source'].decode('utf-8').split(',')[0]
+        comment = data['level1/comap'].attrs['comment'].decode('utf-8')
+
+        if not source in allowed_sources:
+            return data
+        if 'Sky nod' in comment:
+            return data
+        if 'test' in comment:
+            return data
+
+        self.run(data)
+        self.write(data)
+
+        return data
+
     def run(self,data):
         # Get data structures we need
-        alltod = data['spectrometer/tod']
-        btod = data['spectrometer/band_average']
+        alltod = data['level2/averaged_tod']
+
         if self.feeds == 'all':
-            feeds = data['spectrometer/feeds'][:]
+            feeds = data['level1/spectrometer/feeds'][:]
         else:
             if not (isinstance(self.feeds,list)) | (isinstance(self.feeds,np.ndarray)):
                 self.feeds = [int(self.feeds)]
@@ -246,27 +260,23 @@ class FitSource(DataStructure):
             else:
                 feeds = [int(f) for f in self.feeds]
 
-        self.feeds = feeds
-        self.feedlist = data['spectrometer/feeds'][:]
+        self.feeds    = feeds
+        self.feedlist = data['level1/spectrometer/feeds'][:]
         self.feeddict = {feedid:feedindex for feedindex, feedid in enumerate(self.feedlist)}
-        mjd = data['spectrometer/MJD'][:]
-        az  = data['spectrometer/pixel_pointing/pixel_az'][:]
-        el  = data['spectrometer/pixel_pointing/pixel_el'][:]
-        src = data['comap'].attrs['source'].decode('ASCII').split(',')
+        mjd = data['level1/spectrometer/MJD'][:]
+        az  = data['level1/spectrometer/pixel_pointing/pixel_az'][:]
+        el  = data['level1/spectrometer/pixel_pointing/pixel_el'][:]
+        src = data['level1/comap'].attrs['source'].decode('ASCII').split(',')
         src = [s for s in src if s in Coordinates.CalibratorList]
-        features = (np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
+        features = (np.log(data['level1/spectrometer/features'][:])/np.log(2)).astype(int)
         filename = data.filename
         # Make sure we are actually using a calibrator scan
         if len(src) == 0:
             return
         self.source = src[0]
         if self.source in Coordinates.CalibratorList:
-            nHorns, nSBs, nChans, nSamples = alltod.shape
-
-            tod = np.zeros((nHorns, nSBs, nChans//self.average_width, nSamples))
-            self.average(filename,data,alltod, tod)
-            
-            self.fit(filename,tod,az,el,mjd,src,features)
+            nHorns, nSBs, nChans, nSamples = alltod.shape            
+            self.fit(filename,alltod,az,el,mjd,src,features)
 
     def average(self,filename,data, alltod, tod):
         """
@@ -339,7 +349,7 @@ class FitSource(DataStructure):
         nHorns, nSBs, nChans, nSamples = tod.shape
 
         # Setup the outputs (we also should store the peak az/el fitted)
-        nParams = 7
+        nParams = 5
         self.Pout = np.zeros((nHorns, nSBs, nChans, nParams))
         self.Perr = np.zeros((nHorns, nSBs, nChans, nParams))
         self.PeakAzEl = np.zeros((nHorns, nSBs, nChans, 2))
@@ -349,17 +359,17 @@ class FitSource(DataStructure):
         print('Get Source position')
         azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
 
-        fig = pyplot.figure(figsize=(24,24))
         for ifeed, feed in enumerate(self.feeds):
+            if feed == 20:
+                continue
             feed_array_index = self.feeddict[feed]
 
 
             # We will need the average TOD for a first guess:
             todAvg = np.nanmean(np.nanmean(tod[ifeed,...],axis=0),axis=0)
-
             # We should probably filter on features too here.
             good = (np.isnan(az[feed_array_index,:]) == False) & (np.isnan(todAvg) == False) & (features == 9)
-
+            todAvg = todAvg[good]
             # First get the relative positions of the telescope with the source
             x, y = Coordinates.Rotate(az[feed_array_index,good],
                                       el[feed_array_index,good],
@@ -368,115 +378,50 @@ class FitSource(DataStructure):
             # If none of the data is good, then continue:
             if all(~good):
                 continue
-            todFitSBChan = np.transpose(tod[ifeed,:,:,good],(1,2,0))
-
-            chans,sbs = np.meshgrid(np.arange(nChans,dtype=int), np.arange(nSBs,dtype=int))
-            sbchan = np.zeros((sbs.size, 2))
-            sbchan[:,0] = sbs.flatten()
-            sbchan[:,1] = chans.flatten()
-            sbchan = sbchan.astype(int)
-
-            # --- func is a partial function containing doFit that takes three arguments
-            # : todFitSBChan[sb,...],x, y, and channel
-            # channel is passed in the parallised loop, while the first three are passed in full
-            # ...yikes D: 
-            #func = partial(doFit, todFitSBChan[:,:,:],x,y)
-            pbar = tqdm(total = sbs.size)
-            
-            # --- Parallelise the fitting procedure for each channel
-            try:
-                #with concurrent.futures.ProcessPoolExecutor(max_workers=self.nworkers) as executor:
-                #    for result, errors, chan,sb in executor.map(func, sbchan, chunksize=sbs.size//self.nworkers):
-
-               # if True: # Uncomment these three lines to remove parallel processing
-                axes = [pyplot.subplot(4,2,i+1) for i in range(8)]
-                r = np.sqrt(x**2 + y**2)
-                close = (r > 5./60.).astype(int)
-                for sb in range(nSBs):    
-                    for chan in range(nChans):
-
-                        todcopy = todFitSBChan[sb,chan,:]*1
-                        filters.running_mean(todFitSBChan[sb,chan,:],close, 100)
-                        #pmdl = np.poly1d(np.polyfit(time[close], todFitSBChan[sb,chan,close],5))
-                        #todFitSBChan -= pmdl(time)
-                        #pyplot.plot(todFitSBChan[sb,chan,:])
-                        #pyplot.show()
-                        #orig,pixcens, w = makemap(todFitSBChan[sb,chan,:],x,y, 
-                        #                          cd=1/60.,nxpix=120,nypix=120)
-                        # pyplot.subplot(221)
-                        # pyplot.imshow(np.reshape(orig,(120,120)))
-                        # pyplot.subplot(222)
-                        # pyplot.imshow(np.reshape(orig1,(120,120)))
-
-                        # Some times all of todFitSBChan can be just nan values,
-                        # skip if that is the case
-                        outputs = doFit( todFitSBChan[sb,chan,:],x,y,[sb,chan])
-                        if isinstance(outputs,type(None)):
-                            # pyplot.subplot(122)
-                            #pyplot.plot(todcopy)#todFitSBChan[sb,chan,:])
-                            #pyplot.show()
-
-                            continue
-                        else:
-                            result, errors, chan, sb = outputs
-                            
-                        pbar.update(1)
-                        self.Perr[ifeed,sb,chan,:] = errors
-                        self.Pout[ifeed,sb,chan,:] = result
-
-                        bestfit = Fitting.Gauss2dSymmetricPlane(self.Pout[ifeed,sb,chan,:],
-                                                                x,y,0,0)
-
-                        if chan == 0:
-                            residual,_, w = makemap(todFitSBChan[sb,chan,:]-bestfit,x,y, cd=1.5/60.,nxpix=120,nypix=120)
-                            orig,_, w = makemap(todFitSBChan[sb,chan,:]-np.nanmedian(todFitSBChan[sb,chan,:]),x,y, 
-                                              cd=1.5/60.,nxpix=120,nypix=120)
-
-                            pyplot.sca(axes[2*sb])
-                            rms = np.nanstd(residual)
-                            pyplot.imshow(np.reshape(residual,(120,120)),vmin=-rms,vmax=rms*2)
-                            pyplot.colorbar()
-                            pyplot.sca(axes[2*sb+1])
-                            pyplot.imshow(np.reshape(orig,(120,120)),vmin=-rms,vmax=rms*2)
-                            pyplot.colorbar()
-
-                        #pyplot.show()
-                        # print(result)
-                        # print(errors)
-                        # pyplot.subplot(211)
-                        # pyplot.plot(tod[0,sb,chan,good])
-                        # pyplot.grid()
-                        # pyplot.subplot(212)
-                        # pyplot.plot(todFitSBChan[sb,chan,:])
-                        # pyplot.plot(bestfit)
-                        # pyplot.grid()
-                        # pyplot.show()
-
-                        select = np.where(good)[0]
-                        peakAz, peakEl, peakMJD = az[feed_array_index,np.argmax(bestfit)],\
-                                                  el[feed_array_index,np.argmax(bestfit)],\
-                                                mjd[np.argmax(bestfit)]
-                        azsource = azSource[good]
-                        elsource = elSource[good]
-                        peakAz, peakEl = Coordinates.UnRotate(np.ones(azsource.shape)*result[1],
-                                                              np.ones(azsource.shape)*result[3], 
-                                                              -azsource, -elsource, 0)
+            todFitSBChan = tod[ifeed,:,:,good]#,(1,2,0))
                         
-                        # Calculate the peak Ra/Dec coordinates in J2000
-                        
-                        peakRa, peakDec = Coordinates.h2e(peakAz, peakEl, mjd[good], self.lon,self.lat)
-                        dRa, dDec = Coordinates.Rotate(peakRa, peakDec,
-                                                       raSource[good], 
-                                                       decSource[good], 0)
+            r = np.sqrt(x**2 + y**2)
+            close = (r < 1)
 
-                        self.PeakAzEl[ifeed,sb,chan,:]= peakAz[np.argmax(bestfit)], peakEl[np.argmax(bestfit)]
-                        self.PeakRaDec[ifeed,sb,chan,:]= dRa[np.argmax(bestfit)],dDec[np.argmax(bestfit)],mjd[select[np.argmax(bestfit)]]
 
-                pbar.close()
-                pyplot.savefig('AncillaryData/SourceFitsHiRes/Plots/Residuals_feed{:02d}_{}.png'.format(feed,obsid),bbox_inches='tight')
-                pyplot.clf()
-            except IOError:
-                print('Something went wrong, skipping')
+            todFitSBChanFlat = np.reshape(todFitSBChan, (todFitSBChan.shape[0]*todFitSBChan.shape[1],
+                                                         todFitSBChan.shape[2]))
+
+            # Avoid channels where there is no data:
+            gdchans = np.where((np.sum(np.abs(todFitSBChanFlat),axis=1) > 0 ))[0]
+
+            # Estimate the weights for the data... uniform for now
+            weights = np.ones(todFitSBChan.shape[-1]).astype(np.float64)
+
+            # Get initial parameters from a mean filtered TOD of one good channel:
+            test = np.array(alglib_optimize.mean_filt(todFitSBChanFlat[gdchans[0],:].astype(np.float64),
+                                                      np.int32(150)))
+            amax = np.argmax(test)
+            # Starting parameters (we filter the TOD internally, hence 0 offset):
+            pstart = np.array([np.max(test),x[amax],5./60./2.355,y[amax],0]).astype(np.float64)
+
+            # Define a container for the output parameters and errors:
+            params = np.zeros((todFitSBChan.shape[0]*todFitSBChan.shape[1],nParams)).astype(np.float64)
+            e = params*0.
+
+            # Run the fitting routine:
+            t0 = time.time()
+            params[gdchans,:],e[gdchans,:] = np.array(alglib_optimize.main(x[close].astype(np.float64),
+                                                                           y[close].astype(np.float64),
+                                                                           (todFitSBChanFlat[gdchans,:])[:,close].astype(np.float64),
+                                                                           weights[close],
+                                                                           pstart,
+                                                                           np.int32(150),np.int32(1000),
+                                                                           np.float64(1e-6),np.float64(1e-6)))
+            t1 = time.time()
+            print('Fit run time: {:.2f} seconds'.format(t1-t0))
+            self.Pout[ifeed,...] = np.reshape(params,(todFitSBChan.shape[0],todFitSBChan.shape[1],nParams))
+            self.Perr[ifeed,...] = np.reshape(e,(todFitSBChan.shape[0],todFitSBChan.shape[1],nParams))
+
+        print('...Fitting Complete...')
+        # self.PeakAzEl[ifeed,sb,chan,:]= peakAz[np.argmax(bestfit)], peakEl[np.argmax(bestfit)]
+        # self.PeakRaDec[ifeed,sb,chan,:]= dRa[np.argmax(bestfit)],
+        #dDec[np.argmax(bestfit)],mjd[select[np.argmax(bestfit)]]
                     
 
         
@@ -484,17 +429,14 @@ class FitSource(DataStructure):
         """
         Write the Tsys, Gain and RMS to a pandas data frame for each hdf5 file.
         """        
-        nHorns, nSBs, nChan, nSamps = data['spectrometer/tod'].shape
-        nHorns = len(self.feeds)
-        nChan = int(nChan//self.average_width) # need to capture the fact the data is averaged
-        nParams = 7
+        nHorns, nSBs, nChan, nParams = self.Pout.shape
 
         if not hasattr(self,'Pout'):
             return 
         # Structure:
         #                                    Frequency (GHz)
         # Date, DeltaT, Mode, Horn, SideBand     
-        freq = data['spectrometer/frequency'][...]
+        freq = data['level1/spectrometer/frequency'][...]
         startDate = Types.Filename2DateTime(data.filename)
 
         # Reorder the data
@@ -508,13 +450,12 @@ class FitSource(DataStructure):
         index = pd.MultiIndex.from_product(iterables, names=names)
 
         colnames = ['Amplitude','dAz','sig_az','dEl','sig_el','angle','offset','gradaz','gradel']
-        colnames = ['Amplitude','dAz','dEl','sig','offset','gradaz','gradel']
+        colnames = ['Amplitude','dAz','sig','dEl','offset']
         addnames = ['Az','El']
         radecnames=['dRA','dDEC','MJD']
         df = pd.DataFrame(index=index, columns=colnames+addnames+radecnames)
         idx = pd.IndexSlice
 
-        print(df.loc[idx[:,:,'Fits',:,:,:],colnames].shape, np.reshape(self.Pout, (nHorns*nSBs*nChan,nParams)).shape)
         df.loc[idx[:,:,'Fits',:,:,:],colnames]   = np.reshape(self.Pout, (nHorns*nSBs*nChan,nParams))
         df.loc[idx[:,:,'Errors',:,:,:],colnames] = np.reshape(self.Perr, (nHorns*nSBs*nChan,nParams))
         df.loc[idx[:,:,'Fits',:,:,:],addnames]  = np.reshape(self.PeakAzEl, (nHorns*nSBs*nChan,2))
@@ -522,6 +463,7 @@ class FitSource(DataStructure):
 
         df = df.infer_objects() # convert to floats
         prefix = data.filename.split('/')[-1].split('.hd5')[0]
+        print('{}/{}_SourceFits.pkl'.format(self.output_dir,prefix))
         df.to_pickle('{}/{}_SourceFits.pkl'.format(self.output_dir,prefix))
 
     def plot(self,data):

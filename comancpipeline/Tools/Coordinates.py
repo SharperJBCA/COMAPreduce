@@ -11,6 +11,8 @@ CalibratorList = {
     'jupiter': None,
     'sun':None
 }
+comap_longitude = -(118 + 16./60. + 56./60.**2)
+comap_latitude  =   37.0 + 14./60. + 2/60.**2
 
 def RotatePhi(skyVec, objRa):
     outVec = skyVec*0.

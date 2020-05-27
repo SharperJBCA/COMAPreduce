@@ -8,7 +8,11 @@ import datetime
 
 def Filename2DateTime(filename):
     filename  = filename.split('/')[-1]
-    date = datetime.datetime.strptime(filename[14:-4],DateFmt)
+    try:
+        date = datetime.datetime.strptime(filename[14:-4],DateFmt)
+    except:
+        date = datetime.datetime.strptime(filename[14:-4],DateFmt+'_Level2Cont')
+
     return date
 
 def DateTime2Filename(date, obsID=0):
