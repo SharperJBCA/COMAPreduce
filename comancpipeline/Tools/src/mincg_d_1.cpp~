@@ -1,0 +1,106 @@
+#include "stdafx.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+#include "interpolation.h"
+
+using namespace alglib;
+void function_cx_1_func(const real_1d_array &c, const real_1d_array &x, double &func, void *ptr) 
+{
+    // this callback calculates f(c,x)=exp(-c0*sqr(x0))
+    // where x is a position on X-axis and c is adjustable parameter
+    func = exp(-c[0]*pow(x[0],2));
+}
+
+void run_fit(double ix[], double iy[], double iw[], double ic[],
+	     int maxits=0, 
+	     double epsx=0.000001, 
+	     double diffstep = 0.0001)
+{
+    ae_int_t info;
+    lsfitstate state;
+    lsfitreport rep;
+
+    int array_size = sizeof(ix)/sizeof(*ix);
+    real_2d_array x;
+    x.setcontent(array_size,1, ix);
+    real_1d_array y;
+    y.setcontent(array_size, iy);
+    real_1d_array w;
+    w.setcontent(array_size, iw);
+    real_1d_array c;
+    c.setcontent(array_size, ic);
+
+
+    lsfitcreatewf(x, y, w, c, diffstep, state);
+    lsfitsetcond(state, epsx, maxits);
+    alglib::lsfitfit(state, function_cx_1_func);
+    lsfitresults(state, info, c, rep);
+    printf("%d\n", int(info)); // EXPECTED: 2
+    printf("%s\n", c.tostring(1).c_str()); // EXPECTED: [1.5]
+
+}
+
+int main(int argc, char **argv)
+{
+    //
+    // In this example we demonstrate exponential fitting
+    // by f(x) = exp(-c*x^2)
+    // using function value only.
+    //
+    // Gradient is estimated using combination of numerical differences
+    // and secant updates. diffstep variable stores differentiation step 
+    // (we have to tell algorithm what step to use).
+    //
+
+  double x[] = {-1,-0.8,-0.6,-0.4,-0.2,0,0.2,0.4,0.6,0.8,1.0};
+  double y[] = {0.223130, 0.382893, 0.582748, 0.786628, 0.941765, 1.000000, 0.941765, 0.786628, 0.582748, 0.382893, 0.223130};
+  double w[] = {1,1,1,1,1,1,1,1,1,1,1};
+  double c[] = {0.3};
+  run_fit(x,y,w,c);
+}
+//     real_1d_array x1 = "[-1,-0.8,-0.6,-0.4,-0.2,0,0.2,0.4,0.6,0.8,1.0]";
+//     std::cout << x1.length() << std::endl;
+//     real_2d_array x;// = "[[-1],[-0.8],[-0.6],[-0.4],[-0.2],[0],[0.2],[0.4],[0.6],[0.8],[1.0]]";
+//     x.setcontent(x1.length(),1,x1.getcontent());
+//     std::cout << x.rows()  << " " << x.cols() << std::endl;
+//     std::cout << x(0,0) << std::endl;
+//     //for (int i=0; i < x1.length(); 1){
+//     //  x[0][i] = x1[i];
+//     //}
+//     real_1d_array y = "[0.223130, 0.382893, 0.582748, 0.786628, 0.941765, 1.000000, 0.941765, 0.786628, 0.582748, 0.382893, 0.223130]";
+    
+//     real_1d_array c = "[0.3]";
+//     double epsx = 0.000001;
+//     ae_int_t maxits = 0;
+//     ae_int_t info;
+//     lsfitstate state;
+//     lsfitreport rep;
+//     double diffstep = 0.0001;
+
+//     //
+//     // Fitting without weights
+//     //
+
+//     std::cout << y.length() << std::endl;
+
+//     lsfitcreatef(x, y, c, diffstep, state);
+//     lsfitsetcond(state, epsx, maxits);
+//     alglib::lsfitfit(state, function_cx_1_func);
+//     lsfitresults(state, info, c, rep);
+//     printf("%d\n", int(info)); // EXPECTED: 2
+//     printf("%s\n", c.tostring(1).c_str()); // EXPECTED: [1.5]
+
+//     //
+//     // Fitting with weights
+//     // (you can change weights and see how it changes result)
+//     //
+//     real_1d_array w = "[1,1,1,1,1,1,1,1,1,1,1]";
+//     lsfitcreatewf(x, y, w, c, diffstep, state);
+//     lsfitsetcond(state, epsx, maxits);
+//     alglib::lsfitfit(state, function_cx_1_func);
+//     lsfitresults(state, info, c, rep);
+//     printf("%d\n", int(info)); // EXPECTED: 2
+//     printf("%s\n", c.tostring(1).c_str()); // EXPECTED: [1.5]
+//     return 0;
+// }
