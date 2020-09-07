@@ -160,7 +160,7 @@ subroutine e2h(ra, dec, mjd, lon, lat, az, el,lha, len_bn)
   end interface
 
 
-  !f2py integer len_bn
+  !f2pye2h integer len_bn
   !f2py real*8 lon, lat
   !f2py real*8 az,el,mjd
 
@@ -170,7 +170,6 @@ subroutine e2h(ra, dec, mjd, lon, lat, az, el,lha, len_bn)
   do i=1, len_bn
      gmst = sla_gmst(mjd(i))
      lha(i) = lon + gmst - ra(i) ! CONVERT TO LHA
-
      call sla_de2h(lha(i), dec(i), lat, az(i), el(i))
   enddo    
 

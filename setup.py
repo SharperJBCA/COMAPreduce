@@ -35,6 +35,11 @@ alglib = Extension('comancpipeline.Tools.alglib_optimize',
                    extra_link_args=['-lAlglib','-fopenmp']
                )
 
+
+filters = Extension(name = 'comancpipeline.Tools.median_filter.medfilt', 
+                    include_dirs=[np.get_include()],
+                    sources = ['comancpipeline/Tools/median_filter/medfilt.pyx'])
+
 config = {'name':'comancpipeline',
           'version':'0.1dev',
           'packages':['comancpipeline','comancpipeline.Analysis','comancpipeline.Tools'],

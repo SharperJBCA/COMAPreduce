@@ -719,6 +719,10 @@ class AmbientLoad2Gain(DataStructure):
         # Need to count how many calvane events occur, look for features 2**13
         if mjd[0] > 58648: # The cal vane feature bit can be trusted after 14 June 2019
             features = np.floor(np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
+            #pyplot.plot(data['spectrometer/features'][:])
+            #print(data['spectrometer'].keys())
+            #pyplot.plot(data['spectrometer/band_average'][0,0,:])
+            #pyplot.show()
             justDiodes = np.where((features == 13))[0]
         else: # Must use cal vane angle to calculate the diode positions
             angles = np.interp(mjd,hkMJD, data['hk/antenna0/vane/angle'][:])
@@ -726,6 +730,19 @@ class AmbientLoad2Gain(DataStructure):
 
         if len(justDiodes) == 0:
             self.nodata = True
+            fout = open('badfiles_{}.list'.format(os.getpid()),'a')
+            fout.write('{}\n'.format(data.filename))
+            fout.close()
+            pyplot.plot(data['spectrometer/band_average'][0,0,:],'-')
+            pyplot.xlabel('sample')
+            pyplot.title(data.filename)
+            pyplot.ylabel('RU')
+            pyplot.grid()
+            obsid = data.filename.split('/')[-1].split('.h')[0]
+            pyplot.savefig('bad_data/plots/{}.png'.format(obsid))
+            pyplot.clf()
+            fig = pyplot.gcf()
+            pyplot.close(fig)
             raise NoDiodeError('No diode feature found')
         else:
             self.nodata = False

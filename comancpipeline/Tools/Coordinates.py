@@ -9,7 +9,8 @@ CalibratorList = {
     'CasA': [(23 + 23./60. + 24./60.**2)*15, 58 + 48/60. + 54./60.**2],
     'CygA': [(19. + 59/60. + 28.356/60.**2)*15, 40 + 44./60. + 2.097/60.**2],
     'jupiter': None,
-    'sun':None
+    'sun':None,
+    'moon':None
 }
 comap_longitude = -(118 + 16./60. + 56./60.**2)
 comap_latitude  =   37.0 + 14./60. + 2/60.**2
@@ -79,6 +80,20 @@ def UnRotate(ra, dec, r0, d0, p0):
     _ra[_ra > 360] -= 360.
     _ra[_ra < 0] += 360.
     return _ra, _dec
+
+def AngularSeperation(phi0,theta0,phi1,theta1, degrees=True):
+    """
+    phi - longitude parameters
+    theta- latitude parameters
+    """    
+    if degrees:
+        c = np.pi/180.
+    else:
+        c = 1.
+
+    mid = np.sin(theta0*c)*np.sin(theta1*c) + np.cos(theta0*c)*np.cos(theta1*c)*np.cos((phi1-phi0)*c)
+    
+    return np.arccos(mid)/c
 
 
 def rdplan(mjd, planet, lon, lat, degrees=True):
@@ -153,6 +168,8 @@ def getPlanetPosition(source, lon, lat, mjdtod, allpos=False):
 
     if 'JUPITER' in source.upper():
         pid = 5
+    elif 'MOON' in source.upper():
+        pid = 3
     else:
         pid = 0
 
@@ -180,11 +197,17 @@ def sourcePosition(src, mjd, lon, lat):
         # we must have Sun/Jupiter
         #_mjd = mjd[::10]
         #_mjd[-1] = mjd[-1]
-        r0, d0, dist = getPlanetPosition(src, lon, lat, mjd, allpos=True)
+        time_step = np.abs(mjd[1]-mjd[0])*24*3600.
+        target_step = 5.*60. # just check the position every 5 minutes
+        if time_step < target_step:
+            index_step = int(target_step//time_step)
+        else:
+            index_step = 1
+        r0, d0, dist = getPlanetPosition(src, lon, lat, mjd[::index_step], allpos=True)
         r0 *= 180./np.pi
         d0 *= 180./np.pi
-        #r0 = np.interp(mjd,_mjd,r0)
-        #d0 = np.interp(mjd,_mjd,d0)
+        r0 = np.interp(mjd,mjd[::index_step],r0)
+        d0 = np.interp(mjd,mjd[::index_step],d0)
     else:
         r0, d0 = mjd*0 + skypos[0], mjd*0 + skypos[1]
         r0, d0 = precess2year(r0,d0,mjd)
