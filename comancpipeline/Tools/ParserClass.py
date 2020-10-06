@@ -64,6 +64,7 @@ class Parser(object):
                         self.parameters[thisHeader] = {}
                 else:
                     #Now fill the headers
+                    keyword,value = None, None
                     for _delim in self.delims:
                         try:
                             splits = line_nocomments.split(_delim)
@@ -81,6 +82,9 @@ class Parser(object):
                         except ValueError:
                             print('Failed', keyword,value)
                             continue
+
+                    if isinstance(keyword, type(None)) and isinstance(value, type(None)):
+                        continue # skip to next line
                     
                     if isinstance(value,list):
                         value = '{}'.format(delim).join(value)

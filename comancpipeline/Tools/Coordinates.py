@@ -15,6 +15,18 @@ CalibratorList = {
 comap_longitude = -(118 + 16./60. + 56./60.**2)
 comap_latitude  =   37.0 + 14./60. + 2/60.**2
 
+def sex2deg(dms,hours=False):
+
+    d,m,s = dms.split(':')
+    sign = float(d)/np.abs(float(d))
+
+    out = np.abs(float(d)) + float(m)/60. + float(s)/60.**2
+    out *= sign
+    if hours:
+        return out*15.
+    else:
+        return out
+
 def RotatePhi(skyVec, objRa):
     outVec = skyVec*0.
     # Rotate first RA

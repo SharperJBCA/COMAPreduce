@@ -40,10 +40,15 @@ filters = Extension(name = 'comancpipeline.Tools.median_filter.medfilt',
                     include_dirs=[np.get_include()],
                     sources = ['comancpipeline/Tools/median_filter/medfilt.pyx'])
 
+binFuncs = Extension(name='comancpipeline.Tools.binFuncs',
+                     include_dirs=[np.get_include()],
+                     sources=['comancpipeline/Tools/binFuncs.pyx'])
+
+
 config = {'name':'comancpipeline',
           'version':'0.1dev',
-          'packages':['comancpipeline','comancpipeline.Analysis','comancpipeline.Tools'],
-          'ext_modules':cythonize([ffuncs,pysla, filters,alglib])}
+          'packages':['comancpipeline','comancpipeline.Analysis','comancpipeline.Tools','comancpipeline.MapMaking'],
+          'ext_modules':cythonize([ffuncs,pysla, filters,alglib,binFuncs])}
 
 
 
