@@ -2,7 +2,7 @@ import concurrent.futures
 
 import numpy as np
 from comancpipeline.Analysis.BaseClasses import DataStructure
-from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, filters
+from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs
 from scipy.optimize import fmin, leastsq
 from scipy.interpolate import interp1d
 from scipy.ndimage.filters import median_filter

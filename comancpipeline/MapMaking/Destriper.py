@@ -52,7 +52,7 @@ def DestriperHPX(parameters, data):
 
     return offsetMap, offsets
 
-def CGM(data, offsets, offsetMap, niter=400):
+def CGM(data, offsets, offsetMap, niter=400,verbose=False):
     """
     Conj. Gradient Inversion
     """
@@ -62,13 +62,11 @@ def CGM(data, offsets, offsetMap, niter=400):
     Ax = Types.Offsets(offsets.offset, offsets.Noffsets, offsets.Nsamples)
     b  = data.residual
     counts = offsets.offsets*0.
-    pcounts= offsets.offsets*0. # for storing Npix**4 per offset
 
     b.average()
     Ax.average()
 
     # Estimate initial residual
-    pcounts *= 0
     binFuncs.EstimateResidualSimplePrior(Ax.offsets, # Holds the weighted residuals
                                           counts,
                                           offsets.offsets, # holds the target offsets
@@ -77,17 +75,13 @@ def CGM(data, offsets, offsetMap, niter=400):
                                           offsetMap.output, # Map to store the offsets in (initially all zero)
                                           offsets.offsetpixels, # Maps offsets to TOD position
                                           data.pixels)
-                                     #     data.hits.sigwei,
-                                      #    pcounts) # Maps pixels to TOD position
     
+    if verbose:
+        print('Diag counts:',np.min(counts))
 
-    print('Diag counts:',np.min(counts))
-
-
-    #Ax.offsets = Ax.offsets/counts #* offsets.offset
     # -- Calculate the initial residual and direction vectors
-    #b.sigwei *= offsets.offset
-    print('Diags b.sigwei, Ax.offsets:', np.sum(b.sigwei), np.sum(Ax.offsets))
+    if verbose:
+        print('Diags b.sigwei, Ax.offsets:', np.sum(b.sigwei), np.sum(Ax.offsets))
 
     residual = b.sigwei - Ax.offsets
     direction= b.sigwei - Ax.offsets
@@ -99,7 +93,8 @@ def CGM(data, offsets, offsetMap, niter=400):
     dnew    = np.sum(residual**2)
     alpha   = 0
 
-    print('Diags thresh0:', thresh0)
+    if verbose:
+        print('Diags thresh0:', thresh0)
     #offsets.offsets = data.residual.offsets 
     lastoffset = 0
     newVals = np.zeros(niter)
@@ -108,6 +103,7 @@ def CGM(data, offsets, offsetMap, niter=400):
     if np.isnan(np.sum(b.sigwei)):
         return
 
+    # CGM loop
     for i in range(niter):
         # -- Calculate conjugate search vector Ad
         lastoffset = Ax.offsets*1.
@@ -121,7 +117,6 @@ def CGM(data, offsets, offsetMap, niter=400):
                              data.pixels)
         offsetMap.average()
 
-        pcounts *= 0
         binFuncs.EstimateResidualSimplePrior(Ax.offsets,
                                              counts,
                                              direction,
@@ -129,8 +124,6 @@ def CGM(data, offsets, offsetMap, niter=400):
                                              offsetMap.output,
                                              offsets.offsetpixels,
                                              data.pixels)
-                                             #data.hits.sigwei,
-                                            # pcounts)
 
                          
         
@@ -158,7 +151,6 @@ def CGM(data, offsets, offsetMap, niter=400):
             Ax.offsets *= 0
             counts = offsets.offsets*0.
 
-            pcounts *= 0
             binFuncs.EstimateResidualSimplePrior(Ax.offsets, # Holds the weighted residuals
                                                  counts,
                                                  offsets.offsets, # holds the target offsets
@@ -167,8 +159,6 @@ def CGM(data, offsets, offsetMap, niter=400):
                                                  offsetMap.output, # Map to store the offsets in (initially all zero)
                                                  offsets.offsetpixels, # Maps offsets to TOD position
                                                  data.pixels)
-                                                #  data.hits.sigwei,
-                                                #  pcounts) # Maps pixels to TOD position
 
             residual = b.sigwei - Ax.offsets
         else:

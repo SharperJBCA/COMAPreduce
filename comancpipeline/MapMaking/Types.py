@@ -864,8 +864,6 @@ class DataLevel2AverageHPX(Data):
 
         weights = np.ones(tod.shape)
         t = np.arange(tod.shape[-1])
-        l0,b0=076.18987441564, +05.75538794195 # CygA
-        lb0 = np.array([np.ones(t.size)*b0,np.ones(t.size)*l0]).T
 
         
         for j, feed in enumerate(self.FeedIndex):
