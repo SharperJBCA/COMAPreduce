@@ -372,13 +372,16 @@ class SkyDipStats(DataStructure):
     Takes level 1 skydip files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self, nbins=50, samplerate=50):
+    def __init__(self, nbins=50, samplerate=50, min_elevation=0,max_elevation=90):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
         """
         self.nbins = 50
         self.samplerate=50
+
+        self.min_elevation = min_elevation
+        self.max_elevation = max_elevation
 
     def run(self, data):
         """
@@ -407,22 +410,18 @@ class SkyDipStats(DataStructure):
             if feeds[ifeed] == 20:
                 continue
 
-            else:
-                for iband in range(nBands):
+            elevation_select = (el[ifeed,:] >= self.min_elevation) & (el[ifeed,:] < self.max_elevation)
+            for iband in range(nBands):
 
-                    for ichan in range(nChannels):
-                        atmos,atmos_errs = self.FitAtmos(np.nanmean(tod[ifeed,iband,ichan,:],axis=0),
-                                                                             el[ifeed,:])
-
-                        self.atmos[ifeed,iband,ichan]      = atmos
-                        self.atmos_errs[ifeed,iband,ichan] = np.sqrt(np.diag(atmos_errs))
-
-                        temp = tod[ifeed,iband,ichan,:] - model(tod[ifeed,iband,ichan,:],atmos[0],atmos[1])
-                        temp -= np.nanmedian(temp)
-
-                        ps, nu, f_fits, w_auto = self.FitPowerSpectrum(temp)
-
-                        pbar.update(1)
+                for ichan in range(nChannels):
+                    atmos,atmos_errs = self.FitAtmos(tod[ifeed,iband,ichan,elevation_select],
+                                                     el[ifeed,elevation_select])
+                    
+                    self.atmos[ifeed,iband,ichan]      = atmos
+                    self.atmos_errs[ifeed,iband,ichan] = np.sqrt(np.diag(atmos_errs))
+                    
+                    
+                    pbar.update(1)
 
         #for ifeed in range(nFeeds):
         #    pyplot.errorbar(np.arange(nScans),self.atmos[ifeed,0,:,1],fmt='.',yerr=self.atmos_errs[ifeed,0,:,1])
@@ -469,7 +468,7 @@ class SkyDipStats(DataStructure):
             sel = np.random.uniform(low=0,high=dlength,size=dlength).astype(int)
 
             try:
-                popt, pcov = curve_fit(model, cosec_el, tod)
+                popt, pcov = curve_fit(model, cosec_el[sel], tod[sel])
                 a_all[a_iter,:] = popt
             except:
                 a_all[a_iter,:] = np.nan
