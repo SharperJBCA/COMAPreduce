@@ -398,12 +398,11 @@ class SkyDipStats(DataStructure):
 
         # Looping over Feed - Band - Channel, perform 1/f noise fit
         nFeeds, nBands, nChannels, nSamples = tod.shape
-        nScans = len(scan_edges)
 
-        self.atmos = np.zeros((nFeeds, nBands, nChan, 2))
-        self.atmos_errs = np.zeros((nFeeds, nBands, nChans 2))
+        self.atmos = np.zeros((nFeeds, nBands, nChannels, 2))
+        self.atmos_errs = np.zeros((nFeeds, nBands, nChannels, 2))
 
-        pbar = tqdm(total=((nFeeds-1)*nBands*nChannels*nScans))
+        pbar = tqdm(total=((nFeeds-1)*nBands*nChannels))
 
         import time
         for ifeed in range(nFeeds):
@@ -435,11 +434,13 @@ class SkyDipStats(DataStructure):
         # Ensure that file is a skydip observation
         allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)]
         source = data['level1/comap'].attrs['source'].decode('utf-8')
-        t_len = data['level1/comap'][:].shape[-1]
+        t_len = int(data['level1/comap'].attrs['nint'])
+        comment = data['level1/comap'].attrs['comment'].decode('utf-8')
+
         print('SOURCE', source)
         if not source in allowed_sources:
             return data
-        if t_len >= 50*60*10:
+        if not 'Sky nod' in comment:
             return data
 
         # Want to ensure the data file is read/write
