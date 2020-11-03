@@ -62,16 +62,28 @@ def level1_destripe(filename,options):
     filelist = np.loadtxt(parameters['Inputs']['filelist'],dtype=str,ndmin=1)
 
     nside = int(parameters['Inputs']['nside'])
-    data = DataLevel2AverageHPX(filelist,parameters,nside=nside,keeptod=False,subtract_sky=False)
+    data = DataLevel2AverageHPX(filelist,parameters,nside=nside,keeptod=True,subtract_sky=False)
     
     offsetMap, offsets = DestriperHPX(parameters, data)
 
+    ###
+    # Write out the offsets
+    ###
+
+    # ????
+
+    ###
+    # Write out the maps
+    ###
     naive = data.naive()
     offmap= offsetMap()
     hits = data.hits.return_hpx_hits()
+    variance = data.naive.return_hpx_variance()
+
     des = naive-offmap
     des[des == 0] = hp.UNSEEN
     naive[naive == 0] = hp.UNSEEN
+    variance[variance == 0] = hp.UNSEEN
     offmap[offmap==0] = hp.UNSEEN
     hits[hits == 0] = hp.UNSEEN
     clean_map = naive-offmap
@@ -86,7 +98,7 @@ def level1_destripe(filename,options):
         map_dir = '.'
 
     
-    hp.write_map('{}/{}_{}-{}.fits'.format(map_dir,title,upperFrequency,lowerFrequency), [clean_map, naive, offmap,hits],overwrite=True,partial=True)
+    hp.write_map('{}/{}_{}-{}.fits'.format(map_dir,title,upperFrequency,lowerFrequency), [clean_map, variance, naive, offmap,hits],overwrite=True,partial=True)
 
     feedstrs = [str(v) for v in parameters['Inputs']['feeds']]
 

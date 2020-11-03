@@ -7,8 +7,9 @@ import pandas as pd
 from scipy import linalg as la
 import healpy as hp
 from comancpipeline.Tools.median_filter import medfilt
+from comancpipeline.Tools import  binFuncs, stats
 
-from comancpipeline.Tools import binFuncs, stats
+from comancpipeline.Analysis import Statistics
 from scipy import signal
 
 import time
@@ -495,9 +496,8 @@ class DataLevel2AverageHPX(Data):
 
 
         # Will define Nsamples, datasizes[], and chunks[[]]
-        for filename in filelist:
+        for filename in tqdm(filelist):
             self.countDataSize(filename)
-
         self.pixels = np.zeros(self.Nsamples,dtype=int)
 
         # If we want to keep all the TOD samples for plotting purposes...
@@ -543,12 +543,12 @@ class DataLevel2AverageHPX(Data):
         except:
             print(filename)
             return 
-        features = d['level1/spectrometer/features'][:]
-        self.selectData(features.astype(float), self.ifeature,d)
-        N = len(features[self.select_mask])
-        d.close()
 
-        N = (N//self.offsetLen) * self.offsetLen
+        N = 0
+        scan_edges = d['level2/Statistics/scan_edges'][:]
+        for (start,end) in scan_edges:
+            N += (end-start)//self.offsetLen * self.offsetLen
+        d.close()
 
         N = N*self.Nfeeds
 
@@ -567,37 +567,13 @@ class DataLevel2AverageHPX(Data):
         x  = x[:,0:self.datasizes[i]].flatten()
         y  = d['level1/spectrometer/pixel_pointing/pixel_dec'][feedindex,:][:,self.select_mask]
         y  = y[:,0:self.datasizes[i]].flatten()
+            
         # convert to Galactic
         rot = hp.rotator.Rotator(coord=['C','G'])
         gb, gl = rot((90-y)*np.pi/180., x*np.pi/180.)
 
         pixels = hp.ang2pix(self.nside, gb, gl)
         return pixels
-
-    def filter_atmosphere(self,tod,el,niter=100):
-        pmdl = np.zeros((niter,2))
-        A = 1./np.sin(el*np.pi/180.)
-        
-        nbins = 30
-        edges = np.linspace(np.min(A), np.max(A), nbins+1)
-        mids  = (edges[1:]+edges[:-1])/2.
-        tod_bin = np.histogram(A, edges,weights=tod)[0]/np.histogram(A,edges)[0]
-        gd = np.isfinite(tod_bin)
-        tod_bin = tod_bin[gd]
-        mids = mids[gd]
-
-        for i in range(niter):
-            sel = np.random.uniform(low=0,high=tod_bin.size,size=tod_bin.size).astype(int)
-            pmdl[i,:] = np.polyfit(mids[sel], tod_bin[sel],1)
-            
-        xmean, xrms = np.nanmedian(pmdl,axis=0), np.nanstd(pmdl,axis=0)
-        pmdl = np.poly1d(xmean)
-        return pmdl(A), xmean, xrms
-
-    def filter_direction(self,tod,x):
-        pmdl = np.poly1d(np.polyfit(x, tod,1))
-        tod -= pmdl(x)
-        return tod
 
     def getTOD(self,i,d):
         """
@@ -609,213 +585,70 @@ class DataLevel2AverageHPX(Data):
 
         tod_shape = d['level2/averaged_tod'].shape
         dset = d['level2/averaged_tod']
-        tod_in = np.zeros((tod_shape[1],tod_shape[2],tod_shape[3]),dtype=d['level2/averaged_tod'].dtype)
-        az_in  = np.zeros((tod_shape[3]),dtype=d['level2/averaged_tod'].dtype)
-        el_in  = np.zeros((tod_shape[3]),dtype=d['level2/averaged_tod'].dtype)
-
-        if self.subtract_sky:
-            gl = np.zeros((tod_shape[3]),dtype=d['level2/averaged_tod'].dtype)
-            gb = np.zeros((tod_shape[3]),dtype=d['level2/averaged_tod'].dtype)
+        tod_in = np.zeros((tod_shape[1],tod_shape[2],tod_shape[3]),dtype=dset.dtype)
+        az = np.zeros((tod_shape[3]),dtype=dset.dtype)
+        el = np.zeros((tod_shape[3]),dtype=dset.dtype)
 
         feeds = d['level1/spectrometer/feeds'][:]
+        scan_edges = d['level2/Statistics/scan_edges'][...]
 
         todall = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
-        badall = np.zeros((len(self.FeedIndex), self.datasizes[i]), dtype='bool') 
+        weights = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
 
+        # Read in data from each feed
         for index, ifeed in enumerate(self.FeedIndex[:]):
 
             dset.read_direct(tod_in,np.s_[ifeed:ifeed+1,:,:,:])
-            tod = tod_in[...,self.select_mask]
+            d['level1/spectrometer/pixel_pointing/pixel_az'].read_direct(az,np.s_[ifeed:ifeed+1,:])
+            d['level1/spectrometer/pixel_pointing/pixel_el'].read_direct(el,np.s_[ifeed:ifeed+1,:])
+
+            # Statistics for this feed
+            medfilt_coefficient = d['level2/Statistics/filter_coefficients'][ifeed,...]
+            atmos = d['level2/Statistics/atmos'][ifeed,...]
+            atmos_coefficient = d['level2/Statistics/atmos_coefficients'][ifeed,...]
+            wnoise_auto = d['level2/Statistics/wnoise_auto'][ifeed,...]
+
+            # then the data for each scan
+            last = 0
+            for iscan,(start,end) in enumerate(scan_edges):
+                median_filter = d['level2/Statistics/FilterTod_Scan{:02d}'.format(iscan)][ifeed,...]
+                N = int((end-start)//self.offsetLen * self.offsetLen)
+                end = start+N
+                tod = tod_in[...,start:end]
+
+                # Subtract atmospheric fluctuations per channel
+                for iband in range(4):
+                    for ichannel in range(64):
+                        if self.channelmask[ifeed,iband,ichannel] == False:
+                            amdl = Statistics.AtmosGroundModel(atmos[iband,iscan],az[start:end],el[start:end]) *\
+                                   atmos_coefficient[iband,ichannel,iscan,0]
+                            tod[iband,ichannel,:] -= median_filter[iband,:N] * medfilt_coefficient[iband,ichannel,iscan,0]
+                            tod[iband,ichannel,:] -= amdl
+                            tod[iband,ichannel,:] -= np.nanmedian(tod[iband,ichannel,:])
+                tod /= self.calfactors[ifeed,:,:,None] # Calibrate to Jupiter temperature scale
+
+                # Then average together the channels
+                wnoise = wnoise_auto[:,:,iscan,:]
+                channels = (self.channelmask[ifeed].flatten() == False)
+                channels = np.where((channels))[0]
+
+                tod    = np.reshape(tod,(tod.shape[0]*tod.shape[1], tod.shape[2]))
+                wnoise = np.reshape(wnoise,(wnoise.shape[0]*wnoise.shape[1], wnoise.shape[2]))
+
+                nancheck = np.sum(tod[channels,:],axis=1)
+                channels = channels[np.isfinite(nancheck) & (nancheck != 0)]
+                nancheck = np.sum(wnoise[channels,:],axis=1)
+                channels = channels[np.isfinite(nancheck) & (nancheck != 0)]
 
 
-            tod /= self.calfactors[ifeed,:,:,None] # Calibrate to Jupiter temperature scale
-            tod = np.reshape(tod,(tod.shape[0]*tod.shape[1], tod.shape[2]))
-            tod = tod[:,:self.datasizes[i]]
+                top = np.sum(tod[channels,:]/wnoise[channels,:]**2,axis=0)
+                bot = np.sum(1/wnoise[channels,:]**2)
 
-            d['level1/spectrometer/pixel_pointing/pixel_az'].read_direct(az_in,np.s_[ifeed:ifeed+1,:])
-            d['level1/spectrometer/pixel_pointing/pixel_el'].read_direct(el_in,np.s_[ifeed:ifeed+1,:])
+                todall[index,last:last+N] = top/bot
+                weights[index,last:last+N] = bot
+                last += N
 
-
-            #tod = d['level2/averaged_tod'][ifeed,:,:,self.select_mask]
-            #tod /= self.calfactors[ifeed,:,:,None] # Calibrate to Jupiter temperature scale
-            #tod = np.reshape(tod,(tod.shape[0]*tod.shape[1], tod.shape[2]))
-            #tod = tod[:,:self.datasizes[i]]
-            y  = el_in[self.select_mask] #d['level1/spectrometer/pixel_pointing/pixel_el'][ifeed,self.select_mask]
-            y  = y[0:self.datasizes[i]]
-            x  = az_in[self.select_mask] #d['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,self.select_mask]
-            x  = x[0:self.datasizes[i]]
-            mjd  = d['level1/spectrometer/MJD'][self.select_mask]
-            mjd  = mjd[0:self.datasizes[i]]
-
-            # Mask out channels we don't want
-            channels = (self.channelmask[ifeed].flatten() == False)
-            channels = np.where((channels))[0]
-            tod = tod[channels,:]
-            # double check nans
-            nancheck = (np.nansum(tod,axis=1) != 0)
-            tod = tod[nancheck,:]
-
-
-            # Average 
-            if 'level2/wnoise_auto' in d:
-                rms = d['level2/wnoise_auto'][ifeed,...,0]
-                rms = rms.flatten()[channels]
-                rms = rms[nancheck]
-            else:
-                N2samples = tod.shape[0]//2 * 2
-                rms = np.nanstd(tod[:,:N2samples:2] - tod[:,1:N2samples:2],axis=1)/np.sqrt(2)
-
-            if np.nansum(rms) == 0:
-                N2samples = tod.shape[0]//2 * 2
-                rms = np.nanstd(tod[:,:N2samples:2] - tod[:,1:N2samples:2],axis=1)/np.sqrt(2)
-
-            top = np.sum(tod/rms[:,None]**2,axis=0)
-            bot = np.sum(1/rms**2)
-            tod = top/bot
-
-            # interpolate NaN values
-            nanvalues = np.isnan(tod) | (tod == 0)
-            if np.sum(nanvalues) > 0:
-                sampleindex = np.arange(tod.size)
-                tod[nanvalues] = np.interp(sampleindex[nanvalues],sampleindex[~nanvalues],tod[~nanvalues])
-
-
-            if self.subtract_sky:
-                # Subtract the sky before doing any filtering...
-                d['level1/spectrometer/pixel_pointing/pixel_ra'].read_direct(gl,np.s_[ifeed:ifeed+1,:])
-                d['level1/spectrometer/pixel_pointing/pixel_dec'].read_direct(gb,np.s_[ifeed:ifeed+1,:])
-                _gl  = gl[self.select_mask] #d['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,self.select_mask]
-                _gl  = _gl[0:self.datasizes[i]]
-                _gb  = gb[self.select_mask] #d['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,self.select_mask]
-                _gb  = _gb[0:self.datasizes[i]]
-
-                rot = hp.rotator.Rotator(coord=['C','G'])
-                _gb, _gl = rot((90-_gb)*np.pi/180, _gl*np.pi/180.)
-                mdl = hp.get_interp_val(self.model_sky, _gb, _gl)
-                #pyplot.plot(tod-np.nanmedian(tod))
-                tod -= mdl 
-
-            atms_means = np.zeros((len(self.scan_starts), 2))
-            atms_rms   = np.zeros((len(self.scan_starts), 2))
-            scan_az    = np.zeros(len(self.scan_starts))
-            scan_mjd    = np.zeros(len(self.scan_starts))
-            scan_el    = np.zeros(len(self.scan_starts))
-            grad_fits  = np.zeros((len(self.scan_starts), 3))
-            grad_rms  = np.zeros((len(self.scan_starts), 3))
-            tod_filter = np.zeros(tod.size)
-
-            for iscan, (start,end) in enumerate(zip(self.scan_starts,self.scan_ends)):
-                
-                if end > tod.size:
-                    end = tod.size
-                #temp_filter = np.zeros(end-start)
-                temp = tod[start:end]
-                dlength = temp.size
-                N = temp.size//2*2
-                diff = temp[1:N:2] - temp[:N:2]
-                stds = np.sqrt(np.nanmedian(diff**2))*1.48
-                select    = (np.where((np.repeat(np.abs(diff),2) >  5*stds))[0])
-                notselect = (np.where((np.repeat(np.abs(diff),2) <= 5*stds))[0])
-
-
-                if np.sum(select) > 1:
-                    temp[select]   = np.interp(select, notselect, temp[notselect])
-                tod[start:end] = temp
-
-                # Filter channels
-                # temp_filter, atms_means[iscan,:], atms_rms[iscan,:] = self.filter_atmosphere(tod[start:end],y[start:end])
-                # scan_az[iscan] = np.mean(x[start:end])
-                # scan_el[iscan] = np.mean(y[start:end])
-                # scan_mjd[iscan] = np.mean(mjd[start:end])
-
-                # #print('about to filter')
-                # if dlength <= 6000:
-                #     temp_filter += np.nanmedian(tod[start:end]-temp_filter)
-                # else:
-                #     temp_filter += medfilt.medfilt((tod[start:end]-temp_filter).astype(np.float64),np.int32(5000))
-
-                temp_filter = 0
-                # Fit gradients
-                temp = tod[start:end] - temp_filter
-                templates = np.ones((3,dlength))
-                templates[0,:] = x[start:end]
-                if np.abs(np.max(x[start:end])-np.min(x[start:end])) > 180:
-                    high = templates[0,:] > 180
-                    templates[0,high] -= 360
-                templates[0,:] -= np.median(templates[0,:])
-                templates[1,:] = 1./np.sin(y[start:end]*np.pi/180.)
-                #templates[1,:] -= np.median(templates[1,:])
-
-                niter = 1000
-                a_all = np.zeros((niter,templates.shape[0]))
-
-                if (end-start) > self.minimum_scanlength: # Very short scans are highly unstable, so don't try to fit them.
-                    for a_iter in range(niter):
-                        sel = np.random.uniform(low=0,high=dlength,size=dlength).astype(int)
-                    
-                        cov = np.sum(templates[:,None,sel] * templates[None,:,sel],axis=-1) #* templates.shape[-1]
-                        z = np.sum(templates[:,sel]*temp[None,sel],axis=1) 
-                        try:
-                            a_all[a_iter,:] = np.linalg.solve(cov, z).flatten()
-                        except:
-                            a_all[a_iter,:] = np.nan
-                    grad_fits[iscan,:], grad_rms[iscan,:] = np.nanmedian(a_all,axis=0),stats.MAD(a_all,axis=0)
-                    #import corner
-                    #corr = (a_all - np.nanmean(a_all,axis=0)[None,:])/np.nanstd(a_all,axis=0)[None,:]
-                    #corr = corr.T.dot(corr)/a_all.shape[0]
-                    #print(corr)
-                    #gd = np.abs(a_all - grad_fits[iscan,None,:]) < 10*grad_rms[iscan,None,:]
-                    #gd = np.sum(gd,axis=1) == 3
-                    #corner.corner(a_all[gd,:])
-                    #pyplot.show()
-                temp_filter = np.sum(templates[:,:]*grad_fits[iscan,:,None],axis=0)
-                if dlength <= 6000:
-                    temp_filter += np.nanmedian(tod[start:end]-temp_filter)
-                else:
-                    #temp_filter += medfilt.medfilt((tod[start:end]-temp_filter).astype(np.float64),np.int32(3000))
-                    resid = tod[start:end]-temp_filter
-                    resid = np.concatenate((resid[::-1],resid,resid[::-1]))
-                    Nt = (end-start)
-                    filter_tod = medfilt.medfilt(resid.astype(np.float64),np.int32(5000))[Nt:2*Nt]
-                    temp_filter += filter_tod
-
-                resid = tod[start:end]-temp_filter
-                resid[0] =resid[1]
-
-                tod[start:end] = resid
-
-            rms = np.nanstd(tod[::2] - tod[1::2])/np.sqrt(2)
-
-            if self.subtract_sky:
-                bad = (tod > rms*15) | (tod < -rms*15)
-                tod += mdl
-                badall[index,:] = bad
-
-            nsteps = tod.size//self.medfilt_stepsize
-                
-            todall[index,:] = tod
-        
-
-            if not os.path.exists(output_filename.split('/')[0]):
-                os.makedirs(output_filename.split('/')[0])
-
-            output_fits = h5py.File(output_filename,'w')
-            if not 'GetTOD_Fits' in output_fits:
-                grp_top = output_fits.create_group('GetTOD_Fits')
-            else:
-                grp_top = output_fits['GetTOD_Fits']
-            grp = grp_top.create_group('{}'.format(feeds[ifeed]))
-            grp.create_dataset('grad_rms', data=grad_rms)
-            grp.create_dataset('grad_fits',data=grad_fits)
-            grp.create_dataset('scan_el',data=scan_el)
-            grp.create_dataset('scan_az',data=scan_az)
-            grp.create_dataset('scan_mjd',data=scan_mjd)
-            grp.create_dataset('atms_means',data=atms_means)
-            grp.create_dataset('atms_rms',data=atms_rms)
-            output_fits.close()
-            
-
-        return todall, badall
+        return todall, weights
 
 
     def readPixels(self, i, filename):
@@ -826,16 +659,31 @@ class DataLevel2AverageHPX(Data):
         
         d = h5py.File(filename,'r')
             
-        # -- Only want to look at the observation data
-        features = d['level1/spectrometer/features'][:]
-        self.selectData(features.astype(float), self.ifeature,d)
-        features = features[self.select_mask]
-
         # --- Feed position indices can change
         self.FeedIndex = self.GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
 
-        p =  self.skyPixelsHPX(i, d,self.FeedIndex)
-        self.pixels[self.chunks[i][0]:self.chunks[i][1]] = self.skyPixelsHPX(i, d,self.FeedIndex)
+        # We store all the pointing information
+        x  = d['level1/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
+        y  = d['level1/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
+
+        scan_edges = d['level2/Statistics/scan_edges'][...]
+        pixels = np.zeros((x.shape[0], self.datasizes[i]))
+        last = 0
+        for iscan, (start,end) in enumerate(scan_edges):
+            N = int((end-start)//self.offsetLen * self.offsetLen)
+            end = start+N
+            ra  = x[:,start:end]
+            dec = y[:,start:end]
+
+            # convert to Galactic
+            rot = hp.rotator.Rotator(coord=['C','G'])
+            gb, gl = rot((90-dec.flatten())*np.pi/180., ra.flatten()*np.pi/180.)
+
+            pixels[:,last:last+N] = np.reshape(hp.ang2pix(self.nside, gb, gl),ra.shape)
+            last += N
+
+
+        self.pixels[self.chunks[i][0]:self.chunks[i][1]] = pixels.flatten()
 
 
     def readData(self, i, filename):
@@ -844,62 +692,29 @@ class DataLevel2AverageHPX(Data):
         """    
 
         d = h5py.File(filename,'r')
-        # -- Only want to look at the observation data
-        features = d['level1/spectrometer/features'][:]
-        self.selectData(features.astype(float), self.ifeature,d)
-        features = features[self.select_mask]
 
         # --- Feed position indices can change
         self.FeedIndex = self.GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
         
-        coords = {'pixel_el':None, 'pixel_az':None, 'pixel_ra':None, 'pixel_dec':None}
-        for k in coords.keys():
-            crd  = (d['level1/spectrometer/pixel_pointing/{}'.format(k)][...])[self.FeedIndex[:,None],self.select_mask]
-            coords[k] = crd[:,0:self.datasizes[i]]
-
         # Now accumulate the TOD into the naive map
-        tod,bad_tod = self.getTOD(i,d)
+        tod, weights= self.getTOD(i,d)
         nFeeds, nSamples = tod.shape
         
-
-        weights = np.ones(tod.shape)
-        t = np.arange(tod.shape[-1])
-
         
-        for j, feed in enumerate(self.FeedIndex):
-
-            bad = np.isnan(tod[j,:])
-            if all(bad):
-                continue
-
-            N = tod.shape[1]//2 * 2
-            diffTOD = tod[j,:N:2]-tod[j,1:N:2]
-            rms = np.sqrt(np.nanmedian(diffTOD**2)*1.4826)
-            weights[j,:] *= 1./rms**2
-            weights[j,bad_tod[j,:]] *= 1e-10
-
-
-            # Remove spikes
-            select = np.where((np.abs(diffTOD) > rms*5))[0]*2
-            weights[j,select] *= 1e-10
-
-        rms = np.sqrt(np.nanmedian(tod**2,axis=1))*1.4826
-        for j, feed in enumerate(self.FeedIndex):
-            select = np.abs(tod[j,:]) > rms[j]*10
-            weights[j,select] *= 1e-10
-
-        weights = weights.flatten()
+        # Remove any bad data
         tod = tod.flatten()
-        bad = (np.isnan(tod)) | (self.pixels[self.chunks[i][0]:self.chunks[i][1]] == -1)
+        weights = weights.flatten()
+        bad = np.isnan(tod) | (self.pixels[self.chunks[i][0]:self.chunks[i][1]] == -1)
         tod[bad] = 0
         weights[bad] = 0
 
-
+        # Store TOD
         if self.keeptod:
             self.todall[self.chunks[i][0]:self.chunks[i][1]] = tod*1.
-
         self.allweights[self.chunks[i][0]:self.chunks[i][1]] = weights
+
         
+        # Bin data into maps
         self.naive.accumulate(tod,weights,self.pixels[self.chunks[i][0]:self.chunks[i][1]])
         self.hits.accumulatehits(self.pixels[self.chunks[i][0]:self.chunks[i][1]])
         self.residual.accumulate(tod,weights,self.chunks[i])
@@ -1037,9 +852,15 @@ class ProxyHealpixMap(Map):
         m = np.zeros(12*self.nside**2)
         m[self.uni2pix] = self.output
         return m
+
     def return_hpx_hits(self):
         m = np.zeros(12*self.nside**2)
         m[self.uni2pix] = self.sigwei
+        return m
+
+    def return_hpx_variance(self):
+        m = np.zeros(12*self.nside**2)
+        m[self.uni2pix] = 1./self.wei
         return m
 
     def remove_blank_pixels(self,pixels,non_zero=None):

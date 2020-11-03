@@ -3,6 +3,84 @@ from matplotlib import pyplot
 
 from comancpipeline.MapMaking import Types #import Types.Offsets, Map, HealpixMap, ProxyHealpixMap
 from comancpipeline.Tools import binFuncs
+from scipy.sparse import lil_matrix, diags, linalg
+
+def binOffsets(offsets,weights,offsetpixels,pixels,npix=9):
+    """
+    Add more data to the naive map
+    """
+    sigwei = np.zeros(npix)
+    wei    = np.zeros(npix)
+    binFuncs.binValues2Map(sigwei, pixels, offsets*weights, offsetpixels)
+    binFuncs.binValues2Map(wei   , pixels, 1*weights      , offsetpixels)
+    return sigwei, wei
+
+def pixels_to_P(pixels,npix):
+    """
+    Convert 1D array of pixels into P matrix
+    """
+    
+    P = lil_matrix((len(pixels),npix))
+    for i in range(pixels.size):
+        P[i,pixels[i]] = 1
+        
+    return P
+
+def create_F(ntod,offset_len):
+    """
+    """
+    noffsets = int(np.ceil(ntod/offset_len))
+    F = lil_matrix((ntod,noffsets))
+    
+    j = 0
+    fpix = np.zeros(ntod)
+    for i in range(ntod):
+        if (i > 0) & (np.mod(i,offset_len)==0):
+            j += 1
+        F[i,j] = 1
+        fpix[i]=j
+    return F, fpix.astype(int)
+
+class Axfunc:
+    
+    def __init__(self, weights, offset_pix, map_pix,npix):
+        
+        self.weights = weights
+        self.offset_pix = offset_pix
+        self.map_pix = map_pix
+        self.npix = npix
+        self.output = np.zeros(self.weights.size)
+    
+    def __call__(self,xk):
+        sigwei,wei = binOffsets(xk,
+                                self.weights,
+                                self.offset_pix,
+                                self.map_pix,self.npix)
+
+        m = sigwei/wei
+
+        self.output *= 0.
+        binFuncs.EstimateResidualSimplePrior(self.output, # output
+                                             xk, # Ax - b (strected to TOD)
+                                             self.weights, # TOD weights
+                                             m, # m[Ax-b]
+                                             self.offset_pix, 
+                                             self.map_pix)
+                
+
+        return self.output
+
+class Axfunc_slow:
+    
+    def __init__(self, A):
+        
+        self.A = A
+    
+    def __call__(self,xk):
+
+        return self.A.dot(xk[:,None]).flatten()
+
+
 
 def Destriper(parameters, data):
     """
@@ -23,7 +101,6 @@ def Destriper(parameters, data):
     offsetMap = Types.Map(data.naive.nxpix,
                     data.naive.nypix,
                     data.naive.wcs)
-
 
     CGM(data, offsets, offsetMap, niter=niter)
 
@@ -47,12 +124,93 @@ def DestriperHPX(parameters, data):
     offsetMap = Types.ProxyHealpixMap(data.naive.nside,npix=data.naive.npix)
     offsetMap.uni2pix = data.naive.uni2pix
 
-    CGM(data, offsets, offsetMap, niter=niter)
 
+
+    # Calculate the average weight per offset
+    weights = np.histogram(data.residual.offsetpixels,np.arange(data.residual.Noffsets+1),weights=data.allweights)[0]/data.residual.offset
+
+    # Define out Ax linear operator function
+    Ax = Axfunc(weights,data.residual.offsetpixels,data.pixels,offsetMap.npix)
+
+    # Run the CGM code
+    offsets.offsets = CGM(data.residual.sigwei, Ax, niter=niter)
+
+    # Bin the offsets in to a map
+    offsetMap.binOffsets(offsets.offsets,
+                         weights,
+                         offsets.offsetpixels,
+                         data.pixels)
+    offsetMap.average()
+
+    # Variance map
+    offsetMap.binOffsets(offsets.offsets,
+                         weights,
+                         offsets.offsetpixels,
+                         data.pixels)
+    offsetMap.average()
 
     return offsetMap, offsets
 
-def CGM(data, offsets, offsetMap, niter=400,verbose=False):
+
+
+def CGM(b,Ax,x0 = None,niter=100,itol=1e-7,verbose=False):
+    """
+    Biconjugate CGM implementation from Numerical Recipes 2nd, pg 83-85
+    
+    arguments:
+    b - Array
+    Ax - Function that applies the matrix A
+    
+    kwargs:
+    
+    Notes:
+    1) Ax can be a class with a __call__ function defined to act like a function
+    2) Weights should be average weight for an offset, e.g. w_b = sum(w)/offset_length
+    3) Need to add a preconditionor matrix step
+    """
+    
+    if isinstance(x0,type(None)):
+        x0 = np.zeros(b.size)
+    
+    r  = b.flatten() - Ax(x0)
+    rb = b.flatten() - Ax(x0)
+    p  = r*1.
+    pb = rb*1.
+    
+    thresh0 = np.sum(r*rb)
+    for i in range(niter):
+        
+        q = Ax(pb)
+
+
+        rTrb = np.sum(r*rb)
+        alpha= rTrb/np.sum(pb * q)
+
+        x0 += alpha*pb
+        
+        r = r - alpha*Ax(p)
+        rb= rb- alpha*Ax(pb)
+        
+        beta = np.sum(r*rb)/rTrb
+        
+        p = r + beta*p
+        pb= rb+ beta*pb
+        
+        delta = np.sum(r*rb)/thresh0
+        if verbose:
+            print(delta)
+        if delta < itol:
+            break
+        
+    if (i == (niter-1)):
+        print('Convergence not achieved in {} steps'.format(niter))
+
+    print('Final covergence: {} in {:d} steps'.format(delta,i))
+
+    return x0
+    
+
+def CGM_old(data, offsets, offsetMap, niter=400,verbose=False):
     """
     Conj. Gradient Inversion
     """
@@ -67,14 +225,12 @@ def CGM(data, offsets, offsetMap, niter=400,verbose=False):
     Ax.average()
 
     # Estimate initial residual
-    binFuncs.EstimateResidualSimplePrior(Ax.offsets, # Holds the weighted residuals
-                                          counts,
-                                          offsets.offsets, # holds the target offsets
-                                          #b.wei, # The weights calculated from the data
-                                          data.allweights,#residual.wei,
-                                          offsetMap.output, # Map to store the offsets in (initially all zero)
-                                          offsets.offsetpixels, # Maps offsets to TOD position
-                                          data.pixels)
+    binFuncs.EstimateResidualSimplePrior(Ax.sigwei, # Holds the weighted residuals
+                                         offsets.offsets, # holds the target offsets
+                                         data.allweights, # Weights per TOD sample
+                                         offsetMap.output, # Map to store the offsets in (initially all zero)
+                                         offsets.offsetpixels, # Maps offsets to TOD position
+                                         data.pixels)
     
     if verbose:
         print('Diag counts:',np.min(counts))
@@ -83,10 +239,11 @@ def CGM(data, offsets, offsetMap, niter=400,verbose=False):
     if verbose:
         print('Diags b.sigwei, Ax.offsets:', np.sum(b.sigwei), np.sum(Ax.offsets))
 
-    residual = b.sigwei - Ax.offsets
-    direction= b.sigwei - Ax.offsets
+    residual = b.sigwei - Ax.sigwei
+    direction= b.sigwei - Ax.sigwei
 
-    r2 = b.sigwei - Ax.offsets
+
+    r2 = b.sigwei - Ax.sigwei
 
     # -- Initial threshhold
     thresh0 = np.sum(residual**2)
@@ -103,71 +260,94 @@ def CGM(data, offsets, offsetMap, niter=400,verbose=False):
     if np.isnan(np.sum(b.sigwei)):
         return
 
-    # CGM loop
+    # --- CGM loop ---
     for i in range(niter):
         # -- Calculate conjugate search vector Ad
-        lastoffset = Ax.offsets*1.
-        Ax.offsets *= 0
+        lastoffset = Ax.sigwei*1.
+        Ax.sigwei *= 0
         counts *= 0
 
         offsetMap.clearmaps()
+
+        # CGM overview:
+        # 0) d = Ax - b
+        # 1) q = A * d
+        # 2) alpha = rTr / dTAd = rTr/dTq
+
+        # We apply the A matrix to direction
+        # 1) Stretch out Ax-b to length of TOD
+        # 2) Create a weighted average map
+        # 3) Find residual between (Ax-b) and P m[Ax-b]
+        # 4) Produce a weighted sum into the offsets
+
+        # Here we create the map m[Ax-b]
         offsetMap.binOffsets(direction,
                              data.residual.wei,
                              offsets.offsetpixels,
                              data.pixels)
-        offsetMap.average()
+        offsetMap.average() # And properly weight it
 
-        binFuncs.EstimateResidualSimplePrior(Ax.offsets,
-                                             counts,
-                                             direction,
-                                             data.allweights,#residual.wei,
-                                             offsetMap.output,
-                                             offsets.offsetpixels,
+        # Here we find the residuals, and sum into offsets
+        binFuncs.EstimateResidualSimplePrior(Ax.sigwei, # output
+                                             direction, # Ax - b (strected to TOD)
+                                             data.allweights, # TOD weights
+                                             offsetMap.output, # m[Ax-b]
+                                             offsets.offsetpixels, 
                                              data.pixels)
 
                          
         
 
         # Calculate the search vector
-        dTq = np.sum(direction*Ax.offsets)
+        dTq = np.sum(direction*Ax.sigwei)
+
 
         # 
         alpha = dnew/dTq
-        alphas[i]=alpha
+        alphas[i] = alpha
         # -- Update offsets
 
         olfast = offsets.offsets*1.
         offsets.offsets += alpha*direction
+
+
         #offsets.offsets[0] = offsets.offsets[1]
 
         # -- Calculate new residual
-        if np.mod(i,5) == 0:
+        if False:#np.mod(i,50000) == 0:
             offsetMap.clearmaps()
             offsetMap.binOffsets(offsets.offsets,
                                  data.residual.wei,
                                  offsets.offsetpixels,
                                  data.pixels)
             offsetMap.average()
-            Ax.offsets *= 0
+            Ax.sigwei *= 0
             counts = offsets.offsets*0.
 
-            binFuncs.EstimateResidualSimplePrior(Ax.offsets, # Holds the weighted residuals
+            binFuncs.EstimateResidualSimplePrior(Ax.sigwei, # Holds the weighted residuals
                                                  counts,
-                                                 offsets.offsets, # holds the target offsets
-                                                 #b.wei, # The weights calculated from the data
+                                                 offsets.sigwei, # holds the target offsets
                                                  data.allweights,#residual.wei,
                                                  offsetMap.output, # Map to store the offsets in (initially all zero)
                                                  offsets.offsetpixels, # Maps offsets to TOD position
                                                  data.pixels)
 
-            residual = b.sigwei - Ax.offsets
+            residual = b.sigwei - Ax.sigwei
         else:
-            residual = residual -  alpha*Ax.offsets 
-        #print('Diag residual:' , np.sum(residual))
+            from matplotlib import pyplot
+            pyplot.subplot(2,1,1)
+            pyplot.plot(residual)
+            residual = residual -  alpha*Ax.sigwei 
 
         dold = dnew*1.0
         dnew = np.sum(residual**2)
         newVals[i] = dnew
+        print(dnew,dold,alpha)
+        pyplot.plot(residual)
+        pyplot.subplot(2,1,2)
+        pyplot.plot(alpha*Ax.sigwei )
+        pyplot.show()
+
         # --
         beta = dnew/dold
         betas[i] = beta
