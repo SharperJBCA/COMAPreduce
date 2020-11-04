@@ -87,7 +87,6 @@ class RepointEdges(DataStructure):
         return scan_edges
 
 
-
 class ScanEdges(DataStructure):
     """
     Splits up observations into "scans" based on parameter inputs
@@ -255,7 +254,6 @@ class FnoiseStats(DataStructure):
 
         return data
 
-
     def AutoRMS(self, tod):
         """
         Calculate auto-pair subtracted RMS of tod
@@ -337,7 +335,6 @@ class FnoiseStats(DataStructure):
         tod_filter = np.sum(templates[:,:]*fits[:,None],axis=0)
         return tod_filter, fits, errs
 
-
     def RemoveAtmosphere(self, tod, el):
         """
         Remove 1/sin(E) relationship from TOD
@@ -392,7 +389,6 @@ class SkyDipStats(DataStructure):
         # 2) The feature bits to select just the observing period
         # 3) Elevation to remove the atmospheric component
         tod = data['level2/averaged_tod'][...]
-        az = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
         el = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
         feeds = data['level1/spectrometer/feeds'][:]
 
@@ -401,6 +397,7 @@ class SkyDipStats(DataStructure):
 
         self.atmos = np.zeros((nFeeds, nBands, nChannels, 2))
         self.atmos_errs = np.zeros((nFeeds, nBands, nChannels, 2))
+        self.auto_wnl = np.zeros((nFeeds, nBands, nChannels))
 
         pbar = tqdm(total=((nFeeds-1)*nBands*nChannels))
 
@@ -415,11 +412,13 @@ class SkyDipStats(DataStructure):
                 for ichan in range(nChannels):
                     atmos,atmos_errs = self.FitAtmos(tod[ifeed,iband,ichan,elevation_select],
                                                      el[ifeed,elevation_select])
-                    
+
                     self.atmos[ifeed,iband,ichan]      = atmos
-                    self.atmos_errs[ifeed,iband,ichan] = np.sqrt(np.diag(atmos_errs))
-                    
-                    
+                    self.atmos_errs[ifeed,iband,ichan] = atmos_errs
+
+                    temp = tod[ifeed,iband,ichan,:] - model(el[ifeed,:],atmos[0],atmos[1])
+                    self.auto_wnl[ifeed,iband,ichan] = self.AutoRMS(temp)
+
                     pbar.update(1)
 
         #for ifeed in range(nFeeds):
@@ -434,7 +433,7 @@ class SkyDipStats(DataStructure):
         # Ensure that file is a skydip observation
         allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)]
         source = data['level1/comap'].attrs['source'].decode('utf-8')
-        t_len = int(data['level1/comap'].attrs['nint'])
+        #t_len = int(data['level1/comap'].attrs['nint'])
         comment = data['level1/comap'].attrs['comment'].decode('utf-8')
 
         print('SOURCE', source)
@@ -454,12 +453,24 @@ class SkyDipStats(DataStructure):
 
         return data
 
+    def AutoRMS(self, tod):
+        """
+        Calculate auto-pair subtracted RMS of tod
+        """
+        #N2 = tod.size//2*2
+        #diff = tod[1:N2:2]-tod[0:N2:2]
+        N4 = tod.size//4*4
+        ABBA = tod[0:N4:4] - tod[1:N4:4] - tod[2:N4:4] + tod[3:N4:4]
+        med = np.nanmedian(ABBA)
+        mad = np.sqrt(np.nanmedian(np.abs(ABBA-med)**2))*1.4826/np.sqrt(4)
+        return mad
+
     def model(x,a,b):
-        return a*(1-np.exp(b*x))
+        return a*(1.-np.exp(-1.*b*x))
 
     def FitAtmos(self,tod,el,niter=100):
         # Fit gradients
-        dlength = np.argmax(el[0,:])+1
+        dlength = np.argmax(el[0,:]) # capture the end of the skydip before repointing if not done already with upper\lower limits
 
         cosec_el = 1./np.sin(el*np.pi/180.)
 
@@ -479,7 +490,7 @@ class SkyDipStats(DataStructure):
 
     def write(self,data):
         """
-        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        Write out the new data values to the level 2 file
         """
 
         if not 'level2' in data:
@@ -490,8 +501,8 @@ class SkyDipStats(DataStructure):
         else:
             statistics = lvl2['SkyDip']
 
-        dnames = ['Opacity', 'Opacity_err', 'atmTemp', 'atmTemp_err']
-        dsets = [self.atmos[:,:,:,1], self.atmos_errs[:,:,:,1], self.atmos[:,:,:,0], self.atmos_errs[:,:,:,0]]
+        dnames = ['Opacity', 'Opacity_err', 'atmTemp', 'atmTemp_err', 'auto_wnl']
+        dsets = [self.atmos[:,:,:,1], self.atmos_errs[:,:,:,1], self.atmos[:,:,:,0], self.atmos_errs[:,:,:,0], self.auto_wnl]
         for (dname, dset) in zip(dnames, dsets):
             if dname in statistics:
                 del statistics[dname]
