@@ -26,15 +26,15 @@ pysla = Extension(name = 'comancpipeline.Tools.pysla',
 ffuncs = Extension(name = 'comancpipeline.Tools.ffuncs', 
                   sources = ['comancpipeline/Tools/ffuncs.f90'])
 
-alglib = Extension('comancpipeline.Tools.alglib_optimize',
-                   ['comancpipeline/Tools/alglib_optimize.pyx'],
-                   library_dirs=["/local/scratch/sharper/etc/lib"],
-                   include_dirs=["."],
-                   language="c++",
-                   extra_compile_args=['-lAlglib','-fopenmp'],
-                   extra_link_args=['-lAlglib','-fopenmp']
-               )
-
+# alglib = Extension('comancpipeline.Tools.alglib_optimize',
+#                    ['comancpipeline/Tools/alglib_optimize.pyx'],
+#                    library_dirs=["/local/scratch/sharper/etc/lib"],
+#                    include_dirs=["/local/scratch/sharper/etc/lib"],
+#                    language="c++",
+#                    extra_compile_args=['-fopenmp'],
+#                    extra_link_args=['-fopenmp']
+#                )
+#'-lAlglib',
 
 filters = Extension(name = 'comancpipeline.Tools.median_filter.medfilt', 
                     include_dirs=[np.get_include()],
@@ -48,7 +48,7 @@ binFuncs = Extension(name='comancpipeline.Tools.binFuncs',
 config = {'name':'comancpipeline',
           'version':'0.1dev',
           'packages':['comancpipeline','comancpipeline.Analysis','comancpipeline.Tools','comancpipeline.MapMaking'],
-          'ext_modules':cythonize([ffuncs,pysla, filters,alglib,binFuncs])}
+          'ext_modules':cythonize([ffuncs,pysla, filters,binFuncs])}
 
 
 

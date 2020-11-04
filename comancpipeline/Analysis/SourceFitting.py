@@ -29,7 +29,7 @@ import h5py
 
 import os
 
-from comancpipeline.Tools import alglib_optimize
+#from comancpipeline.Tools import alglib_optimize
 
 import time
 def doFit(todFit, _x, _y, sbc,bootstrap=False):
@@ -394,8 +394,8 @@ class FitSource(DataStructure):
             weights = np.ones(todFitSBChan.shape[-1]).astype(np.float64)
 
             # Get initial parameters from a mean filtered TOD of one good channel:
-            test = np.array(alglib_optimize.mean_filt(todFitSBChanFlat[gdchans[0],:].astype(np.float64),
-                                                      np.int32(150)))
+            #test = np.array(alglib_optimize.mean_filt(todFitSBChanFlat[gdchans[0],:].astype(np.float64),
+            #                                          np.int32(150)))
             amax = np.argmax(test)
             # Starting parameters (we filter the TOD internally, hence 0 offset):
             pstart = np.array([np.max(test),x[amax],5./60./2.355,y[amax],0]).astype(np.float64)
@@ -406,13 +406,13 @@ class FitSource(DataStructure):
 
             # Run the fitting routine:
             t0 = time.time()
-            params[gdchans,:],e[gdchans,:] = np.array(alglib_optimize.main(x[close].astype(np.float64),
-                                                                           y[close].astype(np.float64),
-                                                                           (todFitSBChanFlat[gdchans,:])[:,close].astype(np.float64),
-                                                                           weights[close],
-                                                                           pstart,
-                                                                           np.int32(150),np.int32(1000),
-                                                                           np.float64(1e-6),np.float64(1e-6)))
+            # params[gdchans,:],e[gdchans,:] = np.array(alglib_optimize.main(x[close].astype(np.float64),
+            #                                                                y[close].astype(np.float64),
+            #                                                                (todFitSBChanFlat[gdchans,:])[:,close].astype(np.float64),
+            #                                                                weights[close],
+            #                                                                pstart,
+            #                                                                np.int32(150),np.int32(1000),
+            #                                                                np.float64(1e-6),np.float64(1e-6)))
             t1 = time.time()
             print('Fit run time: {:.2f} seconds'.format(t1-t0))
             self.Pout[ifeed,...] = np.reshape(params,(todFitSBChan.shape[0],todFitSBChan.shape[1],nParams))
