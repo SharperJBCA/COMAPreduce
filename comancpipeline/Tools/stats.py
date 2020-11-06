@@ -18,3 +18,38 @@ def MAD(d,axis=0):
     rms = np.sqrt(np.nanmedian((d-med_d)**2,axis=axis))*1.48
 
     return rms
+
+def AutoRMS(tod):
+    """
+    Auto-differenced RMS
+    """
+    N = (tod.shape[0]//2)*2
+    diff = tod[1:N:2,:] - tod[:N:2,:]
+    rms = np.nanstd(diff,axis=0)/np.sqrt(2)
+
+    return rms
+
+def TsysRMS(tod,sample_rate,bandwidth):
+    """
+    Calculate Tsys from the RMS
+    """
+    rms =  AutoRMS(tod) 
+    Tsys = rms*np.sqrt(bandwidth/sample_rate)
+    return Tsys
+
+def weighted_mean(x,e):
+    """
+    calculate the weighted mean
+    """
+
+    return np.sum(x/e**2)/np.sum(1./e**2)
+
+def weighted_var(x,e):
+    """
+    calculate weighted variance
+    """
+
+    m = weighted_mean(x,e)
+
+    v = np.sum((x-m)**2/e**2)/np.sum(1./e**2)
+    return v
