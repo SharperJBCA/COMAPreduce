@@ -5,6 +5,10 @@ from numpy.distutils.core import Extension
 import os
 import numpy as np
 from Cython.Build import cythonize
+
+# Capture the current git commit to use as version
+#exec(open("comancpipeline/version.py").read())
+
 try:
     slalib_path = os.environ['SLALIB_LIBS']
 except KeyError:
@@ -46,16 +50,10 @@ binFuncs = Extension(name='comancpipeline.Tools.binFuncs',
 
 
 config = {'name':'comancpipeline',
-          'version':'0.1dev',
+          'version':__version__,
           'packages':['comancpipeline','comancpipeline.Analysis','comancpipeline.Tools','comancpipeline.MapMaking'],
           'ext_modules':cythonize([ffuncs,pysla, filters,binFuncs])}
 
 
 
 setup(**config)
-
-#    name='comancpipeline',
-#    version='0.1dev',
-#    packages=['comancpipeline.Analysis','comancpipeline.Tools'])
-
- 
