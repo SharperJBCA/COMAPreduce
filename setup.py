@@ -7,7 +7,7 @@ import numpy as np
 from Cython.Build import cythonize
 
 # Capture the current git commit to use as version
-#exec(open("comancpipeline/version.py").read())
+exec(open("comancpipeline/version.py").read())
 
 try:
     slalib_path = os.environ['SLALIB_LIBS']
@@ -57,3 +57,4 @@ config = {'name':'comancpipeline',
 
 
 setup(**config)
+print(__version__)

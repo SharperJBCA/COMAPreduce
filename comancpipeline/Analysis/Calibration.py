@@ -188,6 +188,9 @@ class CreateLevel2Cont(DataStructure):
         # Link the Level1 data
         self.outfile['level1'] = h5py.ExternalLink(data.filename,'/')
 
+        # Add version info
+        lvl2.attrs['pipeline-version'] = comancpipeline.__version__
+
         # Link the Level1 data
         fname = data.filename.split('/')[-1]
         lvl2['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
