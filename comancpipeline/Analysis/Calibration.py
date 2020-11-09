@@ -373,9 +373,6 @@ class CalculateVaneMeasurement(DataStructure):
         nHorns, nSBs, nChan, nSamps = tod.shape
 
 
-        print(tod.shape, 'initial')
-        print(len(feeds))
-        print(data['spectrometer/feeds'][:])
         # Setup for calculating the calibration factors, interpolate temperatures:
         if mjd[0] < Time(datetime(2019,3,1),format='datetime').mjd: # Early observations before antenna0 
             tHot  = np.nanmean(data['hk/env/ambientLoadTemp'][:])/100. + self.tHotOffset 
@@ -396,6 +393,7 @@ class CalculateVaneMeasurement(DataStructure):
         self.Tsys = np.zeros((nVanes, nHorns, nSBs, nChan))
         self.Gain = np.zeros((nVanes, nHorns, nSBs, nChan))
         self.RMS  = np.zeros((nVanes, nHorns, nSBs, nChan))
+
 
         # Now loop over each event:
         for horn, feedid in enumerate(tqdm(self.feeds)):
