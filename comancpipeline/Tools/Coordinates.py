@@ -18,7 +18,10 @@ comap_latitude  =   37.0 + 14./60. + 2/60.**2
 def sex2deg(dms,hours=False):
 
     d,m,s = dms.split(':')
-    sign = float(d)/np.abs(float(d))
+    if float(d) == 0:
+        sign = 1
+    else:
+        sign = float(d)/np.abs(float(d))
 
     out = np.abs(float(d)) + float(m)/60. + float(s)/60.**2
     out *= sign
@@ -26,6 +29,24 @@ def sex2deg(dms,hours=False):
         return out*15.
     else:
         return out
+
+def deg2sex(x,hours=False):
+    
+    if hours:
+        x /= 15.
+    
+    if x == 0:
+        sign = 1
+    else:
+        sign = x/np.abs(x)
+    x = np.abs(x)
+    
+    d = np.floor(x)
+    m = np.floor((x -d)*60.)
+    s = ((x-d)*60. - m)*60.
+
+    return '{:02d}:{:02d}:{:.2f}'.format(int(sign*d),int(m),float(s))
+
 
 def RotatePhi(skyVec, objRa):
     outVec = skyVec*0.
@@ -264,6 +285,13 @@ def e2h(ra, dec, mjd, lon, lat, degrees=True, return_lha=False):
     else:
         c = 1.
 
+    if not isinstance(ra, np.ndarray):
+        ra = np.array([ra])
+    if not isinstance(dec, np.ndarray):
+        dec = np.array([dec])
+    if not isinstance(mjd, np.ndarray):
+        mjd = np.array([mjd])
+
     az, el, lha = pysla.e2h(ra*c, dec*c, mjd, lon*c, lat*c)
     
     if return_lha:
@@ -309,6 +337,13 @@ def precess2year(ra, dec, mjd, degrees=True):
         c = np.pi/180.
     else:
         c = 1.
+
+    if not isinstance(ra, np.ndarray):
+        ra = np.array([ra])
+    if not isinstance(dec, np.ndarray):
+        dec = np.array([dec])
+    if not isinstance(mjd, np.ndarray):
+        mjd = np.array([mjd])
 
     raout = ra.astype(np.float)*c
     decout = dec.astype(np.float)*c
@@ -356,3 +391,19 @@ def e2g(ra, dec, degrees=True):
 
     gl, gb = pysla.e2g(ra*c, dec*c)
     return gl/c, gb/c
+
+def g2e(gl, gb, degrees=True):
+    """
+    Galactic to Equatorial
+    
+    args:
+    gl - arraylike, right ascension
+    gb- arraylike, declination
+    """
+    if degrees:
+        c = np.pi/180.
+    else:
+        c = 1.
+
+    ra, dec = pysla.g2e(gl*c, gb*c)
+    return ra/c, dec/c

@@ -1,6 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
 import h5py
+import comancpipeline 
 from comancpipeline.Analysis.BaseClasses import DataStructure
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
@@ -79,10 +80,8 @@ class CreateLevel2Cont(DataStructure):
 
 
         # Setup output file here, we will have to write in sections.
-        prefix = data.filename.split('/')[-1].split('.hd5')[0]
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
-        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
         if os.path.isfile(self.outfilename):
             os.remove(self.outfilename)
 
@@ -102,9 +101,22 @@ class CreateLevel2Cont(DataStructure):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
         if 'comment' in data['comap'].attrs:
-            comment = data['comap'].attrs['comment'].decode('utf-8')
+            comment = data['comap'].attrs['comment']
+            if not isinstance(comment,str):
+                comment = comment.decode('utf-8')
         else:
             comment = 'No Comment'
+
+        # Want to check the versions
+        prefix = data.filename.split('/')[-1].split('.hd5')[0]
+        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+        if os.path.isfile(self.outfilename):
+            h = h5py.File(self.outfilename,'r')
+            if 'pipeline-version' in h['level2'].attrs.keys(): # Want to skip files that are already processed
+               if  h['level2'].attrs['pipeline-version'] == comancpipeline.__version__:
+                   h.close()
+                   return data
+            h.close()
 
         # Ignore Sky dips
         if 'Sky nod' in comment:
@@ -174,7 +186,11 @@ class CreateLevel2Cont(DataStructure):
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """        
 
-        self.outfile = h5py.File(self.outfilename)
+        if os.path.exists(self.outfilename):
+            self.outfile = h5py.File(self.outfilename,'a')
+        else:
+            self.outfile = h5py.File(self.outfilename,'w')
+
         if 'level2' in self.outfile:
             del self.outfile['level2']
         lvl2 = self.outfile.create_group('level2')
@@ -225,7 +241,9 @@ class CalculateVaneMeasurement(DataStructure):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
         
         if 'comment' in data['comap'].attrs:
-            comment = data['comap'].attrs['comment'].decode('utf-8')
+            comment = data['comap'].attrs['comment']
+            if not isinstance(comment,str):
+                comment = comment.decode('utf-8')
         else:
             comment = 'No Comment'
 

@@ -24,9 +24,9 @@ pysla = Extension(name = 'comancpipeline.Tools.pysla',
                   libraries=['sla'],
                   library_dirs =['{}'.format(slalib_path)],
                   f2py_options = [],
-                  extra_f90_compile_args=['-L{}'.format(slalib_path)])
-#,'-L{}/libsla.so'.format(slalib_path)])
-
+                  extra_link_args=['-Wl,-rpath,{}'.format(slalib_path)])
+#'Iglibc_fix.h',
+                                      
 ffuncs = Extension(name = 'comancpipeline.Tools.ffuncs', 
                   sources = ['comancpipeline/Tools/ffuncs.f90'])
 

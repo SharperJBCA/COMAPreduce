@@ -298,3 +298,25 @@ subroutine e2g(ra, dec, gl, gb, len_bn)
 
   
 end subroutine e2g
+
+subroutine g2e(gl, gb, ra, dec, len_bn)
+  implicit none
+  
+  integer, intent(in) :: len_bn
+  real*8, intent(in) :: gl(len_bn)
+  real*8, intent(in) :: gb(len_bn)
+  real*8, intent(out) :: ra(len_bn)
+  real*8, intent(out) :: dec(len_bn)
+
+  !f2py integer len_bn
+  !f2py real*8 ra,dec,gl,gb
+
+  integer :: i
+
+
+  do i=1, len_bn
+     call sla_galeq(gl(i), gb(i), ra(i), dec(i))
+  enddo    
+
+  
+end subroutine g2e

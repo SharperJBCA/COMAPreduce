@@ -179,7 +179,7 @@ class FnoiseStats(DataStructure):
         # 2) The feature bits to select just the observing period
         # 3) Elevation to remove the atmospheric component
         tod = data['level2/averaged_tod'][...]
-        az = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
+        az = data['level1/spectrometer/pixel_pointing/pixel_az'][...]
         el = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
         feeds = data['level1/spectrometer/feeds'][:]
         scan_edges = data['level2/Statistics/scan_edges'][...]
