@@ -129,8 +129,12 @@ class ScanEdges(DataStructure):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
         allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)]
-        source  = data['level1/comap'].attrs['source'].decode('utf-8')
-        comment = data['level1/comap'].attrs['comment'].decode('utf-8')
+        source  = data['level1/comap'].attrs['source']
+        if not isinstance(source,str):
+            source = source.decode('utf-8')
+        comment = data['level1/comap'].attrs['comment']
+        if not isinstance(comment,str):
+            comment = commnet.decode('utf-8')
         print('SOURCE', source)
         if not source in allowed_sources:
             return data
@@ -272,8 +276,13 @@ class FnoiseStats(DataStructure):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
         allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)]
-        source = data['level1/comap'].attrs['source'].decode('utf-8')
-        comment = data['level1/comap'].attrs['comment'].decode('utf-8')
+        source = data['level1/comap'].attrs['source']
+        if not isinstance(source,str):
+            source = source.decode('utf-8')
+        comment = data['level1/comap'].attrs['comment']
+        if not isinstance(comment, str):
+            comment = comment.decode('utf-8')
+
         print('SOURCE', source)
         if not source in allowed_sources:
             return data
