@@ -9,6 +9,10 @@ from comancpipeline.Analysis import SourceFitting
 from comancpipeline.Tools import Coordinates, Types, stats
 from os import listdir, getcwd
 from os.path import isfile, join
+import grp
+import shutil
+
+
 from scipy.interpolate import interp1d
 import datetime
 from tqdm import tqdm
@@ -107,9 +111,24 @@ class CreateLevel2Cont(DataStructure):
         else:
             comment = 'No Comment'
 
-        # Want to check the versions
         prefix = data.filename.split('/')[-1].split('.hd5')[0]
         self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+
+        if os.path.exists(self.outfilename): # skip if we have already calibrated
+            self.outfile = h5py.File(self.outfilename,'a')
+            lvl2 = self.outfile['level2']
+            if 'pipeline-version' in lvl2.attrs:
+                if lvl2.attrs['pipeline-version'] == comancpipeline.__version__:
+                    data.close()
+                    data = self.outfile
+                    return data
+                else:
+                    self.outfile.close()
+            else:
+                self.outfile.close()
+
+
+        # Want to check the versions
         if os.path.isfile(self.outfilename):
             h = h5py.File(self.outfilename,'r')
             if 'pipeline-version' in h['level2'].attrs.keys(): # Want to skip files that are already processed
@@ -190,6 +209,11 @@ class CreateLevel2Cont(DataStructure):
             self.outfile = h5py.File(self.outfilename,'a')
         else:
             self.outfile = h5py.File(self.outfilename,'w')
+
+        # Set permissions and group
+        os.chmod(self.outfilename,0o664)
+        shutil.chown(self.outfilename, group='comap')
+
 
         if 'level2' in self.outfile:
             del self.outfile['level2']
@@ -307,12 +331,12 @@ class CalculateVaneMeasurement(DataStructure):
         
         idHot = np.sort(idHot)
         idCold = np.sort(idCold[snip:])
-        return idHot[50:-50], idCold[50:-50]
+        return idHot, idCold
 
     def FindVane(self,data):
         """
         Find the calibration vane start and end positions.
-        Raise NoVaneError if no vane found
+        Raise NoDiodeError if no vane found
         """
         mjd  = data['spectrometer/MJD']
 
@@ -333,7 +357,7 @@ class CalculateVaneMeasurement(DataStructure):
 
         if len(justVanes) == 0:
             self.nodata = True
-            raise NoVaneError('No diode feature found')
+            raise NoDiodeError('No diode feature found')
         else:
             self.nodata = False
 
@@ -367,6 +391,13 @@ class CalculateVaneMeasurement(DataStructure):
         were made.
 
         """
+
+        fname = data.filename.split('/')[-1]
+        outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
+        if os.path.exists(outfile): # If the vane has already be calculated, skip
+            self.nodata=True
+            return data
+
         # Read in data that is required:
         freq = data['spectrometer/frequency'][...]
         mjd  = data['spectrometer/MJD'][:] 
@@ -424,8 +455,12 @@ class CalculateVaneMeasurement(DataStructure):
 
                 btod_slice = btod[horn,:,start:end]
 
+                try:
+                    idHot, idCold = self.findHotCold(btod_slice[0,:])
+                except (NoHotError,NoColdError) as e:
+                    print(e)
+                    break
 
-                idHot, idCold = self.findHotCold(btod_slice[0,:])
 
                 time= np.arange(tod_slice.shape[-1])
                 for sb in range(nSBs):
@@ -450,13 +485,15 @@ class CalculateVaneMeasurement(DataStructure):
 
         # We will store these in a separate file and link them to the level2s
         fname = data.filename.split('/')[-1]
-        print('{}/{}_{}'.format(self.output_dir,self.prefix,fname))
-
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
         if os.path.exists(outfile):
             os.remove(outfile)
 
         output = h5py.File(outfile,'a')
+
+        # Set permissions and group
+        os.chmod(outfile,0o664)
+        shutil.chown(outfile, group='comap')
 
         # Store datasets in root
         dnames = ['Tsys','Gain','VaneEdges']

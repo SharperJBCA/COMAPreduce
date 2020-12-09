@@ -23,9 +23,14 @@ def AutoRMS(tod):
     """
     Auto-differenced RMS
     """
-    N = (tod.shape[0]//2)*2
-    diff = tod[1:N:2,:] - tod[:N:2,:]
-    rms = np.nanstd(diff,axis=0)/np.sqrt(2)
+    if len(tod.shape) == 2:
+        N = (tod.shape[0]//2)*2
+        diff = tod[1:N:2,:] - tod[:N:2,:]
+        rms = np.nanstd(diff,axis=0)/np.sqrt(2)
+    else:
+        N = (tod.size//2)*2
+        diff = tod[1:N:2] - tod[:N:2]
+        rms = np.nanstd(diff)/np.sqrt(2)
 
     return rms
 

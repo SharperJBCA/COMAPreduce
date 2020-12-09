@@ -5,6 +5,7 @@ void filter( double* array, int n, int filterSize )
 {
 
   Mediator<double> mediator( filterSize );
+
   for (int i = 0; i < filterSize/2; i++)
   {
     mediator.insert( array[0] );

@@ -16,7 +16,7 @@ cimport openmp
 from libc.math cimport sqrt, acos, sin, cos, floor, exp, pow
 from libc.stdio cimport printf
 from libc.stdlib cimport malloc, free
-
+        
 cdef extern from "medianFilter.cpp" nogil:
     void filter( double* array, int n, int filterSize )
     void filter_mask( double* array, int* mask, int n, int filterSize )
@@ -26,8 +26,10 @@ cdef extern from "medianFilter.cpp" nogil:
 def medfilt(double[::1] data, int filterSize):
     
     cdef int n = data.size
-    filter(&data[0], n, filterSize)
-    
+    cdef double *data_temp = &data[0]
+
+    filter(data_temp, n, filterSize)
+
     return data
 
 
