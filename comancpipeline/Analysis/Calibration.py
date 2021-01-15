@@ -24,12 +24,86 @@ from datetime import datetime
 from scipy.ndimage.filters import gaussian_filter1d
 from scipy.interpolate import interp1d
 
+__version__ = 'v1'
+
 class NoColdError(Exception):
     pass
 class NoHotError(Exception):
     pass
 class NoDiodeError(Exception):
     pass
+
+class BandAverage(DataStructure):
+    """
+    Average data in the level 2 structure in to bands. Calculate channel masks.
+    """
+    def __init__(self,*args,**kwargs):
+        """
+        """
+        self.feeds_select = 'all'
+        
+
+    
+    def run(self, data):
+        """
+        Expects a level2 file structure to be passed.
+        """
+        if self.feeds_select == 'all':
+            feeds = data['level1/spectrometer/feeds'][:]
+        else:
+            if (not isinstance(self.feeds_select,list)) & (not isinstance(self.feeds_select,np.ndarray)) :
+                self.feeds = [int(self.feeds_select)]
+                feeds = self.feeds
+            else:
+                feeds = [int(f) for f in self.feeds_select]
+        self.feeds = feeds
+
+        vane = data['level2/Vane']
+        print(vane.keys())
+        statistics = data['level2/Statistics']
+        frequency  = data['level2/frequency'][...]
+        scan_edges = data['level2/Statistics/scan_edges'][...]
+        nBands,nChans = frequency.shape
+        for iscan,(start,end) in enumerate(scan_edges):
+            for ifeed, feed in enumerate(self.feeds):
+                if feed == 20:
+                    continue
+                for iband in range(nBands):
+                    
+                    coeffs = statistics['filter_coefficients'][ifeed,iband,:,iscan,0]
+                    fnoise = statistics['fnoise_fits'][ifeed,iband,:,iscan,:]
+                    rms = statistics['wnoise_auto'][ifeed,iband,:,iscan,0]
+                    tsys= self.average_vane(vane['Tsys'][0,ifeed,iband,...])
+                    rms_red = rms*np.sqrt((1./fnoise[:,0])**fnoise[:,1]) 
+
+                    #pyplot.plot(coeffs,rms_red,'.')
+                    p=pyplot.plot(frequency[iband],rms*np.sqrt(0.05*16./1024.*1e9)-tsys)
+                    #pyplot.plot(frequency[iband],tsys,color=p[0].get_color(),ls='-.')
+                pyplot.show()
+                
+    def average_vane(self,tsys,nbins=64):
+
+        return np.mean(np.reshape(tsys,(64,tsys.size//64)),axis=1)
+    
+    
+    def __call__(self,data):
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+
+
+        # Need to check that there are noise stats:
+        if not 'level2/Statistics' in data:
+            return data
+
+        # Want to ensure the data file is read/write
+        #if not data.mode == 'r+':
+        #    filename = data.filename
+        #    data.close()
+        #    data = h5py.File(filename,'r+')
+
+        self.run(data)
+        #self.write(data)
+
+        return data
 
 
 class CreateLevel2Cont(DataStructure):
@@ -54,6 +128,9 @@ class CreateLevel2Cont(DataStructure):
         
         self.calvanedir = calvanedir
         self.calvane_prefix = calvane_prefix
+
+    def __str__(self):
+        return "Creating level2 file with channel binning of {}".format(self.average_width)
 
     def run(self,data):
         """
@@ -273,8 +350,7 @@ class CalculateVaneMeasurement(DataStructure):
 
         # Ignore Sky dips
         if 'Sky nod' in comment:
-            return data
-
+            return None
 
         self.run(data)
         self.write(data)

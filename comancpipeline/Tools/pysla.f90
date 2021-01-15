@@ -204,6 +204,50 @@ subroutine precess(ra, dec,mjd, len_bn)
   
 end subroutine precess
 
+subroutine prenut(ra, dec,mjd, len_bn)
+  implicit none
+  
+  integer, intent(in) :: len_bn
+  real*8, intent(in) :: mjd(len_bn)
+  real*8, intent(inout) :: ra(len_bn)
+  real*8, intent(inout) :: dec(len_bn)
+
+  real*8 :: v1(3)
+  real*8 :: v2(3)
+  real*8 :: PM(3,3)
+
+  interface
+     real*8 FUNCTION sla_epb(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_epb
+  end interface
+  interface
+     real*8 FUNCTION sla_dranrm(dummy)
+     real*8 :: dummy
+     END FUNCTION sla_dranrm
+  end interface
+
+  !f2py integer len_bn
+  !f2py real*8 mjd
+  !f2py real*8 ra,dec
+
+  integer :: i
+  real*8 :: epoch
+
+  do i=1, len_bn
+     call sla_dcs2c(ra(i),dec(i),v1) ! convert to vectors
+     epoch = sla_epb(mjd(i))
+     print *, ra(i),dec(i)
+     call sla_prenut(epoch,2000D0,PM) ! Nutation and precession matrix
+     call sla_dmxv(PM,v1,v2)
+     call sla_dcc2s(v2,ra(i),dec(i))
+     ra(i) = sla_dranrm(ra(i))
+  enddo    
+  
+end subroutine prenut
+
+
+
 
 subroutine precess_year(ra, dec,mjd, len_bn)
   implicit none

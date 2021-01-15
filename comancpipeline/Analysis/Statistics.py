@@ -21,6 +21,8 @@ from scipy.optimize import minimize
 
 from tqdm import tqdm
 
+__version__='v1'
+
 def AtmosGroundModel(fits,az,el):
     """
     """
@@ -125,6 +127,9 @@ class ScanEdges(DataStructure):
         # Create a scan edge object
         self.scan_edge_object = globals()[self.scan_edge_type](**kwargs)
 
+    def __str__(self):
+        return "Scan Edges."
+
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
@@ -134,7 +139,7 @@ class ScanEdges(DataStructure):
             source = source.decode('utf-8')
         comment = data['level1/comap'].attrs['comment']
         if not isinstance(comment,str):
-            comment = commnet.decode('utf-8')
+            comment = comment.decode('utf-8')
         print('SOURCE', source)
         if not source in allowed_sources:
             return data
@@ -195,6 +200,9 @@ class FnoiseStats(DataStructure):
         self.nbins = int(nbins)
         self.samplerate = samplerate 
         self.medfilt_stepsize = int(medfilt_stepsize)
+
+    def __str__(self):
+        return "Calculating noise statistics."
         
     def run(self, data):
         """

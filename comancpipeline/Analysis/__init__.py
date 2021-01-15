@@ -1,1 +1,1 @@
-from comancpipeline.Analysis import Calibration,SourceFitting,Mapping,BaseClasses,Massaging,Simulations,Statistics
+from comancpipeline.Analysis import Calibration,SourceFitting,Mapping,BaseClasses,Massaging,Simulations,Statistics,Flagging

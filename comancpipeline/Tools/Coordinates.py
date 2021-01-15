@@ -10,6 +10,7 @@ CalibratorList = {
     'CygA': [(19. + 59/60. + 28.356/60.**2)*15, 40 + 44./60. + 2.097/60.**2],
     'jupiter': None,
     'sun':None,
+    'saturn':None,
     'moon':None
 }
 comap_longitude = -(118 + 16./60. + 56./60.**2)
@@ -201,6 +202,8 @@ def getPlanetPosition(source, lon, lat, mjdtod, allpos=False):
 
     if 'JUPITER' in source.upper():
         pid = 5
+    elif 'SATURN' in source.upper():
+        pid = 6
     elif 'MOON' in source.upper():
         pid = 3
     else:
@@ -241,9 +244,10 @@ def sourcePosition(src, mjd, lon, lat):
         d0 *= 180./np.pi
         r0 = np.interp(mjd,mjd[::index_step],r0)
         d0 = np.interp(mjd,mjd[::index_step],d0)
+        #r0,d0 = precess(r0, d0, mjd)
     else:
         r0, d0 = mjd*0 + skypos[0], mjd*0 + skypos[1]
-        r0, d0 = precess2year(r0,d0,mjd)
+        #r0, d0 = precess2year(r0,d0,mjd)
 
     az, el = e2h(r0,d0,mjd,lon ,lat)
     return az, el, r0, d0
@@ -302,7 +306,7 @@ def e2h(ra, dec, mjd, lon, lat, degrees=True, return_lha=False):
 
 def precess(ra, dec, mjd, degrees=True):
     """
-    Precess coodinrate system to FK5 J2000.
+    Precess coordinate system to FK5 J2000.
     
     args:
     ra - arraylike, right ascension
@@ -322,6 +326,29 @@ def precess(ra, dec, mjd, degrees=True):
                   decout, 
                   mjd.astype(np.float))
     return raout/c, decout/c
+
+def prenut(ra, dec, mjd, degrees=True):
+    """
+    Precess coordinate system to FK5 J2000.
+    
+    args:
+    ra - arraylike, right ascension
+    dec- arraylike, declination
+    mjd- arraylike
+    """
+    if degrees:
+        c = np.pi/180.
+    else:
+        c = 1.
+
+    raout = ra.astype(np.float)*c
+    decout = dec.astype(np.float)*c
+
+    pysla.prenut(raout,
+                  decout, 
+                  mjd.astype(np.float))
+    return raout/c, decout/c
+
 
 def precess2year(ra, dec, mjd, degrees=True):
     """
