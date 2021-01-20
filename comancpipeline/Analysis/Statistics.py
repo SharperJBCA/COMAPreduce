@@ -14,7 +14,7 @@ from scipy.interpolate import interp1d
 import datetime
 from tqdm import tqdm
 import pandas as pd
-#from mpi4py import MPI 
+#from mpi4py import MPI
 import os
 #comm = MPI.COMM_WORLD
 from scipy.optimize import minimize
@@ -27,7 +27,7 @@ def AtmosGroundModel(fits,az,el):
     """
     """
     dlength = az.size
-    
+
     templates = np.ones((3,az.size))
     templates[0,:] = az
     if np.abs(np.max(az)-np.min(az)) > 180:
@@ -35,7 +35,7 @@ def AtmosGroundModel(fits,az,el):
         templates[0,high] -= 360
     templates[0,:] -= np.median(templates[0,:])
     templates[1,:] = 1./np.sin(el*np.pi/180.)
-        
+
     tod_filter = np.sum(templates[:,:]*fits[:,None],axis=0)
     return tod_filter
 
@@ -60,13 +60,13 @@ class RepointEdges(DataStructure):
         Expects a level 2 data structure
         """
         return self.getScanPositions(data)
-        
+
     def getScanPositions(self, d):
         """
         Finds beginning and ending of scans, creates mask that removes data when the telescope is not moving,
         provides indices for the positions of scans in masked array
 
-        Notes: 
+        Notes:
         - We may need to check for vane position too
         - Iteratively finding the best current fraction may also be needed
         """
@@ -79,12 +79,12 @@ class RepointEdges(DataStructure):
         # make it so that you have a gap, only use data where the telescope is moving
 
         # Elevation current seems a good proxy for finding repointing times
-        elcurrent = np.abs(d['level1/hk/antenna0/driveNode/elDacOutput'][:]) 
+        elcurrent = np.abs(d['level1/hk/antenna0/driveNode/elDacOutput'][:])
         elutc = d['level1/hk/antenna0/driveNode/utc'][:]
         mjd = d['level1/spectrometer/MJD'][:]
 
         # these are when the telescope is changing position
-        select = np.where((elcurrent > np.max(elcurrent)*self.max_el_current_fraction))[0] 
+        select = np.where((elcurrent > np.max(elcurrent)*self.max_el_current_fraction))[0]
 
         dselect = select[1:]-select[:-1]
         large_step_indices = np.where((dselect > self.min_sample_distance))[0]
@@ -133,7 +133,7 @@ class ScanEdges(DataStructure):
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
-        allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)]
+        allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)] + ['Field{:02d}'.format(i) for i in range(20)] + ['Field11b']
         source  = data['level1/comap'].attrs['source']
         if not isinstance(source,str):
             source = source.decode('utf-8')
@@ -168,10 +168,10 @@ class ScanEdges(DataStructure):
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
-        """        
+        """
 
         if not 'level2' in data:
-            return 
+            return
 
         lvl2 = data['level2']
         if not 'Statistics' in lvl2:
@@ -183,11 +183,11 @@ class ScanEdges(DataStructure):
         dsets = [np.array(self.scan_edges).astype(int)]
         for (dname, dset) in zip(dnames, dsets):
             if dname in statistics:
-                del statistics[dname]            
+                del statistics[dname]
             statistics.create_dataset(dname,  data=dset)
 
 
-class FnoiseStats(DataStructure): 
+class FnoiseStats(DataStructure):
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
@@ -198,12 +198,12 @@ class FnoiseStats(DataStructure):
         average_width - how many channels to average over
         """
         self.nbins = int(nbins)
-        self.samplerate = samplerate 
+        self.samplerate = samplerate
         self.medfilt_stepsize = int(medfilt_stepsize)
 
     def __str__(self):
         return "Calculating noise statistics."
-        
+
     def run(self, data):
         """
         Expects a level2 file structure to be passed.
@@ -283,7 +283,7 @@ class FnoiseStats(DataStructure):
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
-        allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)]
+        allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)] + ['Field{:02d}'.format(i) for i in range(20)] + ['Field11b']
         source = data['level1/comap'].attrs['source']
         if not isinstance(source,str):
             source = source.decode('utf-8')
@@ -326,14 +326,14 @@ class FnoiseStats(DataStructure):
 
         a = np.linalg.solve(C,z)
         return a.flatten()
-        
+
 
     def median_filter(self,tod):
         """
         Calculate this AFTER removing the atmosphere.
         """
         filter_tod = np.array(medfilt.medfilt(tod.astype(np.float64),np.int32(self.medfilt_stepsize)))
-        
+
         return filter_tod[:tod.size]
 
 
@@ -355,7 +355,7 @@ class FnoiseStats(DataStructure):
         mad = np.sqrt(np.nanmedian(np.abs(ABBA-med)**2))*1.4826/np.sqrt(scale)
 
         return mad
-        
+
     def PowerSpectrum(self, tod):
         """
         Calculates the bin averaged power spectrum
@@ -371,7 +371,7 @@ class FnoiseStats(DataStructure):
 
     def Model(self, P, x, rms):
         return rms**2 * (1 + (x/10**P[0])**P[1])
-        
+
     def Error(self, P, x, y,e, rms):
         error = np.abs(y/e)
         chi = (np.log(y) - np.log(self.Model(P,x,rms)))/error
@@ -385,7 +385,7 @@ class FnoiseStats(DataStructure):
         nu, ps, counts = self.PowerSpectrum(tod)
 
         # Only select non-nan values
-        # You may want to increase min counts, 
+        # You may want to increase min counts,
         # as the power spectrum is non-gaussian for small counts
         good = (counts > 50) & ( (nu < 0.03) | (nu > 0.05))
 
@@ -415,9 +415,9 @@ class FnoiseStats(DataStructure):
 
         for a_iter in range(niter):
             sel = np.random.uniform(low=0,high=dlength,size=dlength).astype(int)
-                    
-            cov = np.sum(templates[:,None,sel] * templates[None,:,sel],axis=-1) 
-            z = np.sum(templates[:,sel]*tod[None,sel],axis=1) 
+
+            cov = np.sum(templates[:,None,sel] * templates[None,:,sel],axis=-1)
+            z = np.sum(templates[:,sel]*tod[None,sel],axis=1)
             try:
                 a_all[a_iter,:] = np.linalg.solve(cov, z).flatten()
             except:
@@ -439,29 +439,172 @@ class FnoiseStats(DataStructure):
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
-        """        
+        """
 
         if not 'level2' in data:
-            return 
+            return
         lvl2 = data['level2']
         if not 'Statistics' in lvl2:
             statistics = lvl2.create_group('Statistics')
         else:
             statistics = lvl2['Statistics']
 
-        dnames = ['fnoise_fits','wnoise_auto', 'powerspectra','freqspectra', 
+        dnames = ['fnoise_fits','wnoise_auto', 'powerspectra','freqspectra',
                   'atmos','atmos_errors','filter_coefficients','atmos_coefficients']
         dsets = [self.fnoise_fits,self.wnoise_auto,self.powerspectra,self.freqspectra,
                  self.atmos,self.atmos_errs,self.filter_coefficients,self.atmos_coefficients]
         for (dname, dset) in zip(dnames, dsets):
             if dname in statistics:
-                del statistics[dname]            
+                del statistics[dname]
             statistics.create_dataset(dname,  data=dset)
 
         # Need to write filter_tods per scan
         for iscan,dset in enumerate(self.filter_tods):
             dname = 'FilterTod_Scan{:02d}'.format(iscan)
             if dname in statistics:
-                del statistics[dname]            
+                del statistics[dname]
             statistics.create_dataset(dname,  data=dset)
             statistics[dname].attrs['medfilt_stepsize'] = self.medfilt_stepsize
+
+
+class SkyDipStats(DataStructure):
+    """
+    Takes level 2 files, bins and calibrates them for continuum analysis.
+    Does not require scan_edges to run
+    """
+
+    def __init__(self, nbins=50, samplerate=50, medfilt_stepsize=5000, poly_iter=100, dipLo=42, dipHi=58):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        poly_iter - how many times to bootstrap 90% of values from
+        """
+        self.nbins = int(nbins)
+        self.samplerate = samplerate
+        self.medfilt_stepsize = int(medfilt_stepsize)
+        self.poly_iter = int(poly_iter)
+        self.dipLo = int(dipLo)
+        self.dipHi = int(dipHi)
+
+    def __str__(self):
+        return "Calculating noise statistics (skydip class)."
+
+    def run(self, data):
+        """
+        Expects a level2 file structure to be passed.
+        """
+        # First we need:
+        # 1) The TOD data
+        # 2) The feature bits to select just the observing period
+        # 3) Elevation to remove the atmospheric component
+        tod = data['level2/averaged_tod'][...]
+        az = data['level1/spectrometer/pixel_pointing/pixel_az'][...]
+        el = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
+        feeds = data['level1/spectrometer/feeds'][:]
+        feat = data['level1/spectrometer/features'][...]
+
+
+        # Looping over Feed - Band - Channel, perform 1/f noise fit
+        nFeeds, nBands, nChannels, nSamples = tod.shape
+        self.opacity = np.zeros((nFeeds, nBands, nChannels))
+        self.opacity_err = np.zeros((nFeeds, nBands, nChannels))
+        self.Tzen = np.zeros((nFeeds, nBands, nChannels))
+        self.Tzen_err = np.zeros((nFeeds, nBands, nChannels))
+
+        pbar = tqdm(total=((nFeeds-1)*nBands*nChannels))
+
+        skydip_select = np.all([tod_skydip>self.dipLo,
+                                tod_skydip<self.dipHi,
+                                feat==256],
+                               axis=0)
+        import time
+
+        for ifeed in range(nFeeds):
+            if feeds[ifeed] == 20:
+                continue
+            for iband in range(nBands):
+
+                for ichan in range(nChannels):
+                    x = 1/(np.cos(el[ifeed,skydip_select[ifeed]]*(np.pi/180)))
+                    y = tod_skydip[ifeed,iband,ichan,skydip_select[ifeed]]
+
+                    total = np.shape(x)[0]
+                    boot_no = int(np.rint(total*0.9))
+                    coeffs = np.zeros((self.poly_iter,2))
+                    coeffs[:] = np.nan
+                    if np.all(np.isnan(y))==False:
+                        for n in range(self.poly_iter):
+                            boot_sel = np.random.randint(0,high=total,size=boot_no)
+                            try:
+                                coeffs[n] = np.polyfit(x[boot_sel],y[boot_sel],1)
+                            except:
+                                pass
+
+                        avg = np.nanmean(coeffs,axis=1)
+                        std = np.nanstd(coeffs,axis=1)
+                    else:
+                        avg = np.asarray((np.nan,np.nan))
+                        std = np.asarray((np.nan,np.nan))
+
+                    #assume Tatm=300K
+                    self.opacity[ifeed,iband,ichan] = avg[1]/300#K
+                    self.opacity_err[ifeed,iband,ichan] = std[1]/300#K
+                    self.Tzen[ifeed,iband,ichan] = avg[0]
+                    self.Tzen_err[ifeed,iband,ichan] = std[0]
+
+                    pbar.update(1)
+
+        #for ifeed in range(nFeeds):
+        #    pyplot.errorbar(np.arange(nScans),self.atmos[ifeed,0,:,1],fmt='.',yerr=self.atmos_errs[ifeed,0,:,1])
+        #pyplot.show()
+
+        pbar.close()
+
+    def __call__(self,data):
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+
+        allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)] + ['Field{:02d}'.format(i) for i in range(20)] + ['Field11b']
+        source = data['level1/comap'].attrs['source']
+        if not isinstance(source,str):
+            source = source.decode('utf-8')
+        comment = data['level1/comap'].attrs['comment']
+        if not isinstance(comment, str):
+            comment = comment.decode('utf-8')
+
+        print('SOURCE', source)
+        if not source in allowed_sources:
+            return data
+        if not 'Sky nod' in comment:
+            return data
+
+        self.run(data)
+
+        # Want to ensure the data file is read/write
+        if not data.mode == 'r+':
+            filename = data.filename
+            data.close()
+            data = h5py.File(filename,'r+')
+
+        self.write(data)
+
+        return data
+
+    def write(self,data):
+        """
+        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        """
+
+        if not 'level2' in data:
+            return
+        lvl2 = data['level2']
+        if not 'SkyDipStats' in lvl2:
+            SkyDipStats = lvl2.create_group('SkyDipStats')
+        else:
+            SkyDipStats = lvl2['SkyDipStats']
+
+        dnames = ['opacity', 'opacity_err', 'Tzenith', 'Tzenith_err']
+        dsets = [self.opacity, self.opacity_err, self.Tzen_err, self.Tzen_err]
+        for (dname, dset) in zip(dnames, dsets):
+            if dname in SkyDipStats:
+                del SkyDipStats[dname]
+            SkyDipStats.create_dataset(dname,  data=dset)
