@@ -167,7 +167,7 @@ class CreateLevel2Cont(DataStructure):
         self.avg_tod = np.zeros(avg_tod_shape,dtype=alltod.dtype)
 
         # Average the data and apply the gains
-        self.average(data.filename,data,alltod, self.avg_tod)
+        self.average_obs(data.filename,data,alltod, self.avg_tod)
 
 
     def __call__(self,data):
@@ -266,7 +266,6 @@ class CreateLevel2Cont(DataStructure):
 
 
                     self.avg_frequency[sb,chan] = np.mean(frequency[sb,chan*width:(chan+1)*width])
-        gain_file.close()
 
     def getcalibration_skydip(self,data):
         obsidSearch = int(data.filename.split('/')[-1][6:13]) + 1
@@ -274,20 +273,24 @@ class CreateLevel2Cont(DataStructure):
         calFileDir = listdir(self.calvanedir)
         calFileFil1 = [s for s in calFileDir  if searchstring in s]
         calFileName = [s for s in calFileFil1 if '.hd5' in s]
-        print(calFileName)
+
         if calFileName == []:
             return data
         cname = '{}/{}'.format(self.calvanedir,calFileName[0])
         gain_file = h5py.File(cname,'r')
-        gain = gain_file['Gain'] # (event, horn, sideband, frequency)
-        tsys = gain_file['Tsys'] # (event, horn, sideband, frequency) - use for weights
+        gain = gain_file['Gain'][...] # (event, horn, sideband, frequency)
+        tsys = gain_file['Tsys'][...] # (event, horn, sideband, frequency) - use for weights
+        gain_file.close()
+        return cname, gain, tsys
 
     def getcalibration_obs(self,data):
         fname = data.filename.split('/')[-1]
         cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
         gain_file = h5py.File(cname,'r')
-        gain = gain_file['Gain'] # (event, horn, sideband, frequency)
-        tsys = gain_file['Tsys'] # (event, horn, sideband, frequency) - use for weights
+        gain = gain_file['Gain'][...] # (event, horn, sideband, frequency)
+        tsys = gain_file['Tsys'][...] # (event, horn, sideband, frequency) - use for weights
+        gain_file.close()
+        return cname, gain, tsys
 
     def write(self,data):
         """

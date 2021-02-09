@@ -312,7 +312,6 @@ class FitSource(DataStructure):
         if 'test' in comment:
             return data
 
-        print('Starting Run')
         self.run(data)
 
         if not data.mode == 'r+':
@@ -351,6 +350,7 @@ class FitSource(DataStructure):
 
         # Make sure we are actually using a calibrator scan
         if self.source in Coordinates.CalibratorList:
+            
             nHorns, nSBs, nChans, nSamples = alltod.shape   
 
             # First we will apply a median filter
@@ -448,7 +448,8 @@ class FitSource(DataStructure):
 
                 print(result)
                 print(error)
-                print(result[1]*60*2.355, result[3]*60*2.355)
+                print(result[1]*60/np.cos(self.src_el*np.pi/180.), result[3]*60)
+                print(result[2]*60*2.355, result[4]*60*2.355)
                 plot_map_image(result,maps[ifeed,...].flatten(),xygrid)
                 stop
                 pyplot.subplot(2,2,1)
@@ -571,6 +572,8 @@ class FitSource(DataStructure):
         feed_avg_cov = np.zeros((tod.shape[0],self.Nx,self.Ny))
 
         azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
+        self.src_el = np.mean(elSource)
+        self.src_az = np.mean(azSource)
         for ifeed in tqdm(range(tod.shape[0])):
             if ifeed > 0:
                 continue
@@ -585,23 +588,17 @@ class FitSource(DataStructure):
                                         dec[ifeed,:],
                                         raSource, decSource,0)
 
-            xtrue,ytrue =Coordinates.Rotate(az[ifeed,:],
+            xtrue,ytrue =Coordinates.Rotate(azSource, elSource,
+                                            az[ifeed,:],
                                             el[ifeed,:],
-                                            azSource, elSource,0)
+                                            0)
 
-            offset_az = 0./60.
+            offset_az = 4./60.
             offset_el = 4./60.
-            a,e =Coordinates.Rotate(az[ifeed,:],
-                                    el[ifeed,:],
-                                    -az[ifeed,:], -el[ifeed,:] - offset_el,0)
-            a,e =Coordinates.Rotate(a,e,
-                                    az[ifeed,:], el[ifeed,:], 0)
 
-
-            x,y =Coordinates.Rotate(a,
-                                    e,
-                                    azSource, elSource,0)
-
+            x,y =Coordinates.Rotate(azSource, elSource,
+                                    az[ifeed,:]+offset_az,
+                                    el[ifeed,:]+offset_el,0)
 
             pixels,pX,pY = self.getpixels(x,y,self.dx,self.dy,self.Nx,self.Ny)
             _pixels,_pX,_pY = self.getpixels(xtrue,ytrue,self.dx,self.dy,self.Nx,self.Ny)
