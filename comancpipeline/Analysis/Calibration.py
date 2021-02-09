@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
 import h5py
-import comancpipeline 
+import comancpipeline
 from comancpipeline.Analysis.BaseClasses import DataStructure
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
@@ -40,9 +40,7 @@ class BandAverage(DataStructure):
         """
         """
         self.feeds_select = 'all'
-        
 
-    
     def run(self, data):
         """
         Expects a level2 file structure to be passed.
@@ -68,23 +66,22 @@ class BandAverage(DataStructure):
                 if feed == 20:
                     continue
                 for iband in range(nBands):
-                    
+
                     coeffs = statistics['filter_coefficients'][ifeed,iband,:,iscan,0]
                     fnoise = statistics['fnoise_fits'][ifeed,iband,:,iscan,:]
                     rms = statistics['wnoise_auto'][ifeed,iband,:,iscan,0]
                     tsys= self.average_vane(vane['Tsys'][0,ifeed,iband,...])
-                    rms_red = rms*np.sqrt((1./fnoise[:,0])**fnoise[:,1]) 
+                    rms_red = rms*np.sqrt((1./fnoise[:,0])**fnoise[:,1])
 
                     #pyplot.plot(coeffs,rms_red,'.')
                     p=pyplot.plot(frequency[iband],rms*np.sqrt(0.05*16./1024.*1e9)-tsys)
                     #pyplot.plot(frequency[iband],tsys,color=p[0].get_color(),ls='-.')
                 pyplot.show()
-                
+
     def average_vane(self,tsys,nbins=64):
 
         return np.mean(np.reshape(tsys,(64,tsys.size//64)),axis=1)
-    
-    
+
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
@@ -104,13 +101,12 @@ class BandAverage(DataStructure):
 
         return data
 
-
 class CreateLevel2Cont(DataStructure):
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self, feeds='all', output_dir='', nworkers= 1, 
+    def __init__(self, feeds='all', output_dir='', nworkers= 1,
                  average_width=512,calvanedir='AncillaryData/CalVanes',
                  calvane_prefix='CalVane'):
         """
@@ -124,7 +120,7 @@ class CreateLevel2Cont(DataStructure):
 
         self.nworkers = int(nworkers)
         self.average_width = int(average_width)
-        
+
         self.calvanedir = calvanedir
         self.calvane_prefix = calvane_prefix
 
@@ -179,14 +175,13 @@ class CreateLevel2Cont(DataStructure):
         Modify baseclass __call__ to change file from the level1 file to the level2 file.
         """
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
-
         if 'comment' in data['comap'].attrs:
             comment = data['comap'].attrs['comment']
             if not isinstance(comment,str):
                 comment = comment.decode('utf-8')
         else:
             comment = 'No Comment'
-
+        self.comment = comment
         prefix = data.filename.split('/')[-1].split('.hd5')[0]
         self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
 
@@ -213,10 +208,6 @@ class CreateLevel2Cont(DataStructure):
                    return data
             h.close()
 
-        # Ignore Sky dips
-        if 'Sky nod' in comment:
-            return data
-
         self.run(data)
         self.write(data)
 
@@ -226,7 +217,7 @@ class CreateLevel2Cont(DataStructure):
 
         return self.outfile
 
-    def average(self,filename,data, alltod, tod):
+    def average_obs(self,filename,data, alltod, tod):
         """
         Average TOD together
         """
@@ -241,11 +232,12 @@ class CreateLevel2Cont(DataStructure):
         self.avg_frequency = np.zeros((nSBs, nChans))
         # Averaging the data either using a Tsys/Calvane measurement or assume equal weights
         try:
-            fname = data.filename.split('/')[-1]
-            cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
-            gain_file = h5py.File(cname,'r')
-            gain = gain_file['Gain'] # (event, horn, sideband, frequency) 
-            tsys = gain_file['Tsys'] # (event, horn, sideband, frequency) - use for weights
+            # Altered to allow Skydip files to be calibrated using the neighbouring
+            # cal-vane files (following SKYDIP-LISSAJOUS obs. plan)
+            if 'Sky nod' in self.comment:
+                cname, gain, tsys = self.getcalibration_skydip(data)
+            else:
+                cname, gain, tsys = self.getcalibration_obs(data)
         except ValueError:
             cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
             gain = np.ones((2, nHorns, nSBs, nChans*width))
@@ -276,10 +268,31 @@ class CreateLevel2Cont(DataStructure):
                     self.avg_frequency[sb,chan] = np.mean(frequency[sb,chan*width:(chan+1)*width])
         gain_file.close()
 
+    def getcalibration_skydip(self,data):
+        obsidSearch = int(data.filename.split('/')[-1][6:13]) + 1
+        searchstring = "{:07d}".format(obsidSearch)
+        calFileDir = listdir(self.calvanedir)
+        calFileFil1 = [s for s in calFileDir  if searchstring in s]
+        calFileName = [s for s in calFileFil1 if '.hd5' in s]
+        print(calFileName)
+        if calFileName == []:
+            return data
+        cname = '{}/{}'.format(self.calvanedir,calFileName[0])
+        gain_file = h5py.File(cname,'r')
+        gain = gain_file['Gain'] # (event, horn, sideband, frequency)
+        tsys = gain_file['Tsys'] # (event, horn, sideband, frequency) - use for weights
+
+    def getcalibration_obs(self,data):
+        fname = data.filename.split('/')[-1]
+        cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
+        gain_file = h5py.File(cname,'r')
+        gain = gain_file['Gain'] # (event, horn, sideband, frequency)
+        tsys = gain_file['Tsys'] # (event, horn, sideband, frequency) - use for weights
+
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
-        """        
+        """
 
         if os.path.exists(self.outfilename):
             self.outfile = h5py.File(self.outfilename,'a')
@@ -315,11 +328,11 @@ class CalculateVaneMeasurement(DataStructure):
     """
     Calculates the Tsys and Gain factors from a COMAP vane in/out measurement.
     """
-    def __init__(self, output_dir='AmbientLoads/', 
+    def __init__(self, output_dir='AmbientLoads/',
                  overwrite=True, elLim=5, feeds = 'all',
                  minSamples=200, tCold=2.74, tHotOffset=273.15,prefix='VaneCal'):
         super().__init__()
-        self.feeds_select = feeds 
+        self.feeds_select = feeds
 
         self.output_dir = output_dir
         self.overwrite= overwrite
@@ -408,7 +421,7 @@ class CalculateVaneMeasurement(DataStructure):
             snip = 0
         else:
             snip = int(jumps[0])
-        
+
         idHot = np.sort(idHot)
         idCold = np.sort(idCold[snip:])
         return idHot, idCold
@@ -426,7 +439,7 @@ class CalculateVaneMeasurement(DataStructure):
             justVanes = np.where((features == 13))[0]
         else: # Must use cal vane angle to calculate the diode positions
 
-            if mjd[0] < Time(datetime(2019,3,1),format='datetime').mjd: # Early observations before antenna0 
+            if mjd[0] < Time(datetime(2019,3,1),format='datetime').mjd: # Early observations before antenna0
                 hkMJD = data['hk/vane/MJD'][:]
                 angles = np.interp(mjd,hkMJD, data['hk/vane/angle'][:])
             else:
@@ -480,8 +493,8 @@ class CalculateVaneMeasurement(DataStructure):
 
         # Read in data that is required:
         freq = data['spectrometer/frequency'][...]
-        mjd  = data['spectrometer/MJD'][:] 
-        el  = data['pointing/elActual'][:]        
+        mjd  = data['spectrometer/MJD'][:]
+        el  = data['pointing/elActual'][:]
 
         if self.feeds_select == 'all':
             feeds = data['spectrometer/feeds'][:]
@@ -497,21 +510,21 @@ class CalculateVaneMeasurement(DataStructure):
         self.elevation = np.nanmedian(el)
 
         # Keep TOD as a file object to avoid reading it all in
-        tod  = data['spectrometer/tod'] 
-        btod  = data['spectrometer/band_average'] 
+        tod  = data['spectrometer/tod']
+        btod  = data['spectrometer/band_average']
         nHorns, nSBs, nChan, nSamps = tod.shape
 
 
         # Setup for calculating the calibration factors, interpolate temperatures:
-        if mjd[0] < Time(datetime(2019,3,1),format='datetime').mjd: # Early observations before antenna0 
-            tHot  = np.nanmean(data['hk/env/ambientLoadTemp'][:])/100. + self.tHotOffset 
+        if mjd[0] < Time(datetime(2019,3,1),format='datetime').mjd: # Early observations before antenna0
+            tHot  = np.nanmean(data['hk/env/ambientLoadTemp'][:])/100. + self.tHotOffset
             hkMJD = data['hk/env/MJD'][:]
             # Observations before vane change:
         elif (mjd[0] > Time(datetime(2019,3,1),format='datetime').mjd) & (mjd[0] < Time(datetime(2019,8,23),format='datetime').mjd):
-            tHot  = np.nanmean(data['hk/antenna0/env/ambientLoadTemp'][:])/100. + self.tHotOffset 
+            tHot  = np.nanmean(data['hk/antenna0/env/ambientLoadTemp'][:])/100. + self.tHotOffset
             hkMJD = data['hk/antenna0/env/utc'][:]
         else:
-            tHot  = np.nanmean(data['hk/antenna0/vane/Tvane'][:])/100. + self.tHotOffset 
+            tHot  = np.nanmean(data['hk/antenna0/vane/Tvane'][:])/100. + self.tHotOffset
             hkMJD = data['hk/antenna0/vane/utc'][:]
 
         vanePositions = self.FindVane(data)
@@ -555,11 +568,10 @@ class CalculateVaneMeasurement(DataStructure):
     def write(self,data):
         """
         Write the Tsys, Gain and RMS to a pandas data frame for each hdf5 file.
-        """        
+        """
         if self.nodata:
             return
 
-        
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
 
