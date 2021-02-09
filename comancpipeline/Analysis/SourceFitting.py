@@ -15,7 +15,6 @@ from comancpipeline.Tools.WCS import DefineWCS
 from comancpipeline.Tools.WCS import ang2pix
 from comancpipeline.Tools.WCS import ang2pixWCS
 from statsmodels import robust
-import pandas as pd
 from tqdm import tqdm
 
 from functools import partial
@@ -24,6 +23,8 @@ from comancpipeline.Tools.median_filter import medfilt
 
 import h5py
 
+import emcee
+
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -31,6 +32,50 @@ import os
 import shutil
 
 __version__ = 'v2'
+
+
+def plot_map_image(P,m,xy):
+    source_model = Fitting.Gauss2dRot()
+
+    Nx, Ny = 120,120
+    dx, dy = 0.25/60.,0.25/60.
+    #xy = np.meshgrid(((np.arange(Nx)+0.5)*dx - Nx*dx/2.),
+    #                ((np.arange(Ny)+0.5)*dy - Ny*dy/2.))
+    extent = [np.min(xy[0]),np.max(xy[0]),np.min(xy[1]),np.max(xy[1])]
+    def downsample_map(m,x,y):
+        
+        nbins = 30
+        binedges = (np.linspace(np.min(x),np.max(x),nbins+1),np.linspace(np.min(y),np.max(y),nbins+1))
+        
+        gd = np.isfinite(m)
+        try:
+            down_m = np.histogram2d(x[gd],y[gd], binedges,weights=m[gd])[0]/np.histogram2d(x[gd],y[gd], binedges)[0]
+        except:
+            down_m = np.zeros((nbins,nbins))*np.nan
+        return down_m
+
+        
+    mdl = np.reshape(source_model(P,xy),(Ny,Nx))
+    res = np.reshape(m,(Ny,Nx)) - mdl
+    pyplot.subplot(2,2,1)        
+    pyplot.imshow(downsample_map(np.reshape(m,(Ny,Nx)),xy[0],xy[1]).T,interpolation='none',extent=extent,origin='lower')
+    pyplot.contour(xy[0],xy[1],mdl-P[-1],[0.1*P[0],0.5*P[0]],colors='k',linewidths=2,alpha=0.5)
+    pyplot.plot(P[1],P[3],'kx')
+    pyplot.grid()
+    pyplot.title('Data')
+
+    pyplot.subplot(2,2,2)
+    pyplot.imshow(downsample_map(mdl,xy[0],xy[1]).T,interpolation='none',extent=extent,origin='lower')
+    pyplot.plot(P[1],P[3],'kx')
+    pyplot.grid()
+    pyplot.title('Model')
+     
+    pyplot.subplot(2,2,3)
+    pyplot.imshow(downsample_map(res,xy[0],xy[1]).T,interpolation='none',extent=extent ,origin='lower')
+    pyplot.grid()
+    pyplot.title('Residual')
+
+    pyplot.show()
 
 #from comancpipeline.Tools import alglib_optimize
 
@@ -229,10 +274,10 @@ class FitSource(DataStructure):
 
         self.feeds = feeds
         
-        self.dx = dx/60
-        self.dy = dy/60.
-        self.Nx = int(60)
-        self.Ny = int(60)
+        self.dx = dx/Nx
+        self.dy = dy/Ny
+        self.Nx = int(Nx)
+        self.Ny = int(Ny)
         self.nfeeds_total = int(20)
 
         self.output_dir = output_dir
@@ -317,7 +362,7 @@ class FitSource(DataStructure):
             
             print('Fitting Sources')
             # First get the positions of the sources from the feed average
-            self.fit_source_position(self.feed_avg_maps, self.feed_avg_covs,xygrid)
+            self.fit_source_position(data,alltod,filters,self.feed_avg_maps, self.feed_avg_covs,xygrid,features)
 
             # Finally, fit the data in the maps
             self.fit_map(self.maps,self.covs,xygrid,freq)
@@ -326,7 +371,7 @@ class FitSource(DataStructure):
             return
 
 
-    def fit_source_position(self, maps, covs, xygrid):
+    def fit_source_position(self,data,tod, filters, maps, covs, xygrid,features):
         """
         Performs a full fit to the maps obtain the source positions 
 
@@ -335,39 +380,90 @@ class FitSource(DataStructure):
         def limfunc(P):
             return False
 
-        # Unpack the pixel coordinates
-        x,y = xygrid
-        x = x.flatten()
-        y = y.flatten()
+        sel = np.where((features > 0) & (features != 13))[0]
 
-        # Store the feed average fits
+        mjd = data['level1/spectrometer/MJD'][:]
+
+        # We do Jupiter in the Az/El frame but celestial in sky frame
+        if self.source.upper() == 'JUPITER':
+            az  = data['level1/spectrometer/pixel_pointing/pixel_az'][:]
+            el  = data['level1/spectrometer/pixel_pointing/pixel_el'][:]
+            az = az[:,sel]
+            el = el[:,sel]
+        else:
+            ra  = data['level1/spectrometer/pixel_pointing/pixel_ra'][:]
+            dec = data['level1/spectrometer/pixel_pointing/pixel_dec'][:]
+            ra  = ra[:,sel]
+            dec = dec[:,sel]
+        mjd=mjd[sel]
+
+
+        azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
         nparams = 7
         self.feed_avg_fits = np.zeros((maps.shape[0],nparams))
         self.feed_avg_uncertainty = np.zeros((maps.shape[0],nparams)) 
-        for ifeed in tqdm(range(maps.shape[0]),desc=f'Fitting rank {rank}'):
-            data = maps[ifeed,...].flatten()
-            cov  = covs[ifeed,...].flatten()
 
-            gd = np.isfinite(data)
-            if np.sum(gd) == 0:
+        for ifeed in tqdm(range(tod.shape[0])):
+            if ifeed > 0:
                 continue
+            feed_map = maps[ifeed,...].flatten()
+            feed_cov = covs[ifeed,...].flatten()
+            gd = np.isfinite(feed_map)
+            feed_map = feed_map[gd]
+            feed_cov = feed_cov[gd]
+            x,y = xygrid
+            x,y = x.flatten()[gd],y.flatten()[gd]
 
-            xgd = x[gd]
-            ygd = y[gd]
+            #feed_map = self.fitfunc.func([1,0,2.25/60.,0,2.25/60.,0,0],[x,y]) + np.random.normal(scale=np.sqrt(feed_cov))
 
             # Give some start parameters
-            P0 = [np.nanmax(data)-np.nanmedian(data),
-                  xgd[np.argmax(data[gd])], # x0
+            if len(feed_map) == 0:
+                continue
+
+            P0 = [np.nanmax(feed_map)-np.nanmedian(feed_map),
+                  x[np.argmax(feed_map)], # x0
                   1./60., #sigx
-                  ygd[np.argmax(data[gd])], # y0
+                  y[np.argmax(feed_map)], # y0
                   1./60., # sigy
                   0., # phi
-                  np.nanmedian(data)] # bkgd
-
+                  np.nanmedian(feed_map)] # bkgd
+            
+            
             # Perform the least-sqaures fit
-            result = minimize(Fitting.ErrorLstSq,P0,args=[self.fitfunc.func,limfunc,[x[gd],y[gd]],data[gd],cov[gd],{}],method='CG')
+            result = minimize(Fitting.ErrorLstSq,P0,args=[self.fitfunc.func,limfunc,[x,y],feed_map,feed_cov,{}],method='CG')
 
-            self.feed_avg_fits[ifeed,:] = result.x
+            result.x[-2] = 0.
+            nwalkers = 32
+            pos = result.x + 1e-4 * np.random.normal(size=(nwalkers, len(result.x)))
+            if True:
+                sampler = emcee.EnsembleSampler(nwalkers,len(result.x),Fitting.MC_ErrorLstSq, 
+                                                args=[self.fitfunc.func,limfunc,[x,y],feed_map,feed_cov,{}])
+                sampler.run_mcmc(pos,5000,progress=True)
+            
+                flat_samples = sampler.get_chain(discard=100,thin=15,flat=True)
+                result = np.nanmean(flat_samples,axis=0)
+                error  = np.nanstd(flat_samples ,axis=0)
+                self.feed_avg_fits[ifeed,:] = result
+                self.feed_avg_uncertainty[ifeed,:] = error
+
+                print(result)
+                print(error)
+                print(result[1]*60*2.355, result[3]*60*2.355)
+                plot_map_image(result,maps[ifeed,...].flatten(),xygrid)
+                stop
+                pyplot.subplot(2,2,1)
+                pyplot.plot(maps[ifeed,...].flatten(),lw=2)
+                pyplot.plot( self.fitfunc.func(result,xygrid).flatten()[gd])
+                pyplot.subplot(222)
+                pyplot.plot( self.fitfunc.func(result,xygrid).flatten()[gd])
+                pyplot.title('Model')
+                pyplot.subplot(223)
+                pyplot.plot(feed_map - self.fitfunc.func(result,xygrid).flatten()[gd])
+                pyplot.title('Residual')
+                pyplot.show()
+
+            #except ValueError:
+            #    pass
 
     def fit_map(self,maps,covs,xygrid,freq):
         def limfunc(P):
@@ -386,6 +482,7 @@ class FitSource(DataStructure):
         self.apers         = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],2))
 
         for ifeed in tqdm(range(maps.shape[0]),desc=f'Fitting rank {rank}'):
+        
             for isb in range(maps.shape[1]):
                 for ichan in range(maps.shape[2]):
                     data = maps[ifeed,isb,ichan,...].flatten()
@@ -475,6 +572,8 @@ class FitSource(DataStructure):
 
         azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
         for ifeed in tqdm(range(tod.shape[0])):
+            if ifeed > 0:
+                continue
             feed_tod = tod[ifeed,...] 
 
             if self.source.upper() == 'JUPITER':
@@ -486,16 +585,37 @@ class FitSource(DataStructure):
                                         dec[ifeed,:],
                                         raSource, decSource,0)
 
+            xtrue,ytrue =Coordinates.Rotate(az[ifeed,:],
+                                            el[ifeed,:],
+                                            azSource, elSource,0)
 
-            
-            pixels = self.getpixels(x,y,self.dx,self.dy,self.Nx,self.Ny)
+            offset_az = 0./60.
+            offset_el = 4./60.
+            a,e =Coordinates.Rotate(az[ifeed,:],
+                                    el[ifeed,:],
+                                    -az[ifeed,:], -el[ifeed,:] - offset_el,0)
+            a,e =Coordinates.Rotate(a,e,
+                                    az[ifeed,:], el[ifeed,:], 0)
+
+
+            x,y =Coordinates.Rotate(a,
+                                    e,
+                                    azSource, elSource,0)
+
+
+            pixels,pX,pY = self.getpixels(x,y,self.dx,self.dy,self.Nx,self.Ny)
+            _pixels,_pX,_pY = self.getpixels(xtrue,ytrue,self.dx,self.dy,self.Nx,self.Ny)
+
             mask = np.ones(pixels.size,dtype=int)
             mask[pixels == -1] = 0
             for isb in range(tod.shape[1]):
                 for ichan in range(tod.shape[2]):
                     mapdata[...] = 0.
                     hitdata[...] = 0.
-                    z = (feed_tod[isb,ichan,sel]-filters[ifeed,isb,ichan])
+                    #z =  (feed_tod[isb,ichan,sel]-filters[ifeed,isb,ichan])
+                    z = self.fitfunc.func([1,0,2.25/60.,0,2.25/60.,0,0], (xtrue,ytrue))
+
+
                     if np.sum(np.isfinite(z)) == 0:
                         continue
                     rms = stats.AutoRMS(z)
@@ -503,14 +623,15 @@ class FitSource(DataStructure):
                     binFuncs.binValues(mapdata, pixels, weights=z.astype(np.float64)/rms**2,mask=mask)
                     binFuncs.binValues(hitdata, pixels, mask=mask,weights=np.ones(z.size)/rms**2)
 
+
                     maps[ifeed,isb,ichan,...] = np.reshape(mapdata/hitdata,(self.Ny,self.Nx))
                     covs[ifeed,isb,ichan,...] = np.reshape(1./hitdata,(self.Ny,self.Nx))
 
                     feed_avg_map[ifeed,...] += np.reshape(mapdata,(self.Ny,self.Nx))
                     feed_avg_cov[ifeed,...] += np.reshape(hitdata,(self.Ny,self.Nx))
 
-        xygrid = np.meshgrid(np.linspace(-self.Nx*self.dx/2.,self.Nx*self.dx/2.,self.Nx),
-                             np.linspace(-self.Ny*self.dy/2.,self.Ny*self.dy/2.,self.Ny))
+        xygrid = np.meshgrid((np.arange(self.Nx)+0.5)*self.dx - self.Nx*self.dx/2.,
+                             (np.arange(self.Ny)+0.5)*self.dy - self.Ny*self.dy/2.)
         
         feed_avg_map = feed_avg_map/feed_avg_cov
         feed_avg_cov = 1./feed_avg_cov
@@ -522,12 +643,14 @@ class FitSource(DataStructure):
         Dx = (Nx*dx)
         Dy = (Ny*dy)
 
+        print(Dx,Dy,dx,Dx/dx,Nx)
+
         pX = ((x+Dx/2.)/dx).astype(int)
         pY = ((y+Dy/2.)/dy).astype(int)
         pixels = pX + pY*Nx
         pixels[((pX < 0) | (pX >= Nx)) | ((pY < 0) | (pY >= Ny))] = -1
 
-        return pixels
+        return pixels,((x+Dx/2.)/dx),((y+Dy/2.)/dy)
         
         
 
@@ -537,6 +660,8 @@ class FitSource(DataStructure):
         
         filters = np.zeros((tod.shape[0],tod.shape[1],tod.shape[2],sel.size))
         for ifeed in tqdm(range(tod.shape[0])):
+            if ifeed > 0:
+                continue
             feed_tod = tod[ifeed,...] 
             for isb in range(tod.shape[1]):
                 for ichan in range(tod.shape[2]):
@@ -592,6 +717,8 @@ class FitSource(DataStructure):
         all_errs = np.zeros((self.fits.shape[0], self.fits.shape[1], self.fits.shape[2], 7))
         for i,iparam in enumerate([1,3,5]):
             all_fits[:,:,:,iparam] = (self.feed_avg_fits[:,iparam])[:,None,None]
+            all_errs[:,:,:,iparam] = (self.feed_avg_uncertainty[:,iparam])[:,None,None]
+
         for i,iparam in enumerate([0,2,4,6]):
             all_fits[:,:,:,iparam] = self.fits[...,i]
             all_errs[:,:,:,iparam] = self.uncertainties[...,i]

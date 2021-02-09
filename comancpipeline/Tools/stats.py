@@ -7,7 +7,6 @@ from tqdm import tqdm
 from comancpipeline.Tools import Coordinates
 from matplotlib.transforms import ScaledTranslation
 from scipy.signal import fftconvolve
-import seaborn as sns
 
 
 def MAD(d,axis=0):

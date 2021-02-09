@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
 
-from comancpipeline.MapMaking import Types #import Types.Offsets, Map, HealpixMap, ProxyHealpixMap
+from comancpipeline.MapMaking import Types, MapTypes, OffsetTypes #import Types.Offsets, Map, HealpixMap, ProxyHealpixMap
 from comancpipeline.Tools import binFuncs
 from scipy.sparse import lil_matrix, diags, linalg
 
@@ -95,14 +95,38 @@ def Destriper(parameters, data):
     Noffsets  = data.Nsamples//offsetLen
 
     # Offsets for storing the outputs
-    offsets   = Types.Offsets(offsetLen, Noffsets,  data.Nsamples)
+    offsets   = OffsetTypes.Offsets(offsetLen, Noffsets,  data.Nsamples)
 
     # For storing the offsets on the sky
-    offsetMap = Types.Map(data.naive.nxpix,
-                    data.naive.nypix,
-                    data.naive.wcs)
+    offsetMap  = MapTypes.FlatMapType(data.naive.crval, 
+                                      data.naive.cdelt, 
+                                      data.naive.crpix, 
+                                      data.naive.ctype,
+                                      data.naive.nxpix,
+                                      data.naive.nypix)
 
-    CGM(data, offsets, offsetMap, niter=niter)
+    #CGM(data, offsets, offsetMap, niter=niter)
+
+    # Calculate the average weight per offset
+    weights = np.histogram(data.offset_residuals.offsetpixels,
+                           np.arange(data.offset_residuals.Noffsets+1),
+                           weights=data.all_weights)[0]/data.offset_residuals.offset_length
+
+    Ax = Axfunc(weights,
+                data.offset_residuals.offsetpixels,
+                data.pixels,
+                offsetMap.npix)
+
+    offsets.offsets = CGM(data.offset_residuals.sig, Ax, niter=niter)
+
+    # Bin the offsets in to a map
+    offsetMap.sum_offsets(offsets.offsets,
+                          weights,
+                          offsets.offsetpixels,
+                          data.pixels)
+    offsetMap.average()
+
+
 
     return offsetMap, offsets
 
@@ -133,7 +157,7 @@ def DestriperHPX(parameters, data):
     Ax = Axfunc(weights,data.residual.offsetpixels,data.pixels,offsetMap.npix)
 
     # Run the CGM code
-    offsets.offsets = CGM(data.residual.sigwei, Ax, niter=niter)
+    offsets.offsets = CGM(data.residual.sigwei, Ax, niter=niter,verbose=True)
 
     # Bin the offsets in to a map
     offsetMap.binOffsets(offsets.offsets,
@@ -187,7 +211,6 @@ def CGM(b,Ax,x0 = None,niter=100,itol=1e-7,verbose=False):
         alpha= rTrb/np.sum(pb * q)
 
         x0 += alpha*pb
-        
         r = r - alpha*Ax(p)
         rb= rb- alpha*Ax(pb)
         

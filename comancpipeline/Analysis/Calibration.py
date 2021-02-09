@@ -16,7 +16,6 @@ import shutil
 from scipy.interpolate import interp1d
 import datetime
 from tqdm import tqdm
-import pandas as pd
 import os
 from astropy.time import Time
 from datetime import datetime
@@ -340,6 +339,11 @@ class CalculateVaneMeasurement(DataStructure):
         Modify baseclass __call__ to change file from the level1 file to the level2 file.
         """
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+
+        fname = data.filename.split('/')[-1]
+        outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
+        if os.path.exists(outfile):
+            return data
         
         if 'comment' in data['comap'].attrs:
             comment = data['comap'].attrs['comment']

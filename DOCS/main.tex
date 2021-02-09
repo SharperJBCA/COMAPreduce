@@ -27,7 +27,118 @@
 \tableofcontents
 \newpage
 
-\section{Installation}
+\section{Overview}
+
+The Manchester COMAP data reduction pipeline is designed to take the uncalibrated, full resolution COMAP \textit{level 1} data and reduce it to wide 1 to 2\,GHz bands that are calibrated using astronomical sources. We refer to the data calibrated using the \textit{vane} and downsampled to 32\,MHz channels as \textit{level 2} data. After this any further reductions are called \textit{level 3} data where astronomical calibration has been applied, and the data has been filtered of bad frequency channels and as many systematics as we can. \textit{Level 3} data is intended to be passed directly to a map-maker. There may be several \textit{level 3} datasets.
+
+The final step of the Manchester COMAP pipeline is to filter out all observations with bad weather, poor noise statistics, or any other poor performance criteria. After the data have been filtered we can pass the seleceted good  \textit{level 3} data to the Destriping map-maker, resulting in a sky map, covariance map, and hit distribution map stored in \texttt{FITS} standard format with some predefined World Coordinate System (WCS).
+
+\vspace{0.5cm}
+\noindent
+A quick overview of the processing pipeline is:
+\begin{enumerate}
+ \item All level 1 data is processed through several modules:
+   \begin{itemize}
+     \item Measure the system temperature ($T_\mathrm{sys}$) and gain ($G$) using the calibration vane. \newline [\texttt{Calibration.CalculateVaneMeasurement}]
+     \item Calibrate the \textit{level1} data using the \textit{vane}. \newline  [\texttt{Calibration.CreateLevel2Cont}]
+     \item Define edges of \textit{scans} and store these. \newline  [\texttt{Statistics.ScanEdges}]
+     \item Flag out any large spikes in the data exceeding $10\sigma$ of the noise. \newline [\texttt{Flagging.SigmaClip}]
+     \item Measure noise statistics per 32\,MHz channel and fit 1/f statistics. \newline [\texttt{Statistics.FnoiseStats}]
+   \end{itemize}
+ \item The resulting \textit{level 2} data is then further processed into \textit{level 3} data. There are several choices to make:
+   \begin{itemize}
+     \item File lists of good data based on noise statistics.
+     \item Astronomical calibration to apply - leave vane calibration? Tau A? Jupiter?
+     \item Channel masks to apply, and account for how these change with time.
+     \item Finally choose run name and create \textit{level 3} reduction. \newline [\texttt{CreateLevel3.CreateLevel3}]
+   \end{itemize}
+\end{enumerate}
+
+\section{Running the Pipeline}
+
+\subsection{The Code}
+
+All the code you need for the pipeline are stored in the \texttt{github} repository found here: \url{https://github.com/SharperJBCA/COMAPreduce}. There are three modules:
+\begin{itemize}
+  \item \texttt{Analysis} - This contains all the data reduction pipeline for making \textit{level 3} data.
+  \item \texttt{MapMaking} - All the code for making maps.
+  \item \texttt{Tools} - Extra scripts that may be useful like coordinate transforms, stats not included in scipy, etc...
+\end{itemize}
+
+\subsection{Installation}
+
+\subsubsection{General Linux Machine}
+
+First you will need to install \texttt{Python} 3.X. To do this I recommend download the Anaconda distribution. Go to: \url{https://www.anaconda.com/products/individual}. This will provide you with a \texttt{.sh} file that from the command line you can install by:
+\newline\noindent
+\texttt{> bash <filename>.sh}
+\newline\noindent
+
+From here just follow the instructions, and make sure you install Anaconda somewhere on the local disks (e.g., \texttt{/local/scratch/<username>}). 
+\newline
+\noindent
+Now you will have a new command line tool call \texttt{conda} and you will be using this to setup your environment and install new \texttt{Python} packages. The first thing you must do after install \texttt{conda} is link the conda-forge (\url{https://conda-forge.org/}) repository, to do this run the command:
+\newline\noindent
+\texttt{> conda config --add channels conda-forge}
+\newline\noindent
+\texttt{> conda config --set channel\_priority struct}
+\newline\noindent
+
+Next you will want to install the pipeline code. First you must clone the \texttt{github} repo to somewhere on your machine:
+\newline\noindent
+\texttt{> git clone https://github.com/SharperJBCA/COMAPreduce.git .}
+\newline\noindent
+
+This will create a directory called COMAPreduce, enter this. We will now create a new virtual environment that matches mine so that you can be sure we are running the code with all the same packages. To do this simply execute:
+\newline\noindent
+\texttt{> conda create --name <env> --file requirements.txt}
+\newline\noindent
+
+Where \texttt{<env>} is the name of the virtual environment you want to use. Whenever you \texttt{ssh} into the machine you will need to use the command:
+\newline\noindent
+\texttt{> conda activate <env>}
+\newline\noindent
+to ensure your system is setup correctly. Alternatively you can add this line to your \texttt{rc} file (e.g., \texttt{.tcshrc} in your home area).
+
+Finally, you can now install the pipeline routines as a module into your current \texttt{Python} setup by simply invoking:
+\newline\noindent
+\texttt{> python setup.py install}
+\newline\noindent
+in the COMAPreduce directory. 
+
+\subsection{Running the Pipeline}
+
+Will update later...
+
+\subsection{Running the Map-Maker}
+
+To run the map-maker create a new working directory somewhere on your system. Next copy from the \texttt{COMAPreduce/comancpipeline/MapMaking} directory the following files/directorys to your working direcotry:
+\begin{itemize}
+  \item \texttt{run\_destriper.py}
+  \item \texttt{CreateFilelist.py}
+  \item \texttt{ParameterFiles}
+\end{itemize}
+
+Inside the \texttt{ParameterFiles} directory you will find a number of \texttt{.ini} files that are pre-setup for running the M31 data (fg4), the Galactic plane survey (GFields/fg6), and the Perseus data (fg7). These are called:
+\begin{itemize}
+\item \texttt{ParameterFiles\/parameters\_fg4.ini}
+\item \texttt{ParameterFiles\/parameters\_fg7.ini}
+\item \texttt{ParameterFiles\/parameters\_GFields.ini}
+\end{itemize}
+
+First you will need to create filelists of processed \textit{level 3} data files by invoking the \texttt{CreateFilelists.py} script:
+\newline\noindent
+\texttt{> python CreateFilelists.py <source-name>}
+\newline\noindent
+where \texttt{<source-name>} is fg4, fg7, GField, etc... Note: feel free to edit this file so you can optimise the file lists. The filelists will be stroed in a \texttt{FileLists/} directory.
+
+Once you have a filelist ready you can invoke the map-maker using:
+\newline\noindent
+\texttt{> python run\_destriper.py <parameter-file>}
+\newline\noindent
+
+
+\section{Old-Stuff}
 
 Requirements:
 \begin{itemize}

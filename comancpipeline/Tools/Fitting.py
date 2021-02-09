@@ -378,8 +378,25 @@ def ErrorLstSq(*args):
     if limits(P):
         return 0.*z + 1e32
     else:
-        #print(np.sum((z - func(P,x,y,ra0,dec0, **kwargs))**2),flush=True)
         return np.sum( (func(P,xy, **otherkeys) - z)**2/cov )
+
+def MC_ErrorLstSq(P,*args):
+    #P = args
+    func = args[0]
+    limits = args[1]
+    #z = args[5]
+    xy, z,cov, otherkeys = args[2:]
+
+    if (P[-2] < -np.pi/2.) | (P[-2] > np.pi/2.):
+        return -1e32
+
+
+    if limits(P):
+        return -1e32
+    else:
+        #print(np.sum((z - func(P,x,y,ra0,dec0, **kwargs))**2),flush=True)
+        return -np.sum( (func(P,xy, **otherkeys) - z)**2/cov )
+
 
 def ErrorFmin(*args, **kwargs):
     print(args)

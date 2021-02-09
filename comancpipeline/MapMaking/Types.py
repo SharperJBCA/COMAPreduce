@@ -87,34 +87,6 @@ class Data:
         output = np.array(output).flatten().astype(int)
         return output
 
-    def setWCS(self, crval, cdelt, crpix, ctype):
-        """
-        Declare world coordinate system for plots
-        """
-        self.wcs = wcs.WCS(naxis=2)
-        self.wcs.wcs.crval = crval
-        self.wcs.wcs.cdelt = cdelt
-        self.wcs.wcs.crpix = crpix
-        self.wcs.wcs.ctype = ctype
-
-    def getFlatPixels(self, x, y):
-        """
-        Convert sky angles to pixel space
-        """
-        if isinstance(self.wcs, type(None)):
-            raise TypeError( 'No WCS object declared')
-            return
-        else:
-            pixels = self.wcs.wcs_world2pix(x+self.wcs.wcs.cdelt[0]/2.,
-                                            y+self.wcs.wcs.cdelt[1]/2.,0)
-            pflat = (pixels[0].astype(int) + self.nxpix*pixels[1].astype(int)).astype(int)
-            
-
-            # Catch any wrap around pixels
-            pflat[(pixels[0] < 0) | (pixels[0] > self.nxpix)] = -1
-            pflat[(pixels[1] < 0) | (pixels[1] > self.nypix)] = -1
-
-            return pflat
 
 
     def GetScanPositions(self,d):
