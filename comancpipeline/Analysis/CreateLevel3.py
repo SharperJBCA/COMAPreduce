@@ -148,7 +148,7 @@ class CreateLevel3(DataStructure):
             # then the data for each scan
             last = 0
             for iscan,(start,end) in enumerate(scan_edges):
-                median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{:02d}'.format(iscan)][ifeed,...]
+                median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{iscan:02d}'][ifeed,...]
                 N = int((end-start))
                 end = start+N
                 tod = todin[...,start:end]
