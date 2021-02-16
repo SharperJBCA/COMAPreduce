@@ -1,5 +1,6 @@
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
 
 import numpy as np
 #from comancpipeline.Tools import *
@@ -34,13 +35,9 @@ def call_main(parameters, classinfo, start, end):
 def main(parameters,classinfo, start=None, end=None):
 
     # Get the inputs:
-    jobobjs, filelist, mainConfig, classConfig = Parser.parse_parameters(parameters)
+    jobobjs, filelist, mainConfig, classConfig, logger = Parser.parse_parameters(parameters)
 
     # Move this to parser and link to job objects?
-    if 'LogFile' in mainConfig['Inputs']:
-        logger = Logging.Logger(mainConfig['Inputs']['LogFile']+'_{}'.format(os.getpid()))
-    else:
-        logger = print
 
     if isinstance(start,type(None)):
         start = 0
@@ -57,12 +54,20 @@ def main(parameters,classinfo, start=None, end=None):
             continue
 
         for job in jobobjs:
+            if rank == 0:
+                print(job,flush=True)
             try:
                 dh5 = job(dh5)
-            except (KeyError,NoHotError,NoColdError,NoDiodeError) as e:
-                logger(filename,e)
+            except Exception as e: 
+                fname = filename.split('/')[-1]
+                logger(f'{fname}:{e}',error=e)
                 break
-        dh5.close()
+            if isinstance(dh5, type(None)): # Return None means skip
+                break
+        if not isinstance(dh5, type(None)): 
+            dh5.close()
+        logger('############')
+        
 
 if __name__ == "__main__": 
     call_main()

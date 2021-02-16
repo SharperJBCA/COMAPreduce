@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
 import h5py
-from comancpipeline.Analysis.BaseClasses import DataStructure, H5Data
+from comancpipeline.Analysis.BaseClasses import DataStructure
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Tools import Coordinates, Types
 from os import listdir, getcwd

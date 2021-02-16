@@ -26,14 +26,16 @@ class SigmaClip(DataStructure):
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self, sigma_clip_value=10, medfilt_stepsize=5000):
+    def __init__(self, level2='level2',sigma_clip_value=10, medfilt_stepsize=5000,**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
         """
+        super().__init__(**kwargs)
+        self.name = 'SigmaClip'
         self.medfilt_stepsize = int(medfilt_stepsize)
         self.sigma_clip_value = sigma_clip_value
-
+        self.level2 = level2
     def __str__(self):
         return "Sigma clipping at {}x the noise".format(self.sigma_clip_value)
 
@@ -46,11 +48,10 @@ class SigmaClip(DataStructure):
         # 2) The feature bits to select just the observing period
         # 3) Elevation to remove the atmospheric component
         tod   = np.nanmean(data['level1/spectrometer/band_average'][...],axis=1)
-        az    = data['level1/spectrometer/pixel_pointing/pixel_az'][...]
-        el    = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
         feeds = data['level1/spectrometer/feeds'][:]
         nFeeds, nSamples = tod.shape
-        scan_edges = data['level2/Statistics/scan_edges'][...]
+        scan_edges = self.getGroup(data,data,f'{self.level2}/Statistics/scan_edges')
+
         self.flags = np.zeros(tod.shape).astype(bool)
 
         for ifeed in range(nFeeds):
@@ -67,9 +68,9 @@ class SigmaClip(DataStructure):
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """        
 
-        if not 'level2' in data:
+        if not self.level2 in data:
             return 
-        lvl2 = data['level2']
+        lvl2 = data[self.level2]
         if not 'Flags' in lvl2:
             flags_grp = lvl2.create_group('Flags')
         else:
@@ -86,30 +87,27 @@ class SigmaClip(DataStructure):
 
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
-        source = data['level1/comap'].attrs['source']
-        if not isinstance(source,str):
-            source = source.decode('utf-8')
-        comment = data['level1/comap'].attrs['comment']
-        if not isinstance(comment, str):
-            comment = comment.decode('utf-8')
-        print(source,comment)
-
+        source = self.getSource(data)
+        comment = self.getComment(data)
         if 'Sky nod' in comment:
             return data
+
         # Want to ensure the data file is read/write
-        if not data.mode == 'r+':
-            filename = data.filename
-            data.close()
-            data = h5py.File(filename,'r+')
+        data = self.setReadWrite(data)
 
-        try:
-            self.run(data)
-            self.write(data)
-        except KeyError:
-            pass
+        self.logger(f'{fname}:{self.name}: Sigma Clip at {self.sigma_clip_value}xNoise.')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing flags to level 2 file ({fname})')
+        self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
 
-        return data        
+        return data
+
+   
 
     def median_filter(self,tod,medfilt_stepsize):
         """

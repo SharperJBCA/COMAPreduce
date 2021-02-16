@@ -24,12 +24,15 @@ import os
 
 from tqdm import tqdm
 
-__version__='v1'
+__level3_version__='v2'
 
 class CreateLevel3(DataStructure):
-    def __init__(self,channel_mask=None, gain_mask=None, calibration_factors=None, **kwargs):
+    def __init__(self,level2='level2',level3='level3',output_dir = None,
+                 channel_mask=None, gain_mask=None, calibration_factors=None, **kwargs):
         """
         """
+        super().__init__(**kwargs)
+        self.name = 'CreateLevel3'
         # READ ANY ANCILLARY DATA: MASKS/CALIBRATION FACTORS
         if not isinstance(channel_mask,type(None)):
             self.channelmask = np.load(channel_mask,allow_pickle=True).astype(bool)
@@ -46,36 +49,61 @@ class CreateLevel3(DataStructure):
         else:
             self.calfactors = None
 
+        self.output_dir = output_dir
+
+        self.level2=level2
+        self.level3=level3
+
     def __str__(self):
         return "Creating Level 3"
 
     def __call__(self,data):
-        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        """
+        """
 
-        comment = data['level1/comap'].attrs['comment']
-        if not isinstance(comment,str):
-            comment = comment.decode('utf-8')
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        data_dir = data.filename.split(fname)[0]
+        if isinstance(self.output_dir,type(None)):
+            self.output_dir = f'{data_dir}/{self.level3}'
+        self.outfile = '{}/{}_{}'.format(self.output_dir,self.level3,fname)
+
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+        comment = self.getComment(data)
 
         if 'Sky nod' in comment:
             return data
 
-        if not 'level2' in data.keys():
-            print(f'No level 2 data found in {data.filename}')
+        if not self.level2 in data.keys():
+            self.logger(f'{fname}:{self.name}:Error: No {self.level2} data found?')
             return data
 
-        if not 'Statistics' in data['level2'].keys():
-            print(f'No level 2 statistics found in {data.filename}')
+        if not 'Statistics' in data[self.level2].keys():
+            self.logger(f'{fname}:{self.name}:Error: No {self.level2}/Statistics found?')
             return data
-        if not 'scan_edges' in data['level2/Statistics'].keys():
+
+        if not 'scan_edges' in data[f'{self.level2}/Statistics'].keys():
+            self.logger(f'{fname}:{self.name}:Error: No {self.level2}/Statistics/scan_edges found?')
             return data
+
+        
+
+        if os.path.exists(self.outfile) & (not self.overwrite):
+            self.logger(f'{fname}:{self.name}: {self.level3}_{fname} exists, ignoring (overwrite = {self.overwrite})')
+            return data
+        
+
+        self.logger(f'{fname}:{self.name}: Creating {self.level3} data.')
         self.run(data)
         # Want to ensure the data file is read/write
-        if not data.mode == 'r+':
-            filename = data.filename
-            data.close()
-            data = h5py.File(filename,'r+')
+        data = self.setReadWrite(data)
 
+        self.logger(f'{fname}:{self.name}: Writing to {self.outfile}')
         self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
+
         return data
 
 
@@ -83,9 +111,9 @@ class CreateLevel3(DataStructure):
         """
         Expects a level2 file structure to be passed.
         """
-        tod_shape = d['level2/averaged_tod'].shape
+        tod_shape = d[f'{self.level2}/averaged_tod'].shape
 
-        scan_edges = d['level2/Statistics/scan_edges'][...]
+        scan_edges = d[f'{self.level2}/Statistics/scan_edges'][...]
         nchannels = 8
         self.all_tod     = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
         self.all_weights = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
@@ -95,15 +123,15 @@ class CreateLevel3(DataStructure):
         # Read in data from each feed
         for index, ifeed in enumerate(range(tod_shape[0])):
 
-            todin = d['level2/averaged_tod'][ifeed,:,:,:]
+            todin = d[f'{self.level2}/averaged_tod'][ifeed,:,:,:]
             az = d['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,:]
             el = d['level1/spectrometer/pixel_pointing/pixel_el'][ifeed,:]
 
             # Statistics for this feed
-            medfilt_coefficient = d['level2/Statistics/filter_coefficients'][ifeed,...]
-            atmos = d['level2/Statistics/atmos'][ifeed,...]
-            atmos_coefficient = d['level2/Statistics/atmos_coefficients'][ifeed,...]
-            wnoise_auto = d['level2/Statistics/wnoise_auto'][ifeed,...]
+            medfilt_coefficient = d[f'{self.level2}/Statistics/filter_coefficients'][ifeed,...]
+            atmos = d[f'{self.level2}/Statistics/atmos'][ifeed,...]
+            atmos_coefficient = d[f'{self.level2}/Statistics/atmos_coefficients'][ifeed,...]
+            wnoise_auto = d[f'{self.level2}/Statistics/wnoise_auto'][ifeed,...]
 
             # Create gain masks/channel masks/calfactors
             if isinstance(self.gainmask, type(None)):
@@ -120,7 +148,7 @@ class CreateLevel3(DataStructure):
             # then the data for each scan
             last = 0
             for iscan,(start,end) in enumerate(scan_edges):
-                median_filter = d['level2/Statistics/FilterTod_Scan{:02d}'.format(iscan)][ifeed,...]
+                median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{:02d}'.format(iscan)][ifeed,...]
                 N = int((end-start))
                 end = start+N
                 tod = todin[...,start:end]
@@ -164,15 +192,32 @@ class CreateLevel3(DataStructure):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """        
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
 
-        if not 'level3' in data:
-            lvl3= data.create_group('level3')
-        else:
-            lvl3 = data['level3']
+        # We will store these in a separate file and link them to the level2s
+        fname = data.filename.split('/')[-1]
+        if os.path.exists(self.outfile):
+            os.remove(self.outfile)
+        output = h5py.File(self.outfile,'a')
 
+        # Set permissions and group
+        os.chmod(self.outfile,0o664)
+        shutil.chown(self.outfile, group='comap')
+
+        # Store datasets in root
         dnames = ['tod','weights']
         dsets = [self.all_tod, self.all_weights]
+
         for (dname, dset) in zip(dnames, dsets):
-            if dname in lvl3:
-                del lvl3[dname]            
-            lvl3.create_dataset(dname,  data=dset)
+            if dname in output:
+                del output[dname]
+            output.create_dataset(dname,  data=dset)
+
+        output.attrs['version'] = __level3_version__
+                        
+        output.close()
+        
+        if self.level3 in data.keys():
+            del data[self.level3]
+        data[self.level3] = h5py.ExternalLink(self.outfile,'/')

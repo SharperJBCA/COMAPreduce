@@ -1,7 +1,8 @@
 # Scripts for parsing the parameter file.
 import numpy as np
-from comancpipeline.Tools import ParserClass
+from comancpipeline.Tools import ParserClass, Logging
 from  comancpipeline import Analysis 
+import os
 
 def checkTypes(valDict):
     for k, v in valDict.items():
@@ -41,6 +42,14 @@ def parse_parameters(filename):
 
     # read in the parameters
     mainInput = ParserClass.Parser(filename)
+    if 'LogFile' in mainInput['Inputs']:
+        if mainInput['Inputs']['LogFileUsePID']:
+            logger = Logging.Logger(mainInput['Inputs']['LogFile']+'_{}'.format(os.getpid()))
+        else:
+            logger = Logging.Logger(mainInput['Inputs']['LogFile'])
+       
+    else:
+        logger = print
 
     # Generate a filelist to loop over
     filelist = np.loadtxt(mainInput['Inputs']['filelist'],dtype=str,ndmin=1)
@@ -56,7 +65,7 @@ def parse_parameters(filename):
     # Get the class names (modulename, classname)
     jobnames = [c for c in mainInput['Inputs']['pipeline']]
 
-    print(mainInput['Inputs']['pipeline'])
+    logger('Running: '+' '.join(mainInput['Inputs']['pipeline']))
 
     # Read the class parameter file
     classInput = ParserClass.Parser(mainInput['Inputs']['classParameters'])
@@ -64,9 +73,9 @@ def parse_parameters(filename):
     # Initalise the classes : classInput are the kwargs to initiate classes
     jobs = []
     for job in jobnames:
-        jobs += [getClass(job)(**classInput[job])]
+        jobs += [getClass(job)(logger=logger,**classInput[job])]
 
-    return jobs, filelist, mainInput, classInput
+    return jobs, filelist, mainInput, classInput, logger
 
 def parse_split(config, field):
 

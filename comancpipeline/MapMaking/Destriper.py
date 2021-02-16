@@ -43,13 +43,16 @@ def create_F(ntod,offset_len):
 
 class Axfunc:
     
-    def __init__(self, weights, offset_pix, map_pix,npix):
+    def __init__(self, weights, offset_pix, map_pix,npix,covariance=None):
         
         self.weights = weights
         self.offset_pix = offset_pix
         self.map_pix = map_pix
         self.npix = npix
         self.output = np.zeros(self.weights.size)
+        self.covariance = covariance
+        if not isinstance(self.covariance,type(None)):
+            self.covariance = 1./np.fft.fft(self.covariance)
     
     def __call__(self,xk):
         sigwei,wei = binOffsets(xk,
@@ -66,6 +69,9 @@ class Axfunc:
                                              m, # m[Ax-b]
                                              self.offset_pix, 
                                              self.map_pix)
+
+        if not isinstance(self.covariance,type(None)):
+            self.output += np.real(np.fft.ifft(np.fft.fft(xk.flatten())*self.covariance))
                 
 
         return self.output
@@ -82,7 +88,7 @@ class Axfunc_slow:
 
 
 
-def Destriper(parameters, data):
+def Destriper(parameters, data,covariance=None,verbose=False):
     """
     Destriping routines
     """
@@ -115,9 +121,10 @@ def Destriper(parameters, data):
     Ax = Axfunc(weights,
                 data.offset_residuals.offsetpixels,
                 data.pixels,
-                offsetMap.npix)
+                offsetMap.npix,
+                covariance=covariance)
 
-    offsets.offsets = CGM(data.offset_residuals.sig, Ax, niter=niter)
+    offsets.offsets = CGM(data.offset_residuals.sig, Ax, niter=niter,verbose=verbose)
 
     # Bin the offsets in to a map
     offsetMap.sum_offsets(offsets.offsets,
@@ -130,7 +137,7 @@ def Destriper(parameters, data):
 
     return offsetMap, offsets
 
-def DestriperHPX(parameters, data):
+def DestriperHPX(parameters, data,covariance=None):
     """
     Destriping routines
     """
@@ -154,7 +161,8 @@ def DestriperHPX(parameters, data):
     weights = np.histogram(data.residual.offsetpixels,np.arange(data.residual.Noffsets+1),weights=data.allweights)[0]/data.residual.offset
 
     # Define out Ax linear operator function
-    Ax = Axfunc(weights,data.residual.offsetpixels,data.pixels,offsetMap.npix)
+    Ax = Axfunc(weights,data.residual.offsetpixels,data.pixels,offsetMap.npix,
+                covariance=covariance)
 
     # Run the CGM code
     offsets.offsets = CGM(data.residual.sigwei, Ax, niter=niter,verbose=True)

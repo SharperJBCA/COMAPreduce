@@ -80,10 +80,10 @@ class ReadDataLevel2:
         # 1b) Sum all the data into offsets
         # 2) Subtract the naive weighted map from the offsets
         # "b" residual vector is saved in residual Offset object
-        Noffsets  = self.Nsamples//self.offset_length
+        self.Noffsets  = self.Nsamples//self.offset_length
 
         # Contains the difference between the TOD and the map average
-        self.offset_residuals = OffsetTypes.Offsets(self.offset_length, Noffsets, self.Nsamples)
+        self.offset_residuals = OffsetTypes.Offsets(self.offset_length, self.Noffsets, self.Nsamples)
 
         for i, filename in enumerate(tqdm(filelist)):
             self.readPixels(i,filename)      
@@ -147,14 +147,14 @@ class ReadDataLevel2:
         scan_edges = d['level2/Statistics/scan_edges'][...]
         tod = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
         weights = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
-
+            
         # Read in data from each feed
         for index, ifeed in enumerate(self.FeedIndex[:]):
             #dset.read_direct(tod_in,np.s_[ifeed:ifeed+1,self.iband,:])
             tod_in = dset[ifeed,self.iband,:]
             wei_in = wei_dset[ifeed,self.iband,:]
             flags_in = flags[ifeed,:]
-            wei_in[flags_in > 0] = 0
+            #wei_in[flags_in > 0] = 0
 
             # then the data for each scan
             last = 0
@@ -191,14 +191,14 @@ class ReadDataLevel2:
             end = start+N
             xc = x[:,start:end]
             yc = y[:,start:end]
-
+            yshape = yc.shape
             # convert to Galactic
             if 'GLON' in self.naive.wcs.wcs.ctype[0]:
                 rot    = hp.rotator.Rotator(coord=['C','G'])
                 gb, gl = rot((90-yc.flatten())*np.pi/180., xc.flatten()*np.pi/180.)
                 xc, yc = gl*180./np.pi, (np.pi/2-gb)*180./np.pi
 
-            pixels[:,last:last+N] = np.reshape(self.naive.getFlatPixels(xc,yc),yc.shape)
+            pixels[:,last:last+N] = np.reshape(self.naive.getFlatPixels(xc.flatten(),yc.flatten()),yshape)
             last += N
 
 
@@ -225,6 +225,12 @@ class ReadDataLevel2:
         bad = np.isnan(tod) | (self.pixels[self.chunks[i][0]:self.chunks[i][1]] == -1)
         tod[bad] = 0
         weights[bad] = 0
+
+        offpix_chunk= self.offset_residuals.offsetpixels[self.chunks[i][0]:self.chunks[i][1]]
+        bad_offsets = np.unique(offpix_chunk[bad])
+        for bad_offset in bad_offsets:
+            tod[offpix_chunk == bad_offset] = 0
+            weights[offpix_chunk == bad_offset] = 0
 
         # Store TOD
         if self.keeptod:

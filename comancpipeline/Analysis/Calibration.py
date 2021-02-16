@@ -23,7 +23,9 @@ from datetime import datetime
 from scipy.ndimage.filters import gaussian_filter1d
 from scipy.interpolate import interp1d
 
-__version__ = 'v1'
+from scipy.signal import find_peaks
+
+__vane_version__ = 'v2'
 
 class NoColdError(Exception):
     pass
@@ -31,6 +33,30 @@ class NoHotError(Exception):
     pass
 class NoDiodeError(Exception):
     pass
+
+def get_vane_flag(data):
+    """
+    Locates the calvane positions in a level 1 file
+
+    (Extracted to be a function as this is generally useful to have)
+    """
+    mjd  = data['spectrometer/MJD']
+
+    # Need to count how many calvane events occur, look for features 2**13
+    if mjd[0] > Time(datetime(2019,6,14),format='datetime').mjd: # The cal vane feature bit can be trusted after 14 June 2019
+        features = np.floor(np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
+        justVanes = (features == 13)
+    else: # Must use cal vane angle to calculate the diode positions
+
+        if mjd[0] < Time(datetime(2019,3,1),format='datetime').mjd: # Early observations before antenna0
+            hkMJD = data['hk/vane/MJD'][:]
+            angles = np.interp(mjd,hkMJD, data['hk/vane/angle'][:])
+        else:
+            hkMJD = data['hk/antenna0/vane/utc'][:]
+            angles = np.interp(mjd,hkMJD, data['hk/antenna0/vane/angle'][:])
+        justVanes = (angles < 16000)
+
+    return justVanes
 
 class BandAverage(DataStructure):
     """
@@ -40,6 +66,7 @@ class BandAverage(DataStructure):
         """
         """
         self.feeds_select = 'all'
+        self.level2 = 'level2'
 
     def run(self, data):
         """
@@ -55,11 +82,11 @@ class BandAverage(DataStructure):
                 feeds = [int(f) for f in self.feeds_select]
         self.feeds = feeds
 
-        vane = data['level2/Vane']
+        vane = data[f'{self.level2}/Vane']
         print(vane.keys())
-        statistics = data['level2/Statistics']
-        frequency  = data['level2/frequency'][...]
-        scan_edges = data['level2/Statistics/scan_edges'][...]
+        statistics = data[f'{self.level2}/Statistics']
+        frequency  = data[f'{self.level2}/frequency'][...]
+        scan_edges = data[f'{self.level2}/Statistics/scan_edges'][...]
         nBands,nChans = frequency.shape
         for iscan,(start,end) in enumerate(scan_edges):
             for ifeed, feed in enumerate(self.feeds):
@@ -108,12 +135,15 @@ class CreateLevel2Cont(DataStructure):
 
     def __init__(self, feeds='all', output_dir='', nworkers= 1,
                  average_width=512,calvanedir='AncillaryData/CalVanes',
-                 calvane_prefix='CalVane'):
+                 cal_mode = 'Vane', cal_prefix='',level2='level2',
+                 calvane_prefix='CalVane',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
         """
+        super().__init__(**kwargs)
 
+        self.name = 'CreateLevel2Cont'
         self.feeds_select = feeds
 
         self.output_dir = output_dir
@@ -123,6 +153,11 @@ class CreateLevel2Cont(DataStructure):
 
         self.calvanedir = calvanedir
         self.calvane_prefix = calvane_prefix
+
+        self.cal_mode = cal_mode
+        self.cal_prefix=cal_prefix
+
+        self.level2=level2
 
     def __str__(self):
         return "Creating level2 file with channel binning of {}".format(self.average_width)
@@ -134,25 +169,11 @@ class CreateLevel2Cont(DataStructure):
         and calls the averaging routine in SourceFitting.FitSource.average(*args)
 
         """
-        # Get data structures we need
-        alltod = data['spectrometer/tod']
-
         # Setup feed indexing
         # self.feeds : feed horn ID (in array indexing, only chosen feeds)
         # self.feedlist : all feed IDs in data file (in lvl1 indexing)
         # self.feeddict : map between feed ID and feed array index in lvl1
-        if self.feeds_select == 'all':
-            feeds = data['spectrometer/feeds'][:]
-        else:
-            if (not isinstance(self.feeds_select,list)) & (not isinstance(self.feeds_select,np.ndarray)) :
-                self.feeds = [int(self.feeds_select)]
-                feeds = self.feeds
-            else:
-                feeds = [int(f) for f in self.feeds_select]
-
-        self.feeds = feeds
-        self.feedlist = data['spectrometer/feeds'][:]
-        self.feeddict = {feedid:feedindex for feedindex, feedid in enumerate(self.feedlist)}
+        self.feeds, self.feed_index, self.feed_dict = self.getFeeds(data,self.feeds_select)
 
 
         # Setup output file here, we will have to write in sections.
@@ -163,11 +184,12 @@ class CreateLevel2Cont(DataStructure):
 
 
         # Opening file here to write out data bit by bit
-        avg_tod_shape = (alltod.shape[0], alltod.shape[1], alltod.shape[2]//self.average_width, alltod.shape[3])
-        self.avg_tod = np.zeros(avg_tod_shape,dtype=alltod.dtype)
+        self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['spectrometer/tod'].shape
+        avg_tod_shape = (self.i_nFeeds, self.i_nBands, self.i_nChannels//self.average_width, self.i_nSamples)
+        self.avg_tod = np.zeros(avg_tod_shape,dtype=data['spectrometer/tod'].dtype)
 
         # Average the data and apply the gains
-        self.average_obs(data.filename,data,alltod, self.avg_tod)
+        self.average_obs(data.filename,data, self.avg_tod)
 
 
     def __call__(self,data):
@@ -175,21 +197,23 @@ class CreateLevel2Cont(DataStructure):
         Modify baseclass __call__ to change file from the level1 file to the level2 file.
         """
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
-        if 'comment' in data['comap'].attrs:
-            comment = data['comap'].attrs['comment']
-            if not isinstance(comment,str):
-                comment = comment.decode('utf-8')
-        else:
-            comment = 'No Comment'
-        self.comment = comment
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+        self.comment = self.getComment(data)
         prefix = data.filename.split('/')[-1].split('.hd5')[0]
         self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
 
-        if os.path.exists(self.outfilename): # skip if we have already calibrated
+        # Skip files that are already calibrated:
+        if os.path.exists(self.outfilename) & (not self.overwrite): 
+            self.logger(f'{fname}:{self.name}: Level 2 file exists...checking vane version...')
             self.outfile = h5py.File(self.outfilename,'a')
-            lvl2 = self.outfile['level2']
-            if 'pipeline-version' in lvl2.attrs:
-                if lvl2.attrs['pipeline-version'] == comancpipeline.__version__:
+            lvl2 = self.outfile[self.level2]
+            if 'Vane' in lvl2:
+                vane_version = lvl2['Vane'].attrs['version']
+                if vane_version == __vane_version__:
+                    self.logger(f'{fname}:{self.name}: Vane calibration up to date. Skipping.')
                     data.close()
                     data = self.outfile
                     return data
@@ -199,25 +223,17 @@ class CreateLevel2Cont(DataStructure):
                 self.outfile.close()
 
 
-        # Want to check the versions
-        if os.path.isfile(self.outfilename):
-            h = h5py.File(self.outfilename,'r')
-            if 'pipeline-version' in h['level2'].attrs.keys(): # Want to skip files that are already processed
-               if  h['level2'].attrs['pipeline-version'] == comancpipeline.__version__:
-                   h.close()
-                   return data
-            h.close()
-
+        self.logger(f'{fname}:{self.name}: Applying vane calibration. Bin width {self.average_width}.')
         self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing level 2 file: {self.outfilename}')
         self.write(data)
-
+        self.logger(f'{fname}:{self.name}: Done.')
         # Now change to the level2 file for all future analyses.
         data.close()
         data = self.outfile
+        return data
 
-        return self.outfile
-
-    def average_obs(self,filename,data, alltod, tod):
+    def average_obs(self,filename,data, tod):
         """
         Average TOD together
         """
@@ -235,19 +251,26 @@ class CreateLevel2Cont(DataStructure):
             # Altered to allow Skydip files to be calibrated using the neighbouring
             # cal-vane files (following SKYDIP-LISSAJOUS obs. plan)
             if 'Sky nod' in self.comment:
-                cname, gain, tsys = self.getcalibration_skydip(data)
+                cname, gain, tsys,spikes = self.getcalibration_skydip(data)
             else:
-                cname, gain, tsys = self.getcalibration_obs(data)
+                cname, gain, tsys,spikes = self.getcalibration_obs(data)
         except ValueError:
             cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
             gain = np.ones((2, nHorns, nSBs, nChans*width))
             tsys = np.ones((2, nHorns, nSBs, nChans*width))
 
-        for ifeed, feed in enumerate(self.feeds):
-            feed_array_index = self.feeddict[feed]
-            for sb in tqdm(range(nSBs)):
+
+        # Future: Astro Calibration
+        # if self.cal_mode.upper() == 'ASTRO':
+        # gain = self.getcalibration_astro(data)
+
+        for ifeed, feed in enumerate(tqdm(self.feeds,desc=self.name)):
+            feed_array_index = self.feed_dict[feed]
+            d = data['spectrometer/tod'][feed_array_index,...] 
+            for sb in range(nSBs):
                 # Weights/gains already snipped to just the feeds we want
-                w, g = 1./tsys[0,ifeed, sb, :]**2, gain[0,ifeed, sb, :]
+                w, g,chan_flag = 1./tsys[0,ifeed, sb, :]**2, gain[0,ifeed, sb, :], spikes[0,ifeed,sb,:]
+                w[chan_flag] = 0
 
                 gvals = np.zeros(nChans)
                 for chan in range(nChans):
@@ -256,8 +279,7 @@ class CreateLevel2Cont(DataStructure):
                     except:
                         continue
 
-                    d = alltod[feed_array_index,sb,chan*width:(chan+1)*width,:]
-                    caltod = d/g[chan*width:(chan+1)*width,np.newaxis]
+                    caltod = d[sb,chan*width:(chan+1)*width,:]/g[chan*width:(chan+1)*width,np.newaxis]
 
                     if width > 1:
                         self.avg_tod[ifeed,sb,chan,:] = np.sum(caltod*w[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
@@ -268,6 +290,9 @@ class CreateLevel2Cont(DataStructure):
                     self.avg_frequency[sb,chan] = np.mean(frequency[sb,chan*width:(chan+1)*width])
 
     def getcalibration_skydip(self,data):
+        """
+        No vane measurements in sky dips, find nearest valid obsid.
+        """
         obsidSearch = int(data.filename.split('/')[-1][6:13]) + 1
         searchstring = "{:07d}".format(obsidSearch)
         calFileDir = listdir(self.calvanedir)
@@ -280,17 +305,22 @@ class CreateLevel2Cont(DataStructure):
         gain_file = h5py.File(cname,'r')
         gain = gain_file['Gain'][...] # (event, horn, sideband, frequency)
         tsys = gain_file['Tsys'][...] # (event, horn, sideband, frequency) - use for weights
+        spikes=gain_file['Spikes'][...]
         gain_file.close()
-        return cname, gain, tsys
+        return cname, gain, tsys, spikes
 
     def getcalibration_obs(self,data):
+        """
+        Open vane calibration file.
+        """
         fname = data.filename.split('/')[-1]
         cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
         gain_file = h5py.File(cname,'r')
         gain = gain_file['Gain'][...] # (event, horn, sideband, frequency)
         tsys = gain_file['Tsys'][...] # (event, horn, sideband, frequency) - use for weights
+        spikes = gain_file['Spikes'][...]
         gain_file.close()
-        return cname, gain, tsys
+        return cname, gain, tsys, spikes
 
     def write(self,data):
         """
@@ -307,13 +337,13 @@ class CreateLevel2Cont(DataStructure):
         shutil.chown(self.outfilename, group='comap')
 
 
-        if 'level2' in self.outfile:
-            del self.outfile['level2']
-        lvl2 = self.outfile.create_group('level2')
+        if self.level2 in self.outfile:
+            del self.outfile[self.level2]
+        lvl2 = self.outfile.create_group(self.level2)
 
         tod_dset = lvl2.create_dataset('averaged_tod',data=self.avg_tod, dtype=self.avg_tod.dtype)
         tod_dset.attrs['Unit'] = 'K'
-        tod_dset.attrs['Calibration'] = 'Vane'
+        tod_dset.attrs['Calibration'] = '{self.cal_mode}:{self.cal_prefix}'
 
         freq_dset = lvl2.create_dataset('frequency',data=self.avg_frequency, dtype=self.avg_frequency.dtype)
 
@@ -332,13 +362,16 @@ class CalculateVaneMeasurement(DataStructure):
     Calculates the Tsys and Gain factors from a COMAP vane in/out measurement.
     """
     def __init__(self, output_dir='AmbientLoads/',
-                 overwrite=True, elLim=5, feeds = 'all',
-                 minSamples=200, tCold=2.74, tHotOffset=273.15,prefix='VaneCal'):
-        super().__init__()
+                 elLim=5, feeds = 'all',
+                 minSamples=200, tCold=2.74, 
+                 tHotOffset=273.15,prefix='VaneCal',**kwargs):
+        super().__init__(**kwargs)
+
+        self.name = 'CalculateVaneMeasurement'
+
         self.feeds_select = feeds
 
         self.output_dir = output_dir
-        self.overwrite= overwrite
         self.prefix = prefix
 
         self.elLim = elLim
@@ -355,25 +388,27 @@ class CalculateVaneMeasurement(DataStructure):
         Modify baseclass __call__ to change file from the level1 file to the level2 file.
         """
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
-
         fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
-        if os.path.exists(outfile):
+
+        if os.path.exists(outfile) & (not self.overwrite):
+            self.logger(f'{fname}:{self.name}: {self.prefix}_{fname} exists, ignoring (overwrite = {self.overwrite})')
             return data
-        
-        if 'comment' in data['comap'].attrs:
-            comment = data['comap'].attrs['comment']
-            if not isinstance(comment,str):
-                comment = comment.decode('utf-8')
-        else:
-            comment = 'No Comment'
+
+        comment = self.getComment(data)
 
         # Ignore Sky dips
         if 'Sky nod' in comment:
+            self.logger(f'{fname}:{self.name}: Observation is a sky nod (ignoring)')
             return None
 
+        self.logger(f'{fname}:{self.name}: Measuring vane...')
         self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing vane calibration file: {outfile}')
         self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
 
         return data
 
@@ -434,22 +469,9 @@ class CalculateVaneMeasurement(DataStructure):
         Find the calibration vane start and end positions.
         Raise NoDiodeError if no vane found
         """
-        mjd  = data['spectrometer/MJD']
 
-        # Need to count how many calvane events occur, look for features 2**13
-        if mjd[0] > Time(datetime(2019,6,14),format='datetime').mjd: # The cal vane feature bit can be trusted after 14 June 2019
-            features = np.floor(np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
-            justVanes = np.where((features == 13))[0]
-        else: # Must use cal vane angle to calculate the diode positions
-
-            if mjd[0] < Time(datetime(2019,3,1),format='datetime').mjd: # Early observations before antenna0
-                hkMJD = data['hk/vane/MJD'][:]
-                angles = np.interp(mjd,hkMJD, data['hk/vane/angle'][:])
-            else:
-                hkMJD = data['hk/antenna0/vane/utc'][:]
-                angles = np.interp(mjd,hkMJD, data['hk/antenna0/vane/angle'][:])
-
-            justVanes = np.where((angles < 21000))[0]
+        vane_flag = get_vane_flag(data)
+        justVanes = np.where(vane_flag)[0]
 
         if len(justVanes) == 0:
             self.nodata = True
@@ -478,7 +500,7 @@ class CalculateVaneMeasurement(DataStructure):
                 high = justVanes[-1]
             vanePositions += [[low,high]]
 
-        return vanePositions
+        return vanePositions, len(vanePositions)
 
     def run(self,data):
         """
@@ -489,31 +511,19 @@ class CalculateVaneMeasurement(DataStructure):
         """
 
         fname = data.filename.split('/')[-1]
-        outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
-        if os.path.exists(outfile): # If the vane has already be calculated, skip
-            self.nodata=True
-            return data
 
         # Read in data that is required:
         freq = data['spectrometer/frequency'][...]
         mjd  = data['spectrometer/MJD'][:]
-        el  = data['pointing/elActual'][:]
+        el   = data['pointing/elActual'][:]
 
-        if self.feeds_select == 'all':
-            feeds = data['spectrometer/feeds'][:]
-        else:
-            if (not isinstance(self.feeds_select,list)) & (not isinstance(self.feeds_select,np.ndarray)) :
-                self.feeds = [int(self.feeds_select)]
-                feeds = self.feeds
-            else:
-                feeds = [int(f) for f in self.feeds_select]
-        self.feeds = feeds
+        self.feeds,self.feed_inds,self.feed_dict = self.getFeeds(data,self.feeds_select)
 
         self.mjd = np.mean(mjd)
         self.elevation = np.nanmedian(el)
 
         # Keep TOD as a file object to avoid reading it all in
-        tod  = data['spectrometer/tod']
+        tod   = data['spectrometer/tod']
         btod  = data['spectrometer/band_average']
         nHorns, nSBs, nChan, nSamps = tod.shape
 
@@ -530,18 +540,17 @@ class CalculateVaneMeasurement(DataStructure):
             tHot  = np.nanmean(data['hk/antenna0/vane/Tvane'][:])/100. + self.tHotOffset
             hkMJD = data['hk/antenna0/vane/utc'][:]
 
-        vanePositions = self.FindVane(data)
-        nVanes = len(vanePositions)
+        vanePositions, nVanes = self.FindVane(data)
 
         self.vane_samples = np.zeros((nVanes,2))
         # Create output containers
         self.Tsys = np.zeros((nVanes, nHorns, nSBs, nChan))
         self.Gain = np.zeros((nVanes, nHorns, nSBs, nChan))
         self.RMS  = np.zeros((nVanes, nHorns, nSBs, nChan))
-
+        self.Spikes = np.zeros((nVanes, nHorns, nSBs, nChan),dtype=bool)
 
         # Now loop over each event:
-        for horn, feedid in enumerate(tqdm(self.feeds)):
+        for horn, feedid in enumerate(tqdm(self.feeds,desc=self.name)):
             for vane_event, (start, end) in enumerate(vanePositions):
                 # Get the mean time of the event
                 if horn == 0:
@@ -554,7 +563,7 @@ class CalculateVaneMeasurement(DataStructure):
                 try:
                     idHot, idCold = self.findHotCold(btod_slice[0,:])
                 except (NoHotError,NoColdError) as e:
-                    print(e)
+                    self.logger(f'{fname}:{self.name}: No vane found in feed {feedid}.',error=e)
                     break
 
 
@@ -563,8 +572,22 @@ class CalculateVaneMeasurement(DataStructure):
                     vHot = np.nanmedian(tod_slice[sb,:,idHot],axis=0)
                     vCold= np.nanmedian(tod_slice[sb,:,idCold],axis=0)
                     Y = vHot/vCold
-                    self.Tsys[vane_event,horn,sb,:] = ((tHot - self.tCold)/(Y - 1.) ) - self.tCold
+                    tsys = ((tHot - self.tCold)/(Y - 1.) ) - self.tCold
+                    self.Tsys[vane_event,horn,sb,:] = tsys
                     self.Gain[vane_event,horn,sb,:] = ((vHot - vCold)/(tHot - self.tCold))
+
+                    chans = np.arange(tsys.size)
+                    peaks,properties = find_peaks(tsys,prominence=5,width=[0,60])
+                    widths = (properties['right_ips']-properties['left_ips'])*2
+                    bad = np.zeros(tsys.size,dtype=bool)
+                    bad[[0,512,len(bad)-1]] = True
+                    bad[np.arange(0,1024,64,dtype=int)] = True
+                    for peak,width in zip(peaks,widths):
+                        sel = np.abs(chans - peak) < width
+                        bad[sel] = True
+
+                    self.Spikes[vane_event,horn,sb,:] = bad
+
                     tod_slice[sb,:,:] /= self.Gain[vane_event,horn,sb,:,np.newaxis]
 
 
@@ -591,8 +614,8 @@ class CalculateVaneMeasurement(DataStructure):
         shutil.chown(outfile, group='comap')
 
         # Store datasets in root
-        dnames = ['Tsys','Gain','VaneEdges']
-        dsets  = [self.Tsys, self.Gain, self.vane_samples]
+        dnames = ['Tsys','Gain','VaneEdges','Spikes']
+        dsets  = [self.Tsys, self.Gain, self.vane_samples,self.Spikes]
         for (dname, dset) in zip(dnames, dsets):
             if dname in output:
                 del output[dname]
@@ -601,4 +624,7 @@ class CalculateVaneMeasurement(DataStructure):
         output['Tsys'].attrs['Unit'] = 'K'
         output['Gain'].attrs['Unit'] = 'V/K'
         output['VaneEdges'].attrs['Unit'] = 'Index'
+        output['Spikes'].attrs['Unit'] = 'bool'
+        output.attrs['version'] = __vane_version__
+                        
         output.close()

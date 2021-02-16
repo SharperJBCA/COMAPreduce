@@ -106,9 +106,70 @@ Finally, you can now install the pipeline routines as a module into your current
 \newline\noindent
 in the COMAPreduce directory. 
 
-\subsection{Running the Pipeline}
+\subsection{Data Reduction Pipeline}
 
-Will update later...
+\subsubsection{Running the Pipeline}
+a
+\newline\noindent
+\texttt{> python run\_average.py <parameter\_file>}
+\newline\noindent
+a
+\newline\noindent
+\texttt{> mpirun -n X python batch\_job.py <parameter\_file>}
+\newline\noindent
+a
+\newline\noindent
+\texttt{> qsub pbs.script}
+\newline\noindent
+
+\subsubsection{Parameter Files}
+
+Jobs are defined by two parameter files. The primary parameter file defines the \textit{pipeline} to be run, the location of a text file containing the data to be processed, and also the location of a \textit{class-parameters} file that defines the inputs for each job.
+
+The main parameter file is constructed like:
+
+{\center
+\noindent\fbox{
+  \parbox{0.9\textwidth}{
+    \texttt{[Inputs]}
+    \newline
+    \texttt{pipeline: Calibration.CalculateVaneMeasurement,...}
+    \newline
+    \texttt{classParameters  = ParameterFiles/ClassParameters.ini}
+    \newline
+    \texttt{filelist = Filelists/CygA\_output.list}
+    \newline
+    \texttt{LogFile = logs/logfile.txt}
+    \newline
+    \texttt{LogFileUsePID = True}
+    }
+}
+}
+
+
+
+\subsubsection{Pipeline Overview}
+
+There are three main steps in the pipeline:
+\begin{enumerate}
+  \item Vane Calibration: 
+    \begin{itemize}
+      \item Measure vane $T_\mathrm{sys}$, gain and $T_\mathrm{sys}$ spikes (\texttt{CalculateVaneMeasurement}).
+      \item Create \textit{level 2} data by down sampling in frequency and optionally applying the vane calibration. (\texttt{CreateLevel2Cont}).
+    \end{itemize}
+   \item Source Fitting:
+    \begin{itemize}
+      \item If the observation is of jupiter/TauA/CygA/CasA fit the source brightness for later astronomical calibration. (\texttt{FitSource}).
+    \end{itemize}
+   \item Statistics:
+     \begin{itemize}
+       \item Define the regions of an observation that are \textit{on-source}, e.g. remove vane events and repointing events. (\texttt{ScanEdges})
+         \item Flag time-ordered transients from the data using a sigma-clip after filtering large-scale correlated noise. (\texttt{SigmaClip}).
+           \item Measure the noise statistics, atmospheric fluctuations, and large-scale correlated noise for data quality purposes. (\texttt{FnoiseStats}).
+     \end{itemize}
+\end{enumerate}
+
+
 
 \subsection{Running the Map-Maker}
 

@@ -115,45 +115,57 @@ class ScanEdges(DataStructure):
     Splits up observations into "scans" based on parameter inputs
     """
 
-    def __init__(self, scan_edge_type='RepointEdges',**kwargs):
+    def __init__(self, level2='level2',scan_edge_type='RepointEdges',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
         """
+        super().__init__(**kwargs)
+        self.name = 'ScanEdges'
         self.scan_edges = None
 
         self.scan_edge_type = scan_edge_type
 
         # Create a scan edge object
         self.scan_edge_object = globals()[self.scan_edge_type](**kwargs)
+        self.level2 = level2
 
     def __str__(self):
         return "Scan Edges."
 
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
-        allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)] + ['Field{:02d}'.format(i) for i in range(20)] + ['Field11b']
-        source  = data['level1/comap'].attrs['source']
-        if not isinstance(source,str):
-            source = source.decode('utf-8')
-        comment = data['level1/comap'].attrs['comment']
-        if not isinstance(comment,str):
-            comment = comment.decode('utf-8')
-        print('SOURCE', source)
-        if not source in allowed_sources:
+        allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
+                          ['GField{:02d}'.format(i) for i in range(20)] +\
+                          ['Field{:02d}'.format(i) for i in range(20)] +\
+                          ['Field11b']
+
+        source  = self.getSource(data)
+        comment = self.getComment(data)
+
+        if not self.overwrite:
             return data
+
+        self.logger(f'{fname}:{self.name}: {source} - {comment}')
+
+        if self.checkAllowedSources(data, source, allowed_sources):
+            return data
+
         if 'Sky nod' in comment:
             return data
 
         # Want to ensure the data file is read/write
-        if not data.mode == 'r+':
-            filename = data.filename
-            data.close()
-            data = h5py.File(filename,'r+')
+        data = self.setReadWrite(data)
 
+        self.logger(f'{fname}:{self.name}: Defining scan edges with {self.scan_edge_type}')
         self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing scan edges to level 2 file ({fname}).')
         self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
 
         return data
 
@@ -169,14 +181,18 @@ class ScanEdges(DataStructure):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """
+        fname = data.filename.split('/')[-1]
 
-        if not 'level2' in data:
+        if not self.level2 in data:
+            self.logger(f'{fname}:{self.name}: No {self.level2} data found?')
             return
 
-        lvl2 = data['level2']
+        lvl2 = data[self.level2]
         if not 'Statistics' in lvl2:
+            self.logger(f'{fname}:{self.name}: Creating Statistics group.')
             statistics = lvl2.create_group('Statistics')
         else:
+            self.logger(f'{fname}:{self.name}: Statistics group exists.')
             statistics = lvl2['Statistics']
 
         dnames = ['scan_edges']
@@ -192,15 +208,17 @@ class FnoiseStats(DataStructure):
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self, nbins=50, samplerate=50, medfilt_stepsize=5000):
+    def __init__(self, nbins=50, samplerate=50, medfilt_stepsize=5000,level2='level2',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
         """
+        super().__init__(**kwargs)
+        self.name = 'FnoiseStats'
         self.nbins = int(nbins)
         self.samplerate = samplerate
         self.medfilt_stepsize = int(medfilt_stepsize)
-
+        self.level2=level2
     def __str__(self):
         return "Calculating noise statistics."
 
@@ -208,24 +226,30 @@ class FnoiseStats(DataStructure):
         """
         Expects a level2 file structure to be passed.
         """
+        fname = data.filename.split('/')[-1]
         # First we need:
         # 1) The TOD data
         # 2) The feature bits to select just the observing period
         # 3) Elevation to remove the atmospheric component
-        tod = data['level2/averaged_tod'][...]
-        az = data['level1/spectrometer/pixel_pointing/pixel_az'][...]
-        el = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
+        tod = data[f'{self.level2}/averaged_tod'][...]
+        az  = data['level1/spectrometer/pixel_pointing/pixel_az'][...]
+        el  = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
         feeds = data['level1/spectrometer/feeds'][:]
-        scan_edges = data['level2/Statistics/scan_edges'][...]
+        bands = [b.decode('ascii') for b in data['level1/spectrometer/bands'][:]]
+
+        statistics = self.getGroup(data,data,f'{self.level2}/Statistics')
+        scan_edges = self.getGroup(data,statistics,'scan_edges')
 
 
         # Looping over Feed - Band - Channel, perform 1/f noise fit
         nFeeds, nBands, nChannels, nSamples = tod.shape
+        if 20 in feeds:
+            nFeeds -= 1
         nScans = len(scan_edges)
 
-        self.powerspectra = np.zeros((nFeeds, nBands, nChannels, nScans, self.nbins))
-        self.freqspectra = np.zeros((nFeeds, nBands, nChannels, nScans, self.nbins))
-        self.fnoise_fits = np.zeros((nFeeds, nBands, nChannels, nScans, 2))
+        self.powerspectra = np.zeros((nFeeds, nBands, nScans, self.nbins))
+        self.freqspectra = np.zeros((nFeeds, nBands, nScans, self.nbins))
+        self.fnoise_fits = np.zeros((nFeeds, nBands, nScans, 3))
         self.wnoise_auto = np.zeros((nFeeds, nBands, nChannels, nScans, 1))
         self.atmos = np.zeros((nFeeds, nBands, nScans, 3))
         self.atmos_errs = np.zeros((nFeeds, nBands, nScans, 3))
@@ -234,9 +258,7 @@ class FnoiseStats(DataStructure):
         self.filter_coefficients = np.zeros((nFeeds, nBands, nChannels, nScans, 1)) # Stores the per channel gradient of the  median filter
         self.atmos_coefficients = np.zeros((nFeeds, nBands, nChannels, nScans, 1)) # Stores the per channel gradient of the  median filter
 
-        pbar = tqdm(total=((nFeeds-1)*nBands*nChannels*nScans))
-
-        import time
+        pbar = tqdm(total=(nFeeds*nBands*nChannels*nScans),desc=self.name)
 
         for iscan,(start,end) in enumerate(scan_edges):
             local_filter_tods = np.zeros((nFeeds,nBands, end-start))
@@ -245,7 +267,7 @@ class FnoiseStats(DataStructure):
                     continue
                 for iband in range(nBands):
 
-                    band_average = np.nanmean(tod[ifeed,iband,:,start:end],axis=0)
+                    band_average = np.nanmean(tod[ifeed,iband,3:-3,start:end],axis=0)
                     atmos_filter,atmos,atmos_errs = self.FitAtmosAndGround(band_average ,
                                                                          az[ifeed,start:end],
                                                                          el[ifeed,start:end])
@@ -255,56 +277,64 @@ class FnoiseStats(DataStructure):
                     self.atmos[ifeed,iband,iscan,:] = atmos
                     self.atmos_errs[ifeed,iband,iscan,:] = atmos_errs
 
+                    ps, nu, f_fits, w_auto = self.FitPowerSpectrum(band_average-atmos_filter-local_filter_tods[ifeed,iband,:])
+                    self.powerspectra[ifeed,iband,iscan,:] = ps
+                    self.freqspectra[ifeed,iband,iscan,:]  = nu
+                    self.fnoise_fits[ifeed,iband,iscan,0]  = w_auto
+                    self.fnoise_fits[ifeed,iband,iscan,1:] = f_fits
+
+                    #self.logger(f'{fname}:{self.name}: Feed {feeds[ifeed]} Band {bands[iband]} RMS  - {w_auto:.3f}K')
+                    #self.logger(f'{fname}:{self.name}: Feed {feeds[ifeed]} Band {bands[iband]} Knee - {f_fits[0]:.3f}')
+                    #self.logger(f'{fname}:{self.name}: Feed {feeds[ifeed]} Band {bands[iband]} Spec - {f_fits[1]:.3f}')
+
                     for ichan in range(nChannels):
                         if np.nansum(tod[ifeed, iband, ichan,start:end]) == 0:
                             continue
                         # Check atmosphere coefficients
-                        atmos_coeff,med_coeff,offset = self.coefficient_jointfit(tod[ifeed,iband,ichan,start:end], atmos_filter,local_filter_tods[ifeed,iband,:])
-
-                        temp = tod[ifeed,iband,ichan,start:end] - atmos_filter*atmos_coeff
-                        temp -= np.nanmedian(temp)
-
-                        ps, nu, f_fits, w_auto = self.FitPowerSpectrum(temp)
-                        self.powerspectra[ifeed,iband,ichan,iscan,:] = ps
-                        self.freqspectra[ifeed,iband,ichan,iscan,:]  = nu
-                        self.fnoise_fits[ifeed,iband,ichan,iscan,:]  = f_fits
+                        atmos_coeff,med_coeff,offset = self.coefficient_jointfit(tod[ifeed,iband,ichan,start:end], 
+                                                                                 atmos_filter,
+                                                                                 local_filter_tods[ifeed,iband,:])
+                        w_auto = stats.AutoRMS(tod[ifeed,iband,ichan,start:end])
                         self.wnoise_auto[ifeed,iband,ichan,iscan,:]  = w_auto
                         self.filter_coefficients[ifeed,iband,ichan,iscan,:] = med_coeff
                         self.atmos_coefficients[ifeed,iband,ichan,iscan,:]  = atmos_coeff
                         pbar.update(1)
             self.filter_tods += [local_filter_tods]
-
-        #for ifeed in range(nFeeds):
-        #    pyplot.errorbar(np.arange(nScans),self.atmos[ifeed,0,:,1],fmt='.',yerr=self.atmos_errs[ifeed,0,:,1])
-        #pyplot.show()
-
         pbar.close()
 
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
-        allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)] + ['Field{:02d}'.format(i) for i in range(20)] + ['Field11b']
-        source = data['level1/comap'].attrs['source']
-        if not isinstance(source,str):
-            source = source.decode('utf-8')
-        comment = data['level1/comap'].attrs['comment']
-        if not isinstance(comment, str):
-            comment = comment.decode('utf-8')
+        allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
+                          ['GField{:02d}'.format(i) for i in range(20)] +\
+                          ['Field{:02d}'.format(i) for i in range(20)] +\
+                          ['Field11b']
 
-        print('SOURCE', source)
-        if not source in allowed_sources:
+        source = self.getSource(data)
+        comment = self.getComment(data)
+
+        self.logger(f'{fname}:{self.name}: {source} - {comment}')
+
+        if self.checkAllowedSources(data, source, allowed_sources):
             return data
+
         if 'Sky nod' in comment:
             return data
 
-        # Want to ensure the data file is read/write
-        if not data.mode == 'r+':
-            filename = data.filename
-            data.close()
-            data = h5py.File(filename,'r+')
+        if not self.overwrite:
+            return data
 
+        # Want to ensure the data file is read/write
+        data = self.setReadWrite(data)
+
+        self.logger(f'{fname}:{self.name}: Measuring noise stats.')
         self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing noise stats to level 2 file ({fname})')
         self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
 
         return data
 
@@ -336,26 +366,6 @@ class FnoiseStats(DataStructure):
 
         return filter_tod[:tod.size]
 
-
-    def AutoRMS(self, tod,abba=False):
-        """
-        Calculate auto-pair subtracted RMS of tod
-        """
-        if abba:
-            scale = 4
-            N4 = tod.size//scale*scale
-            ABBA = tod[0:N4:4] - tod[1:N4:4] - tod[2:N4:4] + tod[3:N4:4]
-        else:
-            scale = 2
-            N2 = tod.size//scale*scale
-            ABBA = tod[0:N2:2] - tod[1:N2:2]
-
-
-        med = np.nanmedian(ABBA)
-        mad = np.sqrt(np.nanmedian(np.abs(ABBA-med)**2))*1.4826/np.sqrt(scale)
-
-        return mad
-
     def PowerSpectrum(self, tod):
         """
         Calculates the bin averaged power spectrum
@@ -381,7 +391,7 @@ class FnoiseStats(DataStructure):
         """
         Calculate the power spectrum of the data, fits a 1/f noise curve, returns parameters
         """
-        auto_rms = self.AutoRMS(tod)
+        auto_rms = stats.AutoRMS(tod)
         nu, ps, counts = self.PowerSpectrum(tod)
 
         # Only select non-nan values
@@ -440,10 +450,11 @@ class FnoiseStats(DataStructure):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """
+        fname = data.filename.split('/')[-1]
 
-        if not 'level2' in data:
+        if not self.level2 in data:
             return
-        lvl2 = data['level2']
+        lvl2 = data[self.level2]
         if not 'Statistics' in lvl2:
             statistics = lvl2.create_group('Statistics')
         else:
@@ -563,17 +574,16 @@ class SkyDipStats(DataStructure):
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
-        allowed_sources = ['fg{}'.format(i) for i in range(10)] + ['GField{:02d}'.format(i) for i in range(20)] + ['Field{:02d}'.format(i) for i in range(20)] + ['Field11b']
-        source = data['level1/comap'].attrs['source']
-        if not isinstance(source,str):
-            source = source.decode('utf-8')
-        comment = data['level1/comap'].attrs['comment']
-        if not isinstance(comment, str):
-            comment = comment.decode('utf-8')
+        allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
+                          ['GField{:02d}'.format(i) for i in range(20)] +\
+                          ['Field{:02d}'.format(i) for i in range(20)] +\
+                          ['Field11b']
 
-        print('SOURCE', source)
-        if not source in allowed_sources:
+        source = self.getSource(data)
+        comment = self.getComment(data)
+        if self.checkAllowedSources(data, source, allowed_sources):
             return data
+
         if not 'Sky nod' in comment:
             return data
 

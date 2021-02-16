@@ -2,6 +2,7 @@ import concurrent.futures
 
 import numpy as np
 from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import Calibration
 from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, binFuncs, stats
 from scipy.optimize import fmin, leastsq, minimize
 from scipy.interpolate import interp1d
@@ -31,7 +32,7 @@ rank = comm.Get_rank()
 import os
 import shutil
 
-__version__ = 'v2'
+__version__ = 'v3'
 
 
 def plot_map_image(P,m,xy):
@@ -266,13 +267,17 @@ class FitSource(DataStructure):
                  lon=-118.2941, lat=37.2314,
                  prefix='AstroCal',
                  dx=1., dy=1., Nx=60,Ny=60,
-                 fitfunc='Gauss2dRot'):
+                 allowed_sources= ['jupiter','TauA','CasA','CygA','mars'],
+                 binwidth = 1,
+                 level2='level2',
+                 fitfunc='Gauss2dRot',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
         """
-
-        self.feeds = feeds
+        super().__init__(**kwargs)
+        self.name = 'FitSource'
+        self.feeds_select = feeds
         
         self.dx = dx/Nx
         self.dy = dy/Ny
@@ -288,82 +293,80 @@ class FitSource(DataStructure):
         self.lon = lon
         self.lat = lat 
         self.nodata = False
+        
+        self.allowed_sources = allowed_sources
+
+        self.binwidth = binwidth
+
+        self.level2=level2
 
     def __str__(self):
         return 'Fitting source using {}'.format(self.fitfunc.__name__)
 
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
-        allowed_sources = ['jupiter','TauA','CasA','CygA','mars']
-        
-        self.source = data['level1/comap'].attrs['source']#.decode('utf-8').split(',')[0]
-        if not isinstance(self.source,str):
-            self.source = self.source.decode('utf-8').split(',')[0]
-        else:
-            self.source = self.source.split(',')[0]
-        comment = data['level1/comap'].attrs['comment']#.decode('utf-8')
-        if not isinstance(comment,str):
-            comment = comment.decode('utf-8')
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
-        if not self.source in allowed_sources:
+        comment = self.getComment(data)
+        self.source = self.getSource(data)
+
+        if self.checkAllowedSources(data, self.source, self.allowed_sources):
             return data
+
         if 'Sky nod' in comment:
             return data
         if 'test' in comment:
             return data
 
+        outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
+        if os.path.exists(outfile) & (not self.overwrite):
+            self.logger(f'{fname}:{self.name}: Source fits for {fname} already exist ({outfile}).')
+            return data 
+
+
+        data = self.setReadWrite(data)
+
+
         self.run(data)
-
-        if not data.mode == 'r+':
-            filename = data.filename
-            data.close()
-            data = h5py.File(filename,'r+')
-
+        self.logger(f'{fname}:{self.name}: Writing source fits to {outfile}.')
         if not self.nodata:
             self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
 
         return data
 
     def run(self,data):
+        fname = data.filename.split('/')[-1]
         # Get data structures we need
-        alltod = data['level2/averaged_tod']
+        alltod = data[f'{self.level2}/averaged_tod']
 
-        if self.feeds == 'all':
-            feeds = data['level1/spectrometer/feeds'][:]
-        else:
-            if not (isinstance(self.feeds,list)) | (isinstance(self.feeds,np.ndarray)):
-                self.feeds = [int(self.feeds)]
-                feeds = self.feeds
-            else:
-                feeds = [int(f) for f in self.feeds]
-        self.feeds    = feeds
-        self.feedlist = data['level1/spectrometer/feeds'][:]
-        self.feeddict = {feedid:feedindex for feedindex, feedid in enumerate(self.feedlist)}
-        #mjd = data['level1/spectrometer/MJD'][:]
-        #az  = data['level1/spectrometer/pixel_pointing/pixel_az'][:]
-        #el  = data['level1/spectrometer/pixel_pointing/pixel_el'][:]
-        src = self.source
-        freq = data['level2/frequency'][...]
-        features = (np.log(data['level1/spectrometer/features'][:])/np.log(2)).astype(int)
-        filename = data.filename
+        self.feeds, self.feedlist, self.feeddict = self.getFeeds(data,self.feeds_select)
 
+        freq = data[f'{self.level2}/frequency'][...]
+        
+        sky_data_flag = ~Calibration.get_vane_flag(data['level1'])
+        assert np.sum(sky_data_flag) > 0, 'Error: The calibration vane is closed for all of this observation?'
 
+        freqwidth = np.abs(freq[0,0]-freq[0,1])*self.binwidth 
         # Make sure we are actually using a calibrator scan
         if self.source in Coordinates.CalibratorList:
             
             nHorns, nSBs, nChans, nSamples = alltod.shape   
 
             # First we will apply a median filter
-            filters = self.filter_data(alltod,features,500)
+            filters = self.filter_data(alltod,sky_data_flag,500)
 
             # Next bin into maps
-            print('Creating Maps')
-            self.maps, self.covs, xygrid, self.feed_avg_maps, self.feed_avg_covs = self.create_maps(data,alltod,filters,features)#,mjd)
+            self.logger(f'{fname}:{self.name}: Creating maps with bin width {freqwidth:.1f}MHz.')
+            self.maps, self.covs, xygrid, self.feed_avg_maps, self.feed_avg_covs = self.create_maps(data,alltod,filters,sky_data_flag)
             
-            print('Fitting Sources')
+            self.logger(f'{fname}:{self.name}: Fitting global source offset')
             # First get the positions of the sources from the feed average
-            self.fit_source_position(data,alltod,filters,self.feed_avg_maps, self.feed_avg_covs,xygrid,features)
+            self.fit_source_position(data,alltod,filters,self.feed_avg_maps, self.feed_avg_covs,xygrid,sky_data_flag)
 
+            self.logger(f'{fname}:{self.name}: Fitting source bands ({freqwidth:.1f}MHz).')
             # Finally, fit the data in the maps
             self.fit_map(self.maps,self.covs,xygrid,freq)
         else:
@@ -371,7 +374,7 @@ class FitSource(DataStructure):
             return
 
 
-    def fit_source_position(self,data,tod, filters, maps, covs, xygrid,features):
+    def fit_source_position(self,data,tod, filters, maps, covs, xygrid,sel):
         """
         Performs a full fit to the maps obtain the source positions 
 
@@ -380,7 +383,6 @@ class FitSource(DataStructure):
         def limfunc(P):
             return False
 
-        sel = np.where((features > 0) & (features != 13))[0]
 
         mjd = data['level1/spectrometer/MJD'][:]
 
@@ -403,9 +405,7 @@ class FitSource(DataStructure):
         self.feed_avg_fits = np.zeros((maps.shape[0],nparams))
         self.feed_avg_uncertainty = np.zeros((maps.shape[0],nparams)) 
 
-        for ifeed in tqdm(range(tod.shape[0])):
-            if ifeed > 0:
-                continue
+        for ifeed in tqdm(range(tod.shape[0]),desc=f'{self.name}:{self.source}'):
             feed_map = maps[ifeed,...].flatten()
             feed_cov = covs[ifeed,...].flatten()
             gd = np.isfinite(feed_map)
@@ -413,8 +413,6 @@ class FitSource(DataStructure):
             feed_cov = feed_cov[gd]
             x,y = xygrid
             x,y = x.flatten()[gd],y.flatten()[gd]
-
-            #feed_map = self.fitfunc.func([1,0,2.25/60.,0,2.25/60.,0,0],[x,y]) + np.random.normal(scale=np.sqrt(feed_cov))
 
             # Give some start parameters
             if len(feed_map) == 0:
@@ -435,7 +433,7 @@ class FitSource(DataStructure):
             result.x[-2] = 0.
             nwalkers = 32
             pos = result.x + 1e-4 * np.random.normal(size=(nwalkers, len(result.x)))
-            if True:
+            try:
                 sampler = emcee.EnsembleSampler(nwalkers,len(result.x),Fitting.MC_ErrorLstSq, 
                                                 args=[self.fitfunc.func,limfunc,[x,y],feed_map,feed_cov,{}])
                 sampler.run_mcmc(pos,5000,progress=True)
@@ -445,28 +443,13 @@ class FitSource(DataStructure):
                 error  = np.nanstd(flat_samples ,axis=0)
                 self.feed_avg_fits[ifeed,:] = result
                 self.feed_avg_uncertainty[ifeed,:] = error
-
-                print(result)
-                print(error)
-                print(result[1]*60/np.cos(self.src_el*np.pi/180.), result[3]*60)
-                print(result[2]*60*2.355, result[4]*60*2.355)
-                plot_map_image(result,maps[ifeed,...].flatten(),xygrid)
-                stop
-                pyplot.subplot(2,2,1)
-                pyplot.plot(maps[ifeed,...].flatten(),lw=2)
-                pyplot.plot( self.fitfunc.func(result,xygrid).flatten()[gd])
-                pyplot.subplot(222)
-                pyplot.plot( self.fitfunc.func(result,xygrid).flatten()[gd])
-                pyplot.title('Model')
-                pyplot.subplot(223)
-                pyplot.plot(feed_map - self.fitfunc.func(result,xygrid).flatten()[gd])
-                pyplot.title('Residual')
-                pyplot.show()
-
-            #except ValueError:
-            #    pass
+            except ValueError:
+                pass
 
     def fit_map(self,maps,covs,xygrid,freq):
+        """
+        This function fits for the source in each channel 
+        """
         def limfunc(P):
             return False
 
@@ -482,7 +465,7 @@ class FitSource(DataStructure):
         self.uncertainties = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],nparams))
         self.apers         = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],2))
 
-        for ifeed in tqdm(range(maps.shape[0]),desc=f'Fitting rank {rank}'):
+        for ifeed in tqdm(self.feedlist,desc=f'{self.name}:{self.source}'):
         
             for isb in range(maps.shape[1]):
                 for ichan in range(maps.shape[2]):
@@ -540,11 +523,10 @@ class FitSource(DataStructure):
         factor = 2*kb*(v*1e9/c)**2 * beam * 1e26
         return flux*factor, annu_rms*np.sqrt(np.sum(inner))*factor
         
-    def create_maps(self,data,tod,filters,features):
+    def create_maps(self,data,tod,filters,sel):
         """
         Bin maps into instrument frame centred on source
         """
-        sel = np.where((features > 0) & (features != 13))[0]
 
         mjd = data['level1/spectrometer/MJD'][:]
 
@@ -574,73 +556,69 @@ class FitSource(DataStructure):
         azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
         self.src_el = np.mean(elSource)
         self.src_az = np.mean(azSource)
-        for ifeed in tqdm(range(tod.shape[0])):
-            if ifeed > 0:
-                continue
+        for ifeed in tqdm(self.feedlist,desc=f'{self.name}:create_maps:{self.source}'):
             feed_tod = tod[ifeed,...] 
 
             if self.source.upper() == 'JUPITER':
-                x,y =Coordinates.Rotate(az[ifeed,:],
-                                        el[ifeed,:],
-                                        azSource, elSource,0)
+                x,y =Coordinates.Rotate(azSource, elSource,
+                                        az[ifeed,:],el[ifeed,:] ,0)
             else:
-                x,y =Coordinates.Rotate(ra[ifeed,:],
-                                        dec[ifeed,:],
-                                        raSource, decSource,0)
-
-            xtrue,ytrue =Coordinates.Rotate(azSource, elSource,
-                                            az[ifeed,:],
-                                            el[ifeed,:],
-                                            0)
-
-            offset_az = 4./60.
-            offset_el = 4./60.
-
-            x,y =Coordinates.Rotate(azSource, elSource,
-                                    az[ifeed,:]+offset_az,
-                                    el[ifeed,:]+offset_el,0)
+                x,y =Coordinates.Rotate(raSource, decSource,
+                                        ra[ifeed,:],
+                                        dec[ifeed,:],0)
 
             pixels,pX,pY = self.getpixels(x,y,self.dx,self.dy,self.Nx,self.Ny)
-            _pixels,_pX,_pY = self.getpixels(xtrue,ytrue,self.dx,self.dy,self.Nx,self.Ny)
 
-            mask = np.ones(pixels.size,dtype=int)
-            mask[pixels == -1] = 0
             for isb in range(tod.shape[1]):
-                for ichan in range(tod.shape[2]):
+                for ichan in range(1,tod.shape[2]-1): # Always skip edges
                     mapdata[...] = 0.
                     hitdata[...] = 0.
-                    #z =  (feed_tod[isb,ichan,sel]-filters[ifeed,isb,ichan])
-                    z = self.fitfunc.func([1,0,2.25/60.,0,2.25/60.,0,0], (xtrue,ytrue))
-
-
+                    z =  (feed_tod[isb,ichan,sel]-filters[ifeed,isb,ichan])
+                    mask = np.ones(pixels.size,dtype=int)
+                    mask[(pixels == -1) | np.isnan(z) | np.isinf(z)] = 0
+                    
                     if np.sum(np.isfinite(z)) == 0:
                         continue
+                    
                     rms = stats.AutoRMS(z)
 
                     binFuncs.binValues(mapdata, pixels, weights=z.astype(np.float64)/rms**2,mask=mask)
                     binFuncs.binValues(hitdata, pixels, mask=mask,weights=np.ones(z.size)/rms**2)
 
 
-                    maps[ifeed,isb,ichan,...] = np.reshape(mapdata/hitdata,(self.Ny,self.Nx))
-                    covs[ifeed,isb,ichan,...] = np.reshape(1./hitdata,(self.Ny,self.Nx))
+                    maps[ifeed,isb,ichan,...] = np.reshape(mapdata,(self.Ny,self.Nx))
+                    covs[ifeed,isb,ichan,...] = np.reshape(hitdata,(self.Ny,self.Nx))
+
 
                     feed_avg_map[ifeed,...] += np.reshape(mapdata,(self.Ny,self.Nx))
                     feed_avg_cov[ifeed,...] += np.reshape(hitdata,(self.Ny,self.Nx))
 
+            covs[covs == 0] = np.nan
         xygrid = np.meshgrid((np.arange(self.Nx)+0.5)*self.dx - self.Nx*self.dx/2.,
                              (np.arange(self.Ny)+0.5)*self.dy - self.Ny*self.dy/2.)
         
         feed_avg_map = feed_avg_map/feed_avg_cov
         feed_avg_cov = 1./feed_avg_cov
 
+        map_axes = np.array([a for a in maps.shape])
+        map_axes[2] = int(map_axes[2]/self.binwidth)
+        map_axes = np.insert(map_axes,3,self.binwidth)
+        maps = np.nansum(np.reshape(maps,map_axes),axis=3)
+        covs = np.nansum(np.reshape(covs,map_axes),axis=3)
+        maps = maps/covs
+        covs = 1./covs
+        
+        self.map_freqs = np.mean(np.reshape(data[f'{self.level2}/frequency'][...],map_axes[1:4]),axis=-1)
+
         return maps, covs, xygrid, feed_avg_map, feed_avg_cov
 
     def getpixels(self,x,y,dx,dy,Nx,Ny):
+        """
+        Get pixels for a simple cartesian plate carree projection.
+        """
         
         Dx = (Nx*dx)
         Dy = (Ny*dy)
-
-        print(Dx,Dy,dx,Dx/dx,Nx)
 
         pX = ((x+Dx/2.)/dx).astype(int)
         pY = ((y+Dy/2.)/dy).astype(int)
@@ -651,14 +629,13 @@ class FitSource(DataStructure):
         
         
 
-    def filter_data(self,tod,features,medfilt_size):
-        sel = np.where((features > 0) & (features != 13))[0]
-
+    def filter_data(self,tod,sel,medfilt_size):
+        """
+        Generate an aggressive median filter to remove large-scale correlated noise.
+        """
         
-        filters = np.zeros((tod.shape[0],tod.shape[1],tod.shape[2],sel.size))
-        for ifeed in tqdm(range(tod.shape[0])):
-            if ifeed > 0:
-                continue
+        filters = np.zeros((tod.shape[0],tod.shape[1],tod.shape[2],int(np.sum(sel))))
+        for ifeed in tqdm(self.feedlist,desc=f'{self.name}:filters:{self.source}'):
             feed_tod = tod[ifeed,...] 
             for isb in range(tod.shape[1]):
                 for ichan in range(tod.shape[2]):
@@ -707,6 +684,9 @@ class FitSource(DataStructure):
         gauss_fits.attrs['FitFunc'] = self.fitfunc.__name__
         gauss_errs.attrs['FitFunc'] = self.fitfunc.__name__
 
+        gauss_fits.attrs['source_el'] = self.src_el
+        gauss_fits.attrs['source_az'] = self.src_az
+
         ####
         # Combine all the data into one data cube for output:
         ####
@@ -732,6 +712,7 @@ class FitSource(DataStructure):
             gauss_dset.attrs['Unit'] = units[dname]
 
         gauss_fits.create_dataset('Success',data=self.fitsuccess)
+        gauss_fits.create_dataset('frequency',data=self.map_freqs)
 
         # Write uncertainties in best fit values
         dsets =  [all_errs[...,i] for i in range(all_errs.shape[-1])]
@@ -753,7 +734,7 @@ class FitSource(DataStructure):
         output.attrs['Good'] = True
         output.close()
         fname = data.filename.split('/')[-1]
-        lvl2 = data['level2']
+        lvl2 = data[self.level2]
         if self.prefix in lvl2:
             del lvl2[self.prefix]
         lvl2[self.prefix] = h5py.ExternalLink('{}/{}_{}'.format(self.output_dir,self.prefix,fname),'/')
@@ -762,115 +743,3 @@ class FitSource(DataStructure):
 
 
     
-class FitSourceAlternateScans(FitSource):
-    def scanEdges(self,x, idir=0):
-        """
-        Calculate edges of raster scans.
-        """
-        assert idir < 2
-
-        rms = np.std(x[1::2] - x[:-1:2]) /np.sqrt(2)
-        cutdx = rms*3
-
-        edges = ffuncs.scanedges(x, rms)
-        edges = edges[edges != 0]
-        diff = (edges[1:] - edges[:-1])
-        bad = np.where(diff < 5)[0]
-        edges = np.delete(edges, bad)
-
-        scanEdges = edges.astype(int) #peaks[whePeaks]
-        # d1 scans:
-        select = np.zeros(x.size).astype(bool)
-        time = np.arange(x.size)
-        for pid in range(scanEdges.size-1):
-
-            try:
-                dx = np.gradient(x[scanEdges[pid]:scanEdges[pid+1]])
-            except ValueError:
-                print(scanEdges[pid], scanEdges[pid+1])
-                pyplot.plot(x)
-                pyplot.show()
-
-            if (idir ==0) & (x[scanEdges[pid]] < x[scanEdges[pid+1]-1]): #CW
-                select[scanEdges[pid]:scanEdges[pid+1]] = True
-            elif (idir == 1) & (x[scanEdges[pid]] > x[scanEdges[pid+1]-1]): #CCW
-                select[scanEdges[pid]:scanEdges[pid+1]] = True
-
-        return select
-
-    def run(self,data):
-        # Get data structures we need
-        alltod = data['spectrometer/tod']
-        btod = data['spectrometer/band_average']
-
-        mjd = data['spectrometer/MJD'][:]
-        az  = data['spectrometer/pixel_pointing/pixel_az'][:]
-        el  = data['spectrometer/pixel_pointing/pixel_el'][:]
-        src = self.source
-        src = [s for s in src if s in Coordinates.CalibratorList]
-        features = (np.log(data['spectrometer/features'][:])/np.log(2)).astype(int)
-        filename = data.filename
-        # Make sure we are actually using a calibrator scan
-        if len(src) == 0:
-            return
-        self.source = src[0]
-
-        self.outputs = {}
-        if self.source in Coordinates.CalibratorList:
-            tod = self.average(filename,data,alltod)
-
-            cwbools = self.scanEdges(az[0,:], idir=0) # Get the CW scans (~cwbools is CCW scans)
-            modes = {'CW':True,'CCW':False}
-            for k,v in modes.items(): # loop twice for each direction             self.fit(data,cwbools==mode[i])
-                self.fit(filename,tod[:,:,:,cwbools==v],
-                         az[:,cwbools==v],
-                         el[:,cwbools==v],
-                         mjd[cwbools==v],
-                         src,
-                         features[cwbools==v])
-                self.outputs[k] = [self.Pout,self.Perr,self.PeakAzEl, self.PeakRaDec]
-
-    def write(self,data):
-        """
-        Write the Tsys, Gain and RMS to a pandas data frame for each hdf5 file.
-        """        
-        nHorns, nSBs, nChan, nSamps = data['spectrometer/tod'].shape
-        nHorns = len(self.feeds)
-        nChan = int(nChan//self.average_width) # need to capture the fact the data is averaged
-        nParams = 9
-
-        if not hasattr(self,'Pout'):
-            return 
-        # Structure:
-        #                                    Frequency (GHz)
-        # Date, DeltaT, Mode, Horn, SideBand     
-        freq = data['spectrometer/frequency'][...]
-        startDate = Types.Filename2DateTime(data.filename)
-
-        # Reorder the data
-        
-        horns = self.feeds
-        sidebands = np.arange(nSBs).astype(int)
-        channels  = np.arange(nChan).astype(int)
-        modes = ['Fits', 'Errors']
-        direction = ['CW','CCW'] 
-        iterables = [[startDate],[self.source],direction, modes, horns, sidebands, channels]
-        names = ['Date','Source','Direction', 'Mode','Horn','Sideband','Channel']
-        index = pd.MultiIndex.from_product(iterables, names=names)
-
-        colnames = ['Amplitude','dAz','sig_az','dEl','sig_el','angle','offset','gradaz','gradel']
-        addnames = ['Az','El']
-        radecnames=['dRA','dDEC','MJD']
-        df = pd.DataFrame(index=index, columns=colnames+addnames+radecnames)
-        idx = pd.IndexSlice
-
-        for k,v in self.outputs.items():
-            Pout, Perr, PeakAzEl, PeakRaDec = v
-            df.loc[idx[:,:,k,'Fits',:,:,:],colnames]   = np.reshape(Pout, (nHorns*nSBs*nChan,nParams))
-            df.loc[idx[:,:,k,'Errors',:,:,:],colnames] = np.reshape(Perr, (nHorns*nSBs*nChan,nParams))
-            df.loc[idx[:,:,k,'Fits',:,:,:],addnames]  = np.reshape(PeakAzEl, (nHorns*nSBs*nChan,2))
-            df.loc[idx[:,:,k,'Fits',:,:,:],radecnames]  = np.reshape(PeakRaDec, (nHorns*nSBs*nChan,3))
-
-        df = df.infer_objects() # convert to floats
-        prefix = data.filename.split('/')[-1].split('.hd5')[0]
-        df.to_pickle('{}/{}_SourceFitsAlternateScans.pkl'.format(self.output_dir,prefix))
