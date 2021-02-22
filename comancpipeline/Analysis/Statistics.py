@@ -147,7 +147,7 @@ class ScanEdges(DataStructure):
         source  = self.getSource(data)
         comment = self.getComment(data)
 
-        if not self.overwrite:
+        if (f'{self.level2}/Statistics' in data) & (not self.overwrite):
             return data
 
         self.logger(f'{fname}:{self.name}: {source} - {comment}')
@@ -243,8 +243,8 @@ class FnoiseStats(DataStructure):
 
         # Looping over Feed - Band - Channel, perform 1/f noise fit
         nFeeds, nBands, nChannels, nSamples = tod.shape
-        if 20 in feeds:
-            nFeeds -= 1
+        #if 20 in feeds:
+        #    nFeeds -= 1
         nScans = len(scan_edges)
 
         self.powerspectra = np.zeros((nFeeds, nBands, nScans, self.nbins))
@@ -590,10 +590,7 @@ class SkyDipStats(DataStructure):
         self.run(data)
 
         # Want to ensure the data file is read/write
-        if not data.mode == 'r+':
-            filename = data.filename
-            data.close()
-            data = h5py.File(filename,'r+')
+        self.setReadWrite(data)
 
         self.write(data)
 

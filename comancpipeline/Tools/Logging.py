@@ -11,6 +11,9 @@ class Logger:
         errfile = logfile.split('/')[-1]
         logdir = logfile.split(errfile)[0]
 
+        if not os.path.exists(logdir):
+            os.makedirs(logdir)
+
         self.log = open(logfile,'w')
         self.err_log = open(logdir+'errors_'+errfile,'w')
 

@@ -95,6 +95,9 @@ class SigmaClip(DataStructure):
         comment = self.getComment(data)
         if 'Sky nod' in comment:
             return data
+        if not f'{self.level2}/Statistics/scan_edges' in data:
+            self.logger(f'{fname}:{self.name}: No scan edges found for {source}.')
+            return data
 
         # Want to ensure the data file is read/write
         data = self.setReadWrite(data)

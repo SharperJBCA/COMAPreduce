@@ -32,7 +32,7 @@ rank = comm.Get_rank()
 import os
 import shutil
 
-__version__ = 'v3'
+__version__ = 'v4'
 
 
 def plot_map_image(P,m,xy):
@@ -263,7 +263,7 @@ class FitSource(DataStructure):
     """
 
     def __init__(self, feeds='all',
-                 output_dir='AstroCal',
+                 output_dir=None,
                  lon=-118.2941, lat=37.2314,
                  prefix='AstroCal',
                  dx=1., dy=1., Nx=60,Ny=60,
@@ -272,7 +272,6 @@ class FitSource(DataStructure):
                  level2='level2',
                  fitfunc='Gauss2dRot',**kwargs):
         """
-        nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
         """
         super().__init__(**kwargs)
@@ -300,12 +299,19 @@ class FitSource(DataStructure):
 
         self.level2=level2
 
+        self.model = Fitting.Gauss2dRot_General()
+
+        self.xfwhm = np.poly1d([ 5.22778336e-03, -3.76962352e-01,  1.11007533e+01])
+        self.yfwhm = np.poly1d([ 6.07782238e-03, -4.26787057e-01,  1.18196903e+01])
+
+
     def __str__(self):
         return 'Fitting source using {}'.format(self.fitfunc.__name__)
 
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
         fname = data.filename.split('/')[-1]
+        fdir  = data.filename.split(fname)[0]
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
@@ -320,9 +326,14 @@ class FitSource(DataStructure):
         if 'test' in comment:
             return data
 
+        if isinstance(self.output_dir, type(None)):
+            self.output_dir = f'{fdir}/{self.prefix}'
+
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
         if os.path.exists(outfile) & (not self.overwrite):
-            self.logger(f'{fname}:{self.name}: Source fits for {fname} already exist ({outfile}).')
+            self.logger(f'{fname}:{self.name}: Source fits for {fname} already exists ({outfile}).')
+            data = self.setReadWrite(data)
+            self.linkfile(data)
             return data 
 
 
@@ -338,6 +349,9 @@ class FitSource(DataStructure):
         return data
 
     def run(self,data):
+        """
+        """
+
         fname = data.filename.split('/')[-1]
         # Get data structures we need
         alltod = data[f'{self.level2}/averaged_tod']
@@ -346,7 +360,7 @@ class FitSource(DataStructure):
 
         freq = data[f'{self.level2}/frequency'][...]
         
-        sky_data_flag = ~Calibration.get_vane_flag(data['level1'])
+        sky_data_flag = ~Calibration.get_vane_flag(data['level1']) 
         assert np.sum(sky_data_flag) > 0, 'Error: The calibration vane is closed for all of this observation?'
 
         freqwidth = np.abs(freq[0,0]-freq[0,1])*self.binwidth 
@@ -366,9 +380,13 @@ class FitSource(DataStructure):
             # First get the positions of the sources from the feed average
             self.fit_source_position(data,alltod,filters,self.feed_avg_maps, self.feed_avg_covs,xygrid,sky_data_flag)
 
+            ## Next we also want to get source position in alternate scan directions
+            #self.fit_source_position(data,alltod,filters,self.feed_avg_maps, self.feed_avg_covs,xygrid,sky_data_flag)
+
+
             self.logger(f'{fname}:{self.name}: Fitting source bands ({freqwidth:.1f}MHz).')
             # Finally, fit the data in the maps
-            self.fit_map(self.maps,self.covs,xygrid,freq)
+            self.fit_map(data,self.maps,self.covs,xygrid,freq)
         else:
             self.nodata = True
             return
@@ -380,32 +398,37 @@ class FitSource(DataStructure):
 
         Recommended only for use on the band average data to reduce uncertainties
         """
+        fname = data.filename.split('/')[-1]
         def limfunc(P):
             return False
 
 
-        mjd = data['level1/spectrometer/MJD'][:]
 
         # We do Jupiter in the Az/El frame but celestial in sky frame
         if self.source.upper() == 'JUPITER':
-            az  = data['level1/spectrometer/pixel_pointing/pixel_az'][:]
-            el  = data['level1/spectrometer/pixel_pointing/pixel_el'][:]
-            az = az[:,sel]
-            el = el[:,sel]
+            # If the source is Jupiter we will use the beam model
+            #self.model.set_fixed(**{'sigx':True,'sigy':True,'phi':True})
+            def limfunc(P):
+                A,x0,sigx,y0,sigy,phi,B = P
+                if (sigx < 0) | (sigy < 0):
+                    return True
+                if (phi < -np.pi/2.) | (phi >= np.pi/2.):
+                    return True
+                return False
         else:
-            ra  = data['level1/spectrometer/pixel_pointing/pixel_ra'][:]
-            dec = data['level1/spectrometer/pixel_pointing/pixel_dec'][:]
-            ra  = ra[:,sel]
-            dec = dec[:,sel]
-        mjd=mjd[sel]
+            def limfunc(P):
+                A,x0,sigx,y0,sigy,phi,B = P
+                if (sigx < 0) | (sigy < 0):
+                    return True
+                if (phi < -np.pi/2.) | (phi >= np.pi/2.):
+                    return True
+                return False
 
+        self.avg_map_parameters = [k for k,v in self.model.fixed.items() if not v]
 
-        azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
-        nparams = 7
-        self.feed_avg_fits = np.zeros((maps.shape[0],nparams))
-        self.feed_avg_uncertainty = np.zeros((maps.shape[0],nparams)) 
-
-        for ifeed in tqdm(range(tod.shape[0]),desc=f'{self.name}:{self.source}'):
+        self.feed_avg_fits   = np.zeros((maps.shape[0],self.model.nparams))
+        self.feed_avg_errors = np.zeros((maps.shape[0],self.model.nparams)) 
+        for ifeed in tqdm(self.feedlist,desc=f'{self.name}:source_position:{self.source}'):
             feed_map = maps[ifeed,...].flatten()
             feed_cov = covs[ifeed,...].flatten()
             gd = np.isfinite(feed_map)
@@ -418,40 +441,67 @@ class FitSource(DataStructure):
             if len(feed_map) == 0:
                 continue
 
-            P0 = [np.nanmax(feed_map)-np.nanmedian(feed_map),
-                  x[np.argmax(feed_map)], # x0
-                  1./60., #sigx
-                  y[np.argmax(feed_map)], # y0
-                  1./60., # sigy
-                  0., # phi
-                  np.nanmedian(feed_map)] # bkgd
-            
+            if self.source.upper() == 'JUPITER':
+                P0 = {'A':np.nanmax(feed_map),
+                      'x0':x[np.argmax(feed_map)],
+                      'sigx':2./60.,
+                      'y0':y[np.argmax(feed_map)],
+                      'sigy':2./60.,
+                      'phi':0,
+                      'B':0}
+                freq = 30. # GHz - always the center of the band for band average, need colour corrections?
+                P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355+0./60./2.355,
+                                   'width':self.xfwhm(freq)/60./2.355/1e2},
+                           'sigy':{'mean':self.yfwhm(freq)/60./2.355+0./60./2.355,
+                                   'width':self.yfwhm(freq)/60./2.355/1e2}}
+
+            else:
+                P0 = {'A':np.nanmax(feed_map),
+                      'x0':x[np.argmax(feed_map)],
+                      'sigx':2./60.,
+                      'y0':y[np.argmax(feed_map)],
+                      'sigy':2./60.,
+                      'phi':0,
+                      'B':0}
+                P0_priors = {}
             
             # Perform the least-sqaures fit
-            result = minimize(Fitting.ErrorLstSq,P0,args=[self.fitfunc.func,limfunc,[x,y],feed_map,feed_cov,{}],method='CG')
-
-            result.x[-2] = 0.
-            nwalkers = 32
-            pos = result.x + 1e-4 * np.random.normal(size=(nwalkers, len(result.x)))
             try:
-                sampler = emcee.EnsembleSampler(nwalkers,len(result.x),Fitting.MC_ErrorLstSq, 
-                                                args=[self.fitfunc.func,limfunc,[x,y],feed_map,feed_cov,{}])
-                sampler.run_mcmc(pos,5000,progress=True)
-            
-                flat_samples = sampler.get_chain(discard=100,thin=15,flat=True)
-                result = np.nanmean(flat_samples,axis=0)
-                error  = np.nanstd(flat_samples ,axis=0)
-                self.feed_avg_fits[ifeed,:] = result
-                self.feed_avg_uncertainty[ifeed,:] = error
-            except ValueError:
-                pass
+                result, error,samples = self.model(P0, (x,y), feed_map, feed_cov,limfunc=limfunc,
+                                                   P0_priors=P0_priors,return_array=True)
+            except ValueError as e:
+                self.logger(f'{fname}:emcee:{e}',error=e)
+            self.feed_avg_fits[ifeed,:] = result
+            self.feed_avg_errors[ifeed,:] = error
 
-    def fit_map(self,maps,covs,xygrid,freq):
+    def fit_map(self,data,maps,covs,xygrid,freq):
         """
         This function fits for the source in each channel 
         """
+        fname = data.filename.split('/')[-1]
         def limfunc(P):
             return False
+        # Source fitting model:
+        # We do Jupiter in the Az/El frame but celestial in sky frame
+        if self.source.upper() == 'JUPITER':
+            # If the source is Jupiter we will use the beam model
+            self.model.set_fixed(**{'x0':True,'y0':True,'phi':True})
+            def limfunc(P):
+                A,sigx,sigy,B = P
+                if (sigx < 0) | (sigy < 0):
+                    return True
+                return False
+        else:
+            self.model.set_fixed(**{'x0':True,'y0':True,'phi':True})
+            P0_priors = {}
+            def limfunc(P):
+                A,sigx,sigy,B = P
+                if (sigx < 0) | (sigy < 0):
+                    return True
+                return False
+
+        self.fit_map_parameters = [k for k,v in self.model.fixed.items() if not v]
+
 
         # Unpack Pixel Coordinates
         x,y = xygrid
@@ -459,50 +509,49 @@ class FitSource(DataStructure):
         y = y.flatten()
 
         # Setup fit containers
-        nparams = 4 # we fix the position and rotation
-        self.fits          = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],nparams))
-        self.fitsuccess    = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2]),dtype=bool)
-        self.uncertainties = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],nparams))
-        self.apers         = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],2))
+        self.fits          = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],self.model.nparams))
+        self.errors = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],self.model.nparams))
 
-        for ifeed in tqdm(self.feedlist,desc=f'{self.name}:{self.source}'):
-        
+        for ifeed in tqdm(self.feedlist,desc=f'{self.name}:fit_map:{self.source}'):        
             for isb in range(maps.shape[1]):
                 for ichan in range(maps.shape[2]):
                     data = maps[ifeed,isb,ichan,...].flatten()
                     cov  = covs[ifeed,isb,ichan,...].flatten()
                     if np.nansum(data) == 0:
-                        self.fitsuccess[ifeed,isb,ichan] = False
                         continue
 
-                    self.apers[ifeed,isb,ichan,:] = self.aperture_phot(data,x,y,freq[isb,ichan])
-                    gd = np.isfinite(data)
-                    xgd = x[gd]
-                    ygd = y[gd]
-                    P0 = [np.nanmax(data)-np.nanmedian(data),
-                          1./60., # sigx
-                          1./60., # sigy
-                          np.nanmedian(data)] # bkgd
-                    fit_pos = {'x0':self.feed_avg_fits[ifeed,1], 
-                               'y0':self.feed_avg_fits[ifeed,3],
-                               'phi':self.feed_avg_fits[ifeed,5]}
-                    args = [self.fitfunc_fixed.func,
-                            limfunc,
-                            [x[gd],y[gd]],
-                            data[gd],
-                            cov[gd],
-                            fit_pos]
-                    result = minimize(Fitting.ErrorLstSq,P0,args=args,method='CG')
+                    if self.source.upper() == 'JUPITER':
+                        P0 = {'A':np.nanmax(data),
+                              'sigx':2./60.,
+                              'sigy':2./60.,
+                              'B':0}
 
-                    # Calculate the uncertainties using the Jacobian of the fitting model
-                    self.uncertainties[ifeed,isb,ichan,:] = self.fitfunc_fixed.covariance(result.x,
-                                                                                          [x[gd],y[gd]],
-                                                                                          data[gd], 
-                                                                                          cov[gd]**0.5,
-                                                                                          **fit_pos)
+                        P0_priors={'sigx':{'mean':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355+0./60./2.355,
+                                           'width':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355/1e2},
+                                   'sigy':{'mean':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355+0./60./2.355,
+                                           'width':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355/1e2}}
 
-                    self.fits[ifeed,isb,ichan,:] = result.x
-                    self.fitsuccess[ifeed,isb,ichan] = result.success
+                        self.model.set_defaults(x0=self.feed_avg_fits[ifeed,1],
+                                                y0=self.feed_avg_fits[ifeed,3],
+                                                phi=self.feed_avg_fits[ifeed,5])
+                    else:
+                        P0 = {'A':np.nanmax(data),
+                              'sigx':2./60.,
+                              'sigy':2./60.,
+                              'B':0}
+                        self.model.set_defaults(x0=self.feed_avg_fits[ifeed,1],
+                                                y0=self.feed_avg_fits[ifeed,3],
+                                                phi=self.feed_avg_fits[ifeed,5])
+
+                    try:
+                        result, error, samples = self.model(P0, (x,y), data, cov,P0_priors=P0_priors,limfunc=limfunc,return_array=True)
+                    except ValueError as e:
+                        result = 0
+                        error = 0
+                        self.logger(f'{fname}:emcee:{e}',error=e)
+                
+                    self.fits[ifeed,isb,ichan,:] = result
+                    self.errors[ifeed,isb,ichan,:] = error
 
     def aperture_phot(self,data,x,y,v):
         """
@@ -552,6 +601,9 @@ class FitSource(DataStructure):
 
         feed_avg_map = np.zeros((tod.shape[0],self.Nx,self.Ny))
         feed_avg_cov = np.zeros((tod.shape[0],self.Nx,self.Ny))
+
+        #scan_maps = {'CWmap':np.zeros((self.Nx,self.Ny)),'CCWmap':np.zeros((self.Nx,self.Ny)),
+        #             'CWcov':np.zeros((self.Nx,self.Ny)),'CCWcov':np.zeros((self.Nx,self.Ny))}
 
         azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
         self.src_el = np.mean(elSource)
@@ -639,7 +691,16 @@ class FitSource(DataStructure):
             feed_tod = tod[ifeed,...] 
             for isb in range(tod.shape[1]):
                 for ichan in range(tod.shape[2]):
-                    filters[ifeed,isb,ichan,:] = median_filter(feed_tod[isb,ichan,sel],medfilt_size)
+                    z = feed_tod[isb,ichan,sel]
+                    bad = np.where(np.isnan(z))[0]
+                    if len(bad) == len(z):
+                        continue
+                    if len(bad) > 0:
+                        good = np.where(np.isfinite(z))[0]
+                        
+                        nearest = [good[np.argmin(np.abs(good-b))] for b in bad]
+                        z[bad] = z[nearest]
+                    filters[ifeed,isb,ichan,:] = median_filter(z,medfilt_size)
                     
         return filters
                     
@@ -655,7 +716,6 @@ class FitSource(DataStructure):
 
         # We will store these in a separate file and link them to the level2s
         fname = data.filename.split('/')[-1]
-        print('{}/{}_{}'.format(self.output_dir,self.prefix,fname))
 
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
         if os.path.exists(outfile):
@@ -668,9 +728,8 @@ class FitSource(DataStructure):
         shutil.chown(outfile, group='comap')
 
         # Store datasets in root
-        dnames = ['Aper_Amp','Aper_Err','Maps']
-        dsets  = [self.apers[...,i] for i in range(self.apers.shape[-1])] +\
-                 [self.maps]
+        dnames = ['Maps','Covs']
+        dsets  = [self.maps,self.covs]
                   
         for (dname, dset) in zip(dnames, dsets):
             if dname in output:
@@ -679,60 +738,79 @@ class FitSource(DataStructure):
 
 
         # Put the gaussian fit into its own groups
-        gauss_fits = output.create_group('Gauss_Values')
-        gauss_errs = output.create_group('Gauss_Errors')
-        gauss_fits.attrs['FitFunc'] = self.fitfunc.__name__
-        gauss_errs.attrs['FitFunc'] = self.fitfunc.__name__
+        gauss_fits = output.create_group('Gauss_Narrow_Values')
+        gauss_errs = output.create_group('Gauss_Narrow_Errors')
+        gauss_fits.attrs['FitFunc'] = self.model.__name__
+        gauss_errs.attrs['FitFunc'] = self.model.__name__
 
         gauss_fits.attrs['source_el'] = self.src_el
         gauss_fits.attrs['source_az'] = self.src_az
 
-        ####
-        # Combine all the data into one data cube for output:
-        ####
-        all_fits = np.zeros((self.fits.shape[0], self.fits.shape[1], self.fits.shape[2], 7))
-        all_errs = np.zeros((self.fits.shape[0], self.fits.shape[1], self.fits.shape[2], 7))
-        for i,iparam in enumerate([1,3,5]):
-            all_fits[:,:,:,iparam] = (self.feed_avg_fits[:,iparam])[:,None,None]
-            all_errs[:,:,:,iparam] = (self.feed_avg_uncertainty[:,iparam])[:,None,None]
+        units = {'A':'K','x0':'degrees','y0':'degrees','sigx':'degrees','sigy':'degrees','B':'K','phi':'radians'}
 
-        for i,iparam in enumerate([0,2,4,6]):
-            all_fits[:,:,:,iparam] = self.fits[...,i]
-            all_errs[:,:,:,iparam] = self.uncertainties[...,i]
+        # Write narrow channel fits
+        dnames = self.fit_map_parameters
+        dsets = [self.fits[:,iparam] for iparam in range(self.fits.shape[1])]
+        for (dname, dset) in zip(dnames, dsets):
+            if dname in output:
+                del output[dname]
+            gauss_dset = gauss_fits.create_dataset(dname,  data=dset)
+            gauss_dset.attrs['Unit'] = units[dname]
+        gauss_fits.create_dataset('frequency',data=self.map_freqs)
 
-        dnames = ['Amp','x0','sigx','y0','sigy','angle','offset']
-        units = {'Amp':'K','x0':'degrees','y0':'degrees','sigx':'degrees','sigy':'degrees','offset':'K','angle':'radians'}
+        # ... and the uncertainties
+        dsets = [self.errors[:,iparam] for iparam in range(self.errors.shape[1])]
+        for (dname, dset) in zip(dnames, dsets):
+            if dname in output:
+                del output[dname]
+            gauss_dset = gauss_errs.create_dataset(dname,  data=dset)
+            gauss_dset.attrs['Unit'] = units[dname]
+        gauss_errs.create_dataset('frequency',data=self.map_freqs)
 
-        # Write best fit values
-        dsets =  [all_fits[...,i] for i in range(all_fits.shape[-1])]
+
+        ##
+        ## WRITE AVERAGED DATA
+        ##
+        # Put the gaussian fit into its own groups
+        gauss_fits = output.create_group('Gauss_Average_Values')
+        gauss_errs = output.create_group('Gauss_Average_Errors')
+        gauss_fits.attrs['FitFunc'] = self.model.__name__
+        gauss_errs.attrs['FitFunc'] = self.model.__name__
+
+        gauss_fits.attrs['source_el'] = self.src_el
+        gauss_fits.attrs['source_az'] = self.src_az
+
+        # Write averaged data fits
+        dnames = self.avg_map_parameters
+        dsets = [self.feed_avg_fits[:,iparam] for iparam in range(self.feed_avg_fits.shape[1])]
         for (dname, dset) in zip(dnames, dsets):
             if dname in output:
                 del output[dname]
             gauss_dset = gauss_fits.create_dataset(dname,  data=dset)
             gauss_dset.attrs['Unit'] = units[dname]
 
-        gauss_fits.create_dataset('Success',data=self.fitsuccess)
-        gauss_fits.create_dataset('frequency',data=self.map_freqs)
-
-        # Write uncertainties in best fit values
-        dsets =  [all_errs[...,i] for i in range(all_errs.shape[-1])]
+        # ... and the uncertainties
+        dsets = [self.feed_avg_fits[:,iparam] for iparam in range(self.feed_avg_fits.shape[1])]
         for (dname, dset) in zip(dnames, dsets):
             if dname in output:
                 del output[dname]
             gauss_dset = gauss_errs.create_dataset(dname,  data=dset)
             gauss_dset.attrs['Unit'] = units[dname]
 
-        output.attrs['SourceFittingVersion'] = __version__
+        
 
-        output['Aper_Amp'].attrs['Unit'] = 'Jy'
-        output['Aper_Err'].attrs['Unit'] = 'Jy'
+        output.attrs['SourceFittingVersion'] = __version__
 
         output['Maps'].attrs['Unit'] = 'K'
         output['Maps'].attrs['cdeltx'] = self.dx
         output['Maps'].attrs['cdelty'] = self.dy
         
-        output.attrs['Good'] = True
+
+        output.attrs['source'] = self.getSource(data)
         output.close()
+        self.linkfile(data)
+
+    def linkfile(self,data):
         fname = data.filename.split('/')[-1]
         lvl2 = data[self.level2]
         if self.prefix in lvl2:

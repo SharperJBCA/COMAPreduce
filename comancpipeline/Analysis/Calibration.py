@@ -25,7 +25,8 @@ from scipy.interpolate import interp1d
 
 from scipy.signal import find_peaks
 
-__vane_version__ = 'v2'
+__vane_version__ = 'v3'
+__level2_version__ = 'v1'
 
 class NoColdError(Exception):
     pass
@@ -191,6 +192,21 @@ class CreateLevel2Cont(DataStructure):
         # Average the data and apply the gains
         self.average_obs(data.filename,data, self.avg_tod)
 
+    def okay_level2_version(self,h):
+        """
+        Check level 2 file is up to date
+        """
+        
+        if not 'version' in h.attrs:
+            return False
+        if not h.attrs['version'] == __level2_version__:
+            return False
+        if not 'vane-version' in h.attrs:
+            return False
+        if not h.attrs['vane-version'] == h['Vane'].attrs['version']:
+            return False
+
+        return True
 
     def __call__(self,data):
         """
@@ -205,23 +221,20 @@ class CreateLevel2Cont(DataStructure):
         prefix = data.filename.split('/')[-1].split('.hd5')[0]
         self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
 
+        print(self.outfilename)
+        print(os.path.exists(self.outfilename),(not self.overwrite))
+        
         # Skip files that are already calibrated:
         if os.path.exists(self.outfilename) & (not self.overwrite): 
             self.logger(f'{fname}:{self.name}: Level 2 file exists...checking vane version...')
-            self.outfile = h5py.File(self.outfilename,'a')
+            self.outfile = h5py.File(self.outfilename,'r')
             lvl2 = self.outfile[self.level2]
-            if 'Vane' in lvl2:
-                vane_version = lvl2['Vane'].attrs['version']
-                if vane_version == __vane_version__:
-                    self.logger(f'{fname}:{self.name}: Vane calibration up to date. Skipping.')
-                    data.close()
-                    data = self.outfile
-                    return data
-                else:
-                    self.outfile.close()
+            if self.okay_level2_version(lvl2):
+                self.logger(f'{fname}:{self.name}: Vane calibration up to date. Skipping.')
+                data.close()
+                return self.outfile
             else:
                 self.outfile.close()
-
 
         self.logger(f'{fname}:{self.name}: Applying vane calibration. Bin width {self.average_width}.')
         self.run(data)
@@ -229,9 +242,9 @@ class CreateLevel2Cont(DataStructure):
         self.write(data)
         self.logger(f'{fname}:{self.name}: Done.')
         # Now change to the level2 file for all future analyses.
-        data.close()
-        data = self.outfile
-        return data
+        if data:
+            data.close() # just double check we close the level 1 file.
+        return self.outfile
 
     def average_obs(self,filename,data, tod):
         """
@@ -263,10 +276,10 @@ class CreateLevel2Cont(DataStructure):
         # Future: Astro Calibration
         # if self.cal_mode.upper() == 'ASTRO':
         # gain = self.getcalibration_astro(data)
-
         for ifeed, feed in enumerate(tqdm(self.feeds,desc=self.name)):
             feed_array_index = self.feed_dict[feed]
             d = data['spectrometer/tod'][feed_array_index,...] 
+
             for sb in range(nSBs):
                 # Weights/gains already snipped to just the feeds we want
                 w, g,chan_flag = 1./tsys[0,ifeed, sb, :]**2, gain[0,ifeed, sb, :], spikes[0,ifeed,sb,:]
@@ -322,6 +335,20 @@ class CreateLevel2Cont(DataStructure):
         gain_file.close()
         return cname, gain, tsys, spikes
 
+    def okay_vane_version(self,h):
+        """
+        Check to see if this vane version is up to date
+        """
+        if not 'version' in h.attrs:
+            return False
+        if not 'Spikes' in h:
+            return False
+        if not h.attrs['version'] == __vane_version__:
+            return False
+        
+        return True
+
+
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
@@ -348,14 +375,21 @@ class CreateLevel2Cont(DataStructure):
         freq_dset = lvl2.create_dataset('frequency',data=self.avg_frequency, dtype=self.avg_frequency.dtype)
 
         # Link the Level1 data
-        self.outfile['level1'] = h5py.ExternalLink(data.filename,'/')
+        data_filename = data.filename
+        fname = data.filename.split('/')[-1]
+        data.close()
+        if not 'level1' in self.outfile:
+            self.outfile['level1'] = h5py.ExternalLink(data_filename,'/')
+        lvl2.attrs['version'] = __level2_version__
 
         # Add version info
         lvl2.attrs['pipeline-version'] = comancpipeline.__version__
 
         # Link the Level1 data
-        fname = data.filename.split('/')[-1]
+        if 'Vane' in lvl2:
+            del lvl2['Vane']
         lvl2['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
+        lvl2.attrs['vane-version'] = lvl2['Vane'].attrs['version']
 
 class CalculateVaneMeasurement(DataStructure):
     """
@@ -394,8 +428,12 @@ class CalculateVaneMeasurement(DataStructure):
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
 
         if os.path.exists(outfile) & (not self.overwrite):
-            self.logger(f'{fname}:{self.name}: {self.prefix}_{fname} exists, ignoring (overwrite = {self.overwrite})')
-            return data
+            vane = h5py.File(outfile,'r')
+            if self.okay_vane_version(vane):
+                vane.close()
+                self.logger(f'{fname}:{self.name}: {self.prefix}_{fname} exists, ignoring (overwrite = {self.overwrite})')
+                return data
+            vane.close()
 
         comment = self.getComment(data)
 
@@ -411,6 +449,19 @@ class CalculateVaneMeasurement(DataStructure):
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
+
+    def okay_vane_version(self,h):
+        """
+        Check to see if this vane version is up to date
+        """
+        if not 'version' in h.attrs:
+            return False
+        if not 'Spikes' in h:
+            return False
+        if not h.attrs['version'] == __vane_version__:
+            return False
+        
+        return True
 
     def findHotCold(self, mtod):
         """

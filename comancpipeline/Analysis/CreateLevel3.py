@@ -22,6 +22,8 @@ from scipy import signal
 import time
 import os
 
+import shutil
+
 from tqdm import tqdm
 
 __level3_version__='v2'
@@ -119,15 +121,17 @@ class CreateLevel3(DataStructure):
         self.all_weights = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
         frequency = d['level1/spectrometer/frequency'][...]
         frequency = np.mean(np.reshape(frequency,(frequency.shape[0],frequency.shape[1]//16,16)) ,axis=-1).flatten()
-        
+        feeds = d['level1/spectrometer/feeds'][...]
+
         # Read in data from each feed
         for index, ifeed in enumerate(range(tod_shape[0])):
-
+            if feeds[ifeed] == 20:
+                continue
             todin = d[f'{self.level2}/averaged_tod'][ifeed,:,:,:]
             az = d['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,:]
             el = d['level1/spectrometer/pixel_pointing/pixel_el'][ifeed,:]
 
-            # Statistics for this feed
+            # Statistics for this feed                        
             medfilt_coefficient = d[f'{self.level2}/Statistics/filter_coefficients'][ifeed,...]
             atmos = d[f'{self.level2}/Statistics/atmos'][ifeed,...]
             atmos_coefficient = d[f'{self.level2}/Statistics/atmos_coefficients'][ifeed,...]
@@ -181,7 +185,6 @@ class CreateLevel3(DataStructure):
 
                 for ichan, (flow,fhigh) in enumerate(zip([26,27,28,29,30,31,32],[28,29,30,31,32,33,34])):
                     sel = np.where(((freq >= flow) & (freq < fhigh)))[0]
-                    sel = sel[10:-10]
                     top = np.sum(tod[sel,:]/wnoise[sel,:]**2,axis=0)
                     bot = np.sum(1/wnoise[sel,:]**2,axis=0)
 

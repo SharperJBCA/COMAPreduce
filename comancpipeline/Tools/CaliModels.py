@@ -42,7 +42,6 @@ Tjkarim2014 = [151.013,
                141.757]
 
 jupfit  = np.poly1d(np.polyfit(np.log10(nujkarim2014), np.log10(Tjkarim2014), 1))
-print(jupfit)
 jupAng0 = 2.481e-8 # sr
 
 def JupiterFlux(nu, mjd, lon=0, lat=0, source='jupiter',allpos=False,return_jansky=False):

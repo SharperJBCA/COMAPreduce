@@ -8,9 +8,12 @@ import time
 
 class DataStructure(object):
 
-    def __init__(self,logger=print,overwrite=False,**kwargs):
+    def __init__(self,logger=print,overwrite=False,
+                 bad_keywords = ['halt','current','zenith','AlpBoo'],**kwargs):
         self.logger = logger
         self.overwrite = overwrite
+
+        self.bad_keywords = bad_keywords
 
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
@@ -93,10 +96,19 @@ class DataStructure(object):
         """
         fname = data.filename.split('/')[-1]
         source = self.getAttr(data,'source')
+        
+        
+        source_split = source.split(',')
+        if len(source_split) > 1:
+            source = [s for s in source_split if s not in self.bad_keywords]
+            if len(source) > 0:
+                source = source[0]
+            else:
+                source = ''
         if source == '':
             self.logger(f'{fname}:{self.name}: No source found.')
             source = ''
-        return source.split(',')[0].strip()
+        return source.strip()
 
 
     def getAttr(self,data,attrname):
