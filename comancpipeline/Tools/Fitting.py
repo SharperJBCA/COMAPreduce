@@ -371,7 +371,7 @@ class Gauss2dRot_General:
         self.set_fixed(**fixed)
         self.defaults = defaults
 
-        self.param_names = ['A','B','sigx','sigy','x0','y0','phi']
+        self.param_names = ['A','x0','sigx','y0','sigy','phi','B']
         self.A = 0
         self.B = 0
         self.sigx = 0
@@ -379,6 +379,8 @@ class Gauss2dRot_General:
         self.x0 = 0
         self.y0 = 0
         self.phi = 0
+
+        self.idx = {k:i for i,k in enumerate(self.param_names)}
 
     def _limfunc(self,P):
         return False
@@ -410,8 +412,8 @@ class Gauss2dRot_General:
             # Perform the least-sqaures fit
             result = minimize(self.minimize_errfunc,P0,args=(xy,z,covariance),method='CG')
     
-            if 'phi' in P0_dict:
-                result.x[self.idx['phi']] = 0
+            #if 'phi' in P0_dict:
+            #    result.x[self.idx['phi']] = 0
         
             pos = result.x + 1e-4 * np.random.normal(size=(nwalkers, len(result.x)))
             sampler = emcee.EnsembleSampler(nwalkers,len(result.x),self.emcee_errfunc, 
@@ -423,8 +425,8 @@ class Gauss2dRot_General:
             #from matplotlib import pyplot
             #corner.corner(flat_samples)
             #pyplot.show()
-            result = np.nanmean(flat_samples,axis=0)
-            error  = np.nanstd(flat_samples ,axis=0)
+            result = np.nanmedian(flat_samples,axis=0)
+            error  = stats.MAD(flat_samples ,axis=0)
         
         Value_dict = {k:result[i] for k, i in self.idx.items()}
         Error_dict = {k:error[i]  for k, i in self.idx.items()}

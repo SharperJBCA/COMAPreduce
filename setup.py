@@ -20,11 +20,11 @@ filters = Extension(name = 'comancpipeline.Tools.filters',
                     sources = ['comancpipeline/Tools/filters.pyx'])
 
 pysla = Extension(name = 'comancpipeline.Tools.pysla', 
-                  sources = ['comancpipeline/Tools/pysla.f90'],
-                  libraries=['sla'],
-                  library_dirs =['{}'.format(slalib_path)],
-                  f2py_options = [],
-                  extra_link_args=['-Wl,-rpath,{}'.format(slalib_path)])
+                  sources = ['comancpipeline/Tools/pysla.f90','comancpipeline/Tools/sla.f'],
+                  #libraries=['sla'],
+                  #library_dirs =['{}'.format(slalib_path)],
+                  f2py_options = [])
+                 # extra_link_args=['-Wl,-rpath,{}'.format(slalib_path)])
 #'Iglibc_fix.h',
                                       
 ffuncs = Extension(name = 'comancpipeline.Tools.ffuncs', 

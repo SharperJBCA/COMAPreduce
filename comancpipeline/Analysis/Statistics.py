@@ -324,7 +324,7 @@ class FnoiseStats(DataStructure):
         if 'Sky nod' in comment:
             return data
 
-        if not self.overwrite:
+        if ('level2/Statistics/fnoise_fits' in data) & (not self.overwrite):
             return data
 
         # Want to ensure the data file is read/write

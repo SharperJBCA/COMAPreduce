@@ -32,7 +32,7 @@ rank = comm.Get_rank()
 import os
 import shutil
 
-__version__ = 'v4'
+__version__ = 'v5'
 
 
 def plot_map_image(P,m,xy):
@@ -270,6 +270,7 @@ class FitSource(DataStructure):
                  allowed_sources= ['jupiter','TauA','CasA','CygA','mars'],
                  binwidth = 1,
                  level2='level2',
+                 fwhm_mode = 'ModelFWHMPrior',
                  fitfunc='Gauss2dRot',**kwargs):
         """
         average_width - how many channels to average over
@@ -300,7 +301,16 @@ class FitSource(DataStructure):
         self.level2=level2
 
         self.model = Fitting.Gauss2dRot_General()
+        
+        # Beam modes allowed: 
+        # 1) ModelFWHMPrior - Use James beam model fits as a prior
+        # 2) ModelFWHMFixed - Use James beam models to fix the FWHM
+        # 3) BootstrapPrior - Fit width using averaged data, use fitted widths as priors on other frequencies
+        # 4) FullBootstrapPrior - Use FWHM fitted to Full data average
+        # 5) NoPrior - Use no prior on FWHM
+        self.fwhm_mode = fwhm_mode
 
+        # FWHM models derived from James' beam models - generally too big?
         self.xfwhm = np.poly1d([ 5.22778336e-03, -3.76962352e-01,  1.11007533e+01])
         self.yfwhm = np.poly1d([ 6.07782238e-03, -4.26787057e-01,  1.18196903e+01])
 
@@ -374,184 +384,205 @@ class FitSource(DataStructure):
 
             # Next bin into maps
             self.logger(f'{fname}:{self.name}: Creating maps with bin width {freqwidth:.1f}MHz.')
-            self.maps, self.covs, xygrid, self.feed_avg_maps, self.feed_avg_covs = self.create_maps(data,alltod,filters,sky_data_flag)
-            
+            self.maps, self.feed_avg, self.scan_maps = self.create_maps(data,alltod,filters,sky_data_flag)
+
+            # Zero step - check for timing errors
+            self.fit_altscan_position(data,self.scan_maps)
+
             self.logger(f'{fname}:{self.name}: Fitting global source offset')
             # First get the positions of the sources from the feed average
-            self.fit_source_position(data,alltod,filters,self.feed_avg_maps, self.feed_avg_covs,xygrid,sky_data_flag)
-
-            ## Next we also want to get source position in alternate scan directions
-            #self.fit_source_position(data,alltod,filters,self.feed_avg_maps, self.feed_avg_covs,xygrid,sky_data_flag)
-
+            self.fit_source_position(data,self.feed_avg)
 
             self.logger(f'{fname}:{self.name}: Fitting source bands ({freqwidth:.1f}MHz).')
             # Finally, fit the data in the maps
-            self.fit_map(data,self.maps,self.covs,xygrid,freq)
+            self.fit_map(data,self.maps)
         else:
             self.nodata = True
             return
 
-
-    def fit_source_position(self,data,tod, filters, maps, covs, xygrid,sel):
+    def fit_altscan_position(self,data,scan_maps):
         """
         Performs a full fit to the maps obtain the source positions 
 
         Recommended only for use on the band average data to reduce uncertainties
         """
         fname = data.filename.split('/')[-1]
-        def limfunc(P):
-            return False
-
-
 
         # We do Jupiter in the Az/El frame but celestial in sky frame
-        if self.source.upper() == 'JUPITER':
-            # If the source is Jupiter we will use the beam model
-            #self.model.set_fixed(**{'sigx':True,'sigy':True,'phi':True})
-            def limfunc(P):
-                A,x0,sigx,y0,sigy,phi,B = P
-                if (sigx < 0) | (sigy < 0):
-                    return True
-                if (phi < -np.pi/2.) | (phi >= np.pi/2.):
-                    return True
-                return False
-        else:
-            def limfunc(P):
-                A,x0,sigx,y0,sigy,phi,B = P
-                if (sigx < 0) | (sigy < 0):
-                    return True
-                if (phi < -np.pi/2.) | (phi >= np.pi/2.):
-                    return True
-                return False
+        if not 0 in self.feedlist:
+            return 
+        self.model.set_fixed(**{})
+
+        def limfunc(P):
+            A,x0,sigx,y0,sigy,phi,B = P
+            if (sigx < 0) | (sigy < 0):
+                return True
+            if (phi < -np.pi/2.) | (phi >= np.pi/2.):
+                return True
+            return False
+
+        self.alt_scan_parameters = [k for k,v in self.model.fixed.items() if not v]
+        self.alt_scan_fits ={'CW':{'Values':np.zeros((self.model.nparams)),
+                                   'Errors':np.zeros((self.model.nparams))},
+                             'CCW':{'Values':np.zeros((self.model.nparams)),
+                                    'Errors':np.zeros((self.model.nparams))}}
+        for key in ['CW','CCW']:
+            m,c,x,y,P0 = self.prepare_maps(scan_maps[key]['map'],scan_maps[key]['cov'],scan_maps[key]['xygrid'])
+
+            if (self.fwhm_mode == 'ModelFWHMPriors') & (self.source.upper() == 'JUPITER'):
+                freq = 30. # GHz - always the center of the band for band average, need colour corrections?
+                P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355,
+                                   'width':self.xfwhm(freq)/60./2.355/1e2},
+                           'sigy':{'mean':self.yfwhm(freq)/60./2.355,
+                                   'width':self.yfwhm(freq)/60./2.355/1e2}}
+            else:
+                P0_priors = {}
+            # Perform the least-sqaures fit
+            try:
+                result, error,samples = self.model(P0, (x,y), m, c,limfunc=limfunc,
+                                                   P0_priors=P0_priors,return_array=True)
+                self.alt_scan_fits[key]['Values'][:] = result
+                self.alt_scan_fits[key]['Errors'][:] = error
+            except ValueError as e:
+                self.logger(f'{fname}:emcee:{e}',error=e)
+                
+    def prepare_maps(self,_m,_c,xygrid):
+        """
+        Prepare maps for fitting by flattening array, and removing bad values.
+        Returns estimate of P0 too.
+        """
+        m = _m.flatten()
+        c = _c.flatten()
+        gd = np.isfinite(m)
+        m = m[gd]
+        c = c[gd]
+
+        assert (len(m) > 0),'No good data in map'
+
+        x,y =xygrid
+        x,y = x.flatten()[gd],y.flatten()[gd]
+        P0 = {'A':np.nanmax(m),
+              'x0':x[np.argmax(m)],
+              'sigx':2./60.,
+              'y0':y[np.argmax(m)],
+              'sigy':2./60.,
+              'phi':0,
+              'B':0}
+        P0 = {k:v for k,v in P0.items() if not self.model.fixed[k]}
+        return m,c,x,y,P0
+
+
+    def fit_source_position(self,data, maps):
+        """
+        Performs a full fit to the maps obtain the source positions 
+
+        Recommended only for use on the band average data to reduce uncertainties
+        """
+        fname = data.filename.split('/')[-1]
+
+        # We do Jupiter in the Az/El frame but celestial in sky frame
+        def limfunc(P):
+            A,x0,sigx,y0,sigy,phi,B = P
+            if (sigx < 0) | (sigy < 0):
+                return True
+            if (phi < -np.pi/2.) | (phi >= np.pi/2.):
+                return True
+            return False
+        self.model.set_fixed(**{})
 
         self.avg_map_parameters = [k for k,v in self.model.fixed.items() if not v]
-
-        self.feed_avg_fits   = np.zeros((maps.shape[0],self.model.nparams))
-        self.feed_avg_errors = np.zeros((maps.shape[0],self.model.nparams)) 
+        self.avg_map_fits   = {'Values':np.zeros((maps['map'].shape[0],self.model.nparams)),
+                               'Errors': np.zeros((maps['map'].shape[0],self.model.nparams)) }
         for ifeed in tqdm(self.feedlist,desc=f'{self.name}:source_position:{self.source}'):
-            feed_map = maps[ifeed,...].flatten()
-            feed_cov = covs[ifeed,...].flatten()
-            gd = np.isfinite(feed_map)
-            feed_map = feed_map[gd]
-            feed_cov = feed_cov[gd]
-            x,y = xygrid
-            x,y = x.flatten()[gd],y.flatten()[gd]
 
-            # Give some start parameters
-            if len(feed_map) == 0:
+            try:
+                m,c,x,y,P0 = self.prepare_maps(maps['map'][ifeed],maps['cov'][ifeed],maps['xygrid'])
+            except AssertionError:
                 continue
 
-            if self.source.upper() == 'JUPITER':
-                P0 = {'A':np.nanmax(feed_map),
-                      'x0':x[np.argmax(feed_map)],
-                      'sigx':2./60.,
-                      'y0':y[np.argmax(feed_map)],
-                      'sigy':2./60.,
-                      'phi':0,
-                      'B':0}
+            if (self.fwhm_mode == 'ModelFWHMPriors') & (self.source.upper() == 'JUPITER'):
                 freq = 30. # GHz - always the center of the band for band average, need colour corrections?
-                P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355+0./60./2.355,
+                P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355,
                                    'width':self.xfwhm(freq)/60./2.355/1e2},
-                           'sigy':{'mean':self.yfwhm(freq)/60./2.355+0./60./2.355,
+                           'sigy':{'mean':self.yfwhm(freq)/60./2.355,
                                    'width':self.yfwhm(freq)/60./2.355/1e2}}
-
             else:
-                P0 = {'A':np.nanmax(feed_map),
-                      'x0':x[np.argmax(feed_map)],
-                      'sigx':2./60.,
-                      'y0':y[np.argmax(feed_map)],
-                      'sigy':2./60.,
-                      'phi':0,
-                      'B':0}
                 P0_priors = {}
             
             # Perform the least-sqaures fit
             try:
-                result, error,samples = self.model(P0, (x,y), feed_map, feed_cov,limfunc=limfunc,
+                result, error,samples = self.model(P0, (x,y), m, c,limfunc=limfunc,
                                                    P0_priors=P0_priors,return_array=True)
             except ValueError as e:
                 self.logger(f'{fname}:emcee:{e}',error=e)
-            self.feed_avg_fits[ifeed,:] = result
-            self.feed_avg_errors[ifeed,:] = error
+                result = 0
+                error = 0
+            self.avg_map_fits['Values'][ifeed,:] = result
+            self.avg_map_fits['Errors'][ifeed,:] = error
 
-    def fit_map(self,data,maps,covs,xygrid,freq):
+    def fit_map(self,data,maps):
         """
         This function fits for the source in each channel 
         """
         fname = data.filename.split('/')[-1]
-        def limfunc(P):
-            return False
         # Source fitting model:
-        # We do Jupiter in the Az/El frame but celestial in sky frame
-        if self.source.upper() == 'JUPITER':
-            # If the source is Jupiter we will use the beam model
-            self.model.set_fixed(**{'x0':True,'y0':True,'phi':True})
-            def limfunc(P):
-                A,sigx,sigy,B = P
-                if (sigx < 0) | (sigy < 0):
-                    return True
-                return False
-        else:
-            self.model.set_fixed(**{'x0':True,'y0':True,'phi':True})
-            P0_priors = {}
-            def limfunc(P):
-                A,sigx,sigy,B = P
-                if (sigx < 0) | (sigy < 0):
-                    return True
-                return False
 
-        self.fit_map_parameters = [k for k,v in self.model.fixed.items() if not v]
+        # If the source is Jupiter we will use the beam model
+        self.model.set_fixed(**{'x0':True,'y0':True,'phi':True})
+        def limfunc(P):
+            A,sigx,sigy,B = P
+            if (sigx < 0) | (sigy < 0):
+                return True
+            return False
 
-
-        # Unpack Pixel Coordinates
-        x,y = xygrid
-        x = x.flatten()
-        y = y.flatten()
+        self.map_parameters = [k for k,v in self.model.fixed.items() if not v]
 
         # Setup fit containers
-        self.fits          = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],self.model.nparams))
-        self.errors = np.zeros((maps.shape[0],maps.shape[1],maps.shape[2],self.model.nparams))
-
+        self.map_fits ={'Values': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],self.model.nparams)),
+                        'Errors': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],self.model.nparams))}
         for ifeed in tqdm(self.feedlist,desc=f'{self.name}:fit_map:{self.source}'):        
-            for isb in range(maps.shape[1]):
-                for ichan in range(maps.shape[2]):
-                    data = maps[ifeed,isb,ichan,...].flatten()
-                    cov  = covs[ifeed,isb,ichan,...].flatten()
-                    if np.nansum(data) == 0:
+            for isb in range(maps['map'].shape[1]):
+                for ichan in range(maps['map'].shape[2]):
+                    try:
+                        m,c,x,y,P0 = self.prepare_maps(maps['map'][ifeed,isb,ichan],maps['cov'][ifeed,isb,ichan],maps['xygrid'])
+                    except AssertionError:
                         continue
 
-                    if self.source.upper() == 'JUPITER':
-                        P0 = {'A':np.nanmax(data),
-                              'sigx':2./60.,
-                              'sigy':2./60.,
-                              'B':0}
+                    if np.nansum(m) == 0:
+                        continue
 
-                        P0_priors={'sigx':{'mean':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355+0./60./2.355,
+                    if (self.fwhm_mode == 'ModelFWHMPrior') & (self.source.upper() == 'JUPITER'):
+                        P0_priors={'sigx':{'mean':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355,
                                            'width':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355/1e2},
-                                   'sigy':{'mean':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355+0./60./2.355,
+                                   'sigy':{'mean':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355,
                                            'width':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355/1e2}}
-
-                        self.model.set_defaults(x0=self.feed_avg_fits[ifeed,1],
-                                                y0=self.feed_avg_fits[ifeed,3],
-                                                phi=self.feed_avg_fits[ifeed,5])
+                    elif (self.fwhm_mode == 'BootstrapPrior') & (self.source.upper() == 'JUPITER'):
+                        P0_priors={'sigx':{'mean':self.avg_map_fits['Values'][ifeed,2],
+                                           'width':self.avg_map_fits['Values'][ifeed,2]/1e2},
+                                   'sigy':{'mean':self.avg_map_fits['Values'][ifeed,4],
+                                           'width':self.avg_map_fits['Values'][ifeed,4]/1e2}}
+                    
                     else:
-                        P0 = {'A':np.nanmax(data),
-                              'sigx':2./60.,
-                              'sigy':2./60.,
-                              'B':0}
-                        self.model.set_defaults(x0=self.feed_avg_fits[ifeed,1],
-                                                y0=self.feed_avg_fits[ifeed,3],
-                                                phi=self.feed_avg_fits[ifeed,5])
+                        P0_priors = {}
+
+
+                    self.model.set_defaults(x0=self.avg_map_fits['Values'][ifeed,1],
+                                            y0=self.avg_map_fits['Values'][ifeed,3],
+                                            phi=self.avg_map_fits['Values'][ifeed,5])
 
                     try:
-                        result, error, samples = self.model(P0, (x,y), data, cov,P0_priors=P0_priors,limfunc=limfunc,return_array=True)
+                        result, error, samples = self.model(P0, (x,y), m, c,P0_priors=P0_priors,limfunc=limfunc,return_array=True)
+                        #import corner
+                        #from matplotlib import pyplot
+                        #corner.corner(samples)
+                        #pyplot.show()
                     except ValueError as e:
                         result = 0
                         error = 0
                         self.logger(f'{fname}:emcee:{e}',error=e)
                 
-                    self.fits[ifeed,isb,ichan,:] = result
-                    self.errors[ifeed,isb,ichan,:] = error
+                    self.map_fits['Values'][ifeed,isb,ichan,:] = result
+                    self.map_fits['Errors'][ifeed,isb,ichan,:] = error
 
     def aperture_phot(self,data,x,y,v):
         """
@@ -580,30 +611,34 @@ class FitSource(DataStructure):
         mjd = data['level1/spectrometer/MJD'][:]
 
         # We do Jupiter in the Az/El frame but celestial in sky frame
-        if self.source.upper() == 'JUPITER':
-            az  = data['level1/spectrometer/pixel_pointing/pixel_az'][:]
-            el  = data['level1/spectrometer/pixel_pointing/pixel_el'][:]
-            az = az[:,sel]
-            el = el[:,sel]
-        else:
-            ra  = data['level1/spectrometer/pixel_pointing/pixel_ra'][:]
-            dec = data['level1/spectrometer/pixel_pointing/pixel_dec'][:]
-            ra  = ra[:,sel]
-            dec = dec[:,sel]
+        #if self.source.upper() == 'JUPITER':
+        az  = data['level1/spectrometer/pixel_pointing/pixel_az'][:]
+        el  = data['level1/spectrometer/pixel_pointing/pixel_el'][:]
+        N = az.shape[1]//2 * 2
+        daz = np.gradient(az[0,:])*50.
+        daz = daz[sel]
+        az = az[:,sel]
+        el = el[:,sel]
+        cw  = daz > 1e-2
+        ccw = daz < 1e-2
+
         mjd=mjd[sel]
 
         npix = self.Nx*self.Ny
 
-        maps = np.zeros((tod.shape[0],tod.shape[1],tod.shape[2],self.Nx,self.Ny))
-        mapdata = np.zeros(npix,dtype=np.float64)
-        hitdata = np.zeros(npix,dtype=np.float64)
-        covs = np.zeros((tod.shape[0],tod.shape[1],tod.shape[2],self.Nx,self.Ny))
+        temp_maps = {'map':np.zeros(npix,dtype=np.float64),
+                     'cov':np.zeros(npix,dtype=np.float64)}
 
-        feed_avg_map = np.zeros((tod.shape[0],self.Nx,self.Ny))
-        feed_avg_cov = np.zeros((tod.shape[0],self.Nx,self.Ny))
+        maps = {'map':np.zeros((tod.shape[0],tod.shape[1],tod.shape[2],self.Nx,self.Ny)),
+                'cov':np.zeros((tod.shape[0],tod.shape[1],tod.shape[2],self.Nx,self.Ny))}
 
-        #scan_maps = {'CWmap':np.zeros((self.Nx,self.Ny)),'CCWmap':np.zeros((self.Nx,self.Ny)),
-        #             'CWcov':np.zeros((self.Nx,self.Ny)),'CCWcov':np.zeros((self.Nx,self.Ny))}
+        feed_avg = {'map':np.zeros((tod.shape[0],self.Nx,self.Ny)),
+                    'cov':np.zeros((tod.shape[0],self.Nx,self.Ny))}
+
+        scan_maps = {'CW':{'map':np.zeros((self.Nx,self.Ny)),
+                           'cov':np.zeros((self.Nx,self.Ny))},
+                     'CCW':{'map':np.zeros((self.Nx,self.Ny)),
+                            'cov':np.zeros((self.Nx,self.Ny))}}
 
         azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
         self.src_el = np.mean(elSource)
@@ -611,22 +646,20 @@ class FitSource(DataStructure):
         for ifeed in tqdm(self.feedlist,desc=f'{self.name}:create_maps:{self.source}'):
             feed_tod = tod[ifeed,...] 
 
-            if self.source.upper() == 'JUPITER':
-                x,y =Coordinates.Rotate(azSource, elSource,
-                                        az[ifeed,:],el[ifeed,:] ,0)
-            else:
-                x,y =Coordinates.Rotate(raSource, decSource,
-                                        ra[ifeed,:],
-                                        dec[ifeed,:],0)
+            #if self.source.upper() == 'JUPITER':
+            x,y =Coordinates.Rotate(azSource, elSource,
+                                    az[ifeed,:],el[ifeed,:] ,0)
 
             pixels,pX,pY = self.getpixels(x,y,self.dx,self.dy,self.Nx,self.Ny)
 
+            mask = np.ones(pixels.size,dtype=int)
             for isb in range(tod.shape[1]):
                 for ichan in range(1,tod.shape[2]-1): # Always skip edges
-                    mapdata[...] = 0.
-                    hitdata[...] = 0.
+                    for k in temp_maps.keys():
+                        temp_maps[k][:] = 0.
+
                     z =  (feed_tod[isb,ichan,sel]-filters[ifeed,isb,ichan])
-                    mask = np.ones(pixels.size,dtype=int)
+                    mask[:] = 1
                     mask[(pixels == -1) | np.isnan(z) | np.isinf(z)] = 0
                     
                     if np.sum(np.isfinite(z)) == 0:
@@ -634,35 +667,50 @@ class FitSource(DataStructure):
                     
                     rms = stats.AutoRMS(z)
 
-                    binFuncs.binValues(mapdata, pixels, weights=z.astype(np.float64)/rms**2,mask=mask)
-                    binFuncs.binValues(hitdata, pixels, mask=mask,weights=np.ones(z.size)/rms**2)
+                    weights = {'map':z.astype(np.float64)/rms**2,
+                               'cov':np.ones(z.size)/rms**2}
+                    for k in temp_maps.keys():
+                        binFuncs.binValues(temp_maps[k], pixels, weights=weights[k],mask=mask)
+                        maps[k][ifeed,isb,ichan,...] = np.reshape(temp_maps[k],(self.Ny,self.Nx))
+                        feed_avg[k][ifeed,...] += np.reshape(temp_maps[k],(self.Ny,self.Nx))
 
+                    if (ifeed == 0):
+                        for (key,direction) in zip(['CW','CCW'],[cw,ccw]):
+                            for k in temp_maps.keys():
+                                temp_maps[k][:] = 0.
+                                binFuncs.binValues(temp_maps[k], pixels[direction], weights=weights[k][direction],mask=mask[direction])
+                                scan_maps[key][k] += np.reshape(temp_maps[k],(self.Ny,self.Nx))
 
-                    maps[ifeed,isb,ichan,...] = np.reshape(mapdata,(self.Ny,self.Nx))
-                    covs[ifeed,isb,ichan,...] = np.reshape(hitdata,(self.Ny,self.Nx))
-
-
-                    feed_avg_map[ifeed,...] += np.reshape(mapdata,(self.Ny,self.Nx))
-                    feed_avg_cov[ifeed,...] += np.reshape(hitdata,(self.Ny,self.Nx))
-
-            covs[covs == 0] = np.nan
         xygrid = np.meshgrid((np.arange(self.Nx)+0.5)*self.dx - self.Nx*self.dx/2.,
                              (np.arange(self.Ny)+0.5)*self.dy - self.Ny*self.dy/2.)
-        
-        feed_avg_map = feed_avg_map/feed_avg_cov
-        feed_avg_cov = 1./feed_avg_cov
 
-        map_axes = np.array([a for a in maps.shape])
+        feed_avg['xygrid'] = xygrid
+        maps['xygrid'] = xygrid
+        
+        feed_avg = self.average_maps(feed_avg)
+        
+        for key in scan_maps.keys():
+            scan_maps[key] = self.average_maps(scan_maps[key])
+            scan_maps[key]['xygrid'] = xygrid
+
+        map_axes = np.array([a for a in maps['map'].shape])
         map_axes[2] = int(map_axes[2]/self.binwidth)
         map_axes = np.insert(map_axes,3,self.binwidth)
-        maps = np.nansum(np.reshape(maps,map_axes),axis=3)
-        covs = np.nansum(np.reshape(covs,map_axes),axis=3)
-        maps = maps/covs
-        covs = 1./covs
+        maps['map'] = np.nansum(np.reshape(maps['map'],map_axes),axis=3)
+        maps['cov'] = np.nansum(np.reshape(maps['cov'],map_axes),axis=3)
+        maps = self.average_maps(maps)
         
         self.map_freqs = np.mean(np.reshape(data[f'{self.level2}/frequency'][...],map_axes[1:4]),axis=-1)
 
-        return maps, covs, xygrid, feed_avg_map, feed_avg_cov
+        return maps, feed_avg, scan_maps
+
+    def average_maps(self,maps):
+        """
+        Average the maps assuming dictionary: {'map':m*w,'cov':w}
+        """
+        maps['map'] = maps['map']/maps['cov']
+        maps['cov'] = 1./maps['cov']
+        return maps
 
     def getpixels(self,x,y,dx,dy,Nx,Ny):
         """
@@ -716,6 +764,7 @@ class FitSource(DataStructure):
 
         # We will store these in a separate file and link them to the level2s
         fname = data.filename.split('/')[-1]
+        units = {'A':'K','x0':'degrees','y0':'degrees','sigx':'degrees','sigy':'degrees','B':'K','phi':'radians'}
 
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
         if os.path.exists(outfile):
@@ -729,82 +778,79 @@ class FitSource(DataStructure):
 
         # Store datasets in root
         dnames = ['Maps','Covs']
-        dsets  = [self.maps,self.covs]
+        dsets  = [self.maps['map'],self.maps['cov']]
                   
         for (dname, dset) in zip(dnames, dsets):
             if dname in output:
                 del output[dname]
             output.create_dataset(dname,  data=dset)
+        output['Maps'].attrs['Unit'] = 'K'
+        output['Maps'].attrs['cdeltx'] = self.dx
+        output['Maps'].attrs['cdelty'] = self.dy
+        output['Covs'].attrs['Unit'] = 'K2'
+        output['Covs'].attrs['cdeltx'] = self.dx
+        output['Covs'].attrs['cdelty'] = self.dy
 
 
-        # Put the gaussian fit into its own groups
-        gauss_fits = output.create_group('Gauss_Narrow_Values')
-        gauss_errs = output.create_group('Gauss_Narrow_Errors')
-        gauss_fits.attrs['FitFunc'] = self.model.__name__
-        gauss_errs.attrs['FitFunc'] = self.model.__name__
+        ##
+        ## Narrow channel fits
+        ##
 
-        gauss_fits.attrs['source_el'] = self.src_el
-        gauss_fits.attrs['source_az'] = self.src_az
+        for valerr in ['Values','Errors']:
+            gauss_fits = output.create_group(f'Gauss_Narrow_{valerr}')
+            gauss_fits.attrs['FitFunc'] = self.model.__name__
+            gauss_fits.attrs['source_el'] = self.src_el
+            gauss_fits.attrs['source_az'] = self.src_az
 
-        units = {'A':'K','x0':'degrees','y0':'degrees','sigx':'degrees','sigy':'degrees','B':'K','phi':'radians'}
+            dnames = self.map_parameters
+            dsets = [self.map_fits[valerr][...,iparam] for iparam in range(self.map_fits[valerr].shape[-1])]
 
-        # Write narrow channel fits
-        dnames = self.fit_map_parameters
-        dsets = [self.fits[:,iparam] for iparam in range(self.fits.shape[1])]
-        for (dname, dset) in zip(dnames, dsets):
-            if dname in output:
-                del output[dname]
-            gauss_dset = gauss_fits.create_dataset(dname,  data=dset)
-            gauss_dset.attrs['Unit'] = units[dname]
-        gauss_fits.create_dataset('frequency',data=self.map_freqs)
-
-        # ... and the uncertainties
-        dsets = [self.errors[:,iparam] for iparam in range(self.errors.shape[1])]
-        for (dname, dset) in zip(dnames, dsets):
-            if dname in output:
-                del output[dname]
-            gauss_dset = gauss_errs.create_dataset(dname,  data=dset)
-            gauss_dset.attrs['Unit'] = units[dname]
-        gauss_errs.create_dataset('frequency',data=self.map_freqs)
-
+            for (dname, dset) in zip(dnames, dsets):
+                if dname in output:
+                    del output[dname]
+                gauss_dset = gauss_fits.create_dataset(dname,  data=dset)
+                gauss_dset.attrs['Unit'] = units[dname]
+        
 
         ##
         ## WRITE AVERAGED DATA
         ##
-        # Put the gaussian fit into its own groups
-        gauss_fits = output.create_group('Gauss_Average_Values')
-        gauss_errs = output.create_group('Gauss_Average_Errors')
-        gauss_fits.attrs['FitFunc'] = self.model.__name__
-        gauss_errs.attrs['FitFunc'] = self.model.__name__
 
-        gauss_fits.attrs['source_el'] = self.src_el
-        gauss_fits.attrs['source_az'] = self.src_az
+        for valerr in ['Values','Errors']:
+            gauss_fits = output.create_group(f'Gauss_Average_{valerr}')
+            gauss_fits.attrs['FitFunc'] = self.model.__name__
+            gauss_fits.attrs['source_el'] = self.src_el
+            gauss_fits.attrs['source_az'] = self.src_az
 
-        # Write averaged data fits
-        dnames = self.avg_map_parameters
-        dsets = [self.feed_avg_fits[:,iparam] for iparam in range(self.feed_avg_fits.shape[1])]
-        for (dname, dset) in zip(dnames, dsets):
-            if dname in output:
-                del output[dname]
-            gauss_dset = gauss_fits.create_dataset(dname,  data=dset)
-            gauss_dset.attrs['Unit'] = units[dname]
+            dnames = self.avg_map_parameters
+            dsets = [self.avg_map_fits[valerr][...,iparam] for iparam in range(self.avg_map_fits[valerr].shape[-1])]
 
-        # ... and the uncertainties
-        dsets = [self.feed_avg_fits[:,iparam] for iparam in range(self.feed_avg_fits.shape[1])]
-        for (dname, dset) in zip(dnames, dsets):
-            if dname in output:
-                del output[dname]
-            gauss_dset = gauss_errs.create_dataset(dname,  data=dset)
-            gauss_dset.attrs['Unit'] = units[dname]
-
+            for (dname, dset) in zip(dnames, dsets):
+                if dname in output:
+                    del output[dname]
+                gauss_dset = gauss_fits.create_dataset(dname,  data=dset)
+                gauss_dset.attrs['Unit'] = units[dname]
         
-
         output.attrs['SourceFittingVersion'] = __version__
-
-        output['Maps'].attrs['Unit'] = 'K'
-        output['Maps'].attrs['cdeltx'] = self.dx
-        output['Maps'].attrs['cdelty'] = self.dy
         
+
+        # Alternative scan fits
+        for valerr in ['Values','Errors']:
+            gauss_fits = output.create_group(f'Gauss_AltScan_{valerr}')
+            gauss_fits.attrs['FitFunc'] = self.model.__name__
+            gauss_fits.attrs['source_el'] = self.src_el
+            gauss_fits.attrs['source_az'] = self.src_az
+
+            for key in ['CW','CCW']:
+                dnames = self.alt_scan_parameters
+                dsets = [np.array([self.alt_scan_fits[key][valerr]]) for iparam in range(self.alt_scan_fits[key][valerr].shape[-1])]
+
+                gauss_fits_scan = gauss_fits.create_group(key)
+                for (dname, dset) in zip(dnames, dsets):
+                    if dname in output:
+                        del output[dname]
+                    gauss_dset = gauss_fits_scan.create_dataset(dname,  data=dset)
+                    gauss_dset.attrs['Unit'] = units[dname]
 
         output.attrs['source'] = self.getSource(data)
         output.close()
