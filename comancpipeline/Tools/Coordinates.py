@@ -247,7 +247,7 @@ def sourcePosition(src, mjd, lon, lat):
         #r0,d0 = precess(r0, d0, mjd)
     else:
         r0, d0 = mjd*0 + skypos[0], mjd*0 + skypos[1]
-        #r0, d0 = precess2year(r0,d0,mjd)
+        r0, d0 = precess2year(r0,d0,mjd) # Change to epoch of observation
 
     az, el = e2h(r0,d0,mjd,lon ,lat)
     return az, el, r0, d0

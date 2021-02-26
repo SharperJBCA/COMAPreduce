@@ -88,7 +88,7 @@ class Axfunc_slow:
 
 
 
-def Destriper(parameters, data,covariance=None,verbose=False):
+def Destriper(parameters, data,covariance=None,verbose=False,threshold=1e-7):
     """
     Destriping routines
     """
@@ -98,6 +98,8 @@ def Destriper(parameters, data,covariance=None,verbose=False):
     # NB : Need to change offsets to ensure that each
     # is temporally continuous in the future, for now ignore this.
     offsetLen = parameters['Destriper']['offset']
+    threshold = 10**parameters['Destriper']['threshold']
+    verbose   = parameters['Destriper']['verbose']
     Noffsets  = data.Nsamples//offsetLen
 
     # Offsets for storing the outputs
@@ -124,7 +126,7 @@ def Destriper(parameters, data,covariance=None,verbose=False):
                 offsetMap.npix,
                 covariance=covariance)
 
-    offsets.offsets = CGM(data.offset_residuals.sig, Ax, niter=niter,verbose=verbose)
+    offsets.offsets = CGM(data.offset_residuals.sig, Ax, niter=niter,verbose=verbose,threshold=threshold)
 
     # Bin the offsets in to a map
     offsetMap.sum_offsets(offsets.offsets,
@@ -165,7 +167,7 @@ def DestriperHPX(parameters, data,covariance=None):
                 covariance=covariance)
 
     # Run the CGM code
-    offsets.offsets = CGM(data.residual.sigwei, Ax, niter=niter,verbose=True)
+    offsets.offsets = CGM(data.residual.sigwei, Ax, niter=niter,verbose=True,threshold=1e-7)
 
     # Bin the offsets in to a map
     offsetMap.binOffsets(offsets.offsets,
@@ -185,7 +187,7 @@ def DestriperHPX(parameters, data,covariance=None):
 
 
 
-def CGM(b,Ax,x0 = None,niter=100,itol=1e-7,verbose=False):
+def CGM(b,Ax,x0 = None,niter=100,threshold=1e-7,verbose=False):
     """
     Biconjugate CGM implementation from Numerical Recipes 2nd, pg 83-85
     
@@ -230,7 +232,7 @@ def CGM(b,Ax,x0 = None,niter=100,itol=1e-7,verbose=False):
         delta = np.sum(r*rb)/thresh0
         if verbose:
             print(delta)
-        if delta < itol:
+        if delta < threshold:
             break
         
     if (i == (niter-1)):

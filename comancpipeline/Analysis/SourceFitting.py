@@ -429,7 +429,7 @@ class FitSource(DataStructure):
         for key in ['CW','CCW']:
             m,c,x,y,P0 = self.prepare_maps(scan_maps[key]['map'],scan_maps[key]['cov'],scan_maps[key]['xygrid'])
 
-            if (self.fwhm_mode == 'ModelFWHMPriors') & (self.source.upper() == 'JUPITER'):
+            if (self.fwhm_mode == 'ModelFWHMPriors') & (self.source.upper() == 'JUPITER') & (self.source.upper() == 'CYGA'):
                 freq = 30. # GHz - always the center of the band for band average, need colour corrections?
                 P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355,
                                    'width':self.xfwhm(freq)/60./2.355/1e2},
@@ -500,7 +500,7 @@ class FitSource(DataStructure):
             except AssertionError:
                 continue
 
-            if (self.fwhm_mode == 'ModelFWHMPriors') & (self.source.upper() == 'JUPITER'):
+            if (self.fwhm_mode == 'ModelFWHMPriors') & (self.source.upper() == 'JUPITER') & (self.source.upper() == 'CYGA'):
                 freq = 30. # GHz - always the center of the band for band average, need colour corrections?
                 P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355,
                                    'width':self.xfwhm(freq)/60./2.355/1e2},
@@ -551,12 +551,12 @@ class FitSource(DataStructure):
                     if np.nansum(m) == 0:
                         continue
 
-                    if (self.fwhm_mode == 'ModelFWHMPrior') & (self.source.upper() == 'JUPITER'):
+                    if (self.fwhm_mode == 'ModelFWHMPrior') & (self.source.upper() == 'JUPITER') & (self.source.upper() == 'CYGA'):
                         P0_priors={'sigx':{'mean':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355,
                                            'width':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355/1e2},
                                    'sigy':{'mean':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355,
                                            'width':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355/1e2}}
-                    elif (self.fwhm_mode == 'BootstrapPrior') & (self.source.upper() == 'JUPITER'):
+                    elif (self.fwhm_mode == 'BootstrapPrior') & (self.source.upper() == 'JUPITER') & (self.source.upper() == 'CYGA'):
                         P0_priors={'sigx':{'mean':self.avg_map_fits['Values'][ifeed,2],
                                            'width':self.avg_map_fits['Values'][ifeed,2]/1e2},
                                    'sigy':{'mean':self.avg_map_fits['Values'][ifeed,4],

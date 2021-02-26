@@ -140,8 +140,8 @@ class ScanEdges(DataStructure):
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
-                          ['GField{:02d}'.format(i) for i in range(20)] +\
-                          ['Field{:02d}'.format(i) for i in range(20)] +\
+                          ['GField{:02d}'.format(i) for i in range(40)] +\
+                          ['Field{:02d}'.format(i) for i in range(40)] +\
                           ['Field11b']
 
         source  = self.getSource(data)
@@ -309,8 +309,8 @@ class FnoiseStats(DataStructure):
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
-                          ['GField{:02d}'.format(i) for i in range(20)] +\
-                          ['Field{:02d}'.format(i) for i in range(20)] +\
+                          ['GField{:02d}'.format(i) for i in range(40)] +\
+                          ['Field{:02d}'.format(i) for i in range(40)] +\
                           ['Field11b']
 
         source = self.getSource(data)
@@ -575,8 +575,8 @@ class SkyDipStats(DataStructure):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
-                          ['GField{:02d}'.format(i) for i in range(20)] +\
-                          ['Field{:02d}'.format(i) for i in range(20)] +\
+                          ['GField{:02d}'.format(i) for i in range(40)] +\
+                          ['Field{:02d}'.format(i) for i in range(40)] +\
                           ['Field11b']
 
         source = self.getSource(data)
