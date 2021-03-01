@@ -362,8 +362,8 @@ class Gauss2dRot_Gradient_FixedPos:
 
 class Gauss2dRot_General:
 
-    def __init__(self,defaults={'x0':0,'y0':0,'sigx':0,'sigy':0,'phi':0,'A':0,'B':0},
-                 fixed={'x0':False,'y0':False,'sigx':False,'sigy':False,'phi':False,'A':False,'B':False},
+    def __init__(self,defaults={'x0':0,'y0':0,'sigx':0,'sigy_scale':0,'phi':0,'A':0,'B':0},
+                 fixed={'x0':False,'y0':False,'sigx':False,'sigy_scale':False,'phi':False,'A':False,'B':False},
                  use_bootstrap=False):
         self.__name__ = Gauss2dRot_General.__name__
         
@@ -371,11 +371,11 @@ class Gauss2dRot_General:
         self.set_fixed(**fixed)
         self.defaults = defaults
 
-        self.param_names = ['A','x0','sigx','y0','sigy','phi','B']
+        self.param_names = ['A','x0','sigx','y0','sigy_scale','phi','B']
         self.A = 0
         self.B = 0
         self.sigx = 0
-        self.sigy = 0
+        self.sigy_scale = 0
         self.x0 = 0
         self.y0 = 0
         self.phi = 0
@@ -384,6 +384,10 @@ class Gauss2dRot_General:
 
     def _limfunc(self,P):
         return False
+
+    def get_param_names(self):
+        
+        return [p for p in self.param_names if not self.fixed[p]]
 
     def __call__(self,P0_dict,xy,z,covariance,P0_priors={},
                  limfunc=None, nwalkers=32, samples=5000, discard=100,thin=15,return_array=False):
@@ -412,8 +416,8 @@ class Gauss2dRot_General:
             # Perform the least-sqaures fit
             result = minimize(self.minimize_errfunc,P0,args=(xy,z,covariance),method='CG')
     
-            #if 'phi' in P0_dict:
-            #    result.x[self.idx['phi']] = 0
+            #if 'sigy_scale' in P0_dict:
+            #    result.x[self.idx['sigy_scale']] = np.abs()
         
             pos = result.x + 1e-4 * np.random.normal(size=(nwalkers, len(result.x)))
             sampler = emcee.EnsembleSampler(nwalkers,len(result.x),self.emcee_errfunc, 
@@ -443,7 +447,7 @@ class Gauss2dRot_General:
         return prior
 
     def set_fixed(self,**kwargs):
-        self.fixed = {'x0':False,'y0':False,'sigx':False,'sigy':False,'phi':False,'A':False,'B':False}
+        self.fixed = {'x0':False,'y0':False,'sigx':False,'sigy_scale':False,'phi':False,'A':False,'B':False}
         for k,v in kwargs.items():
             if not k in self.fixed:
                 raise KeyError('Key not in self.fixed')
@@ -479,8 +483,9 @@ class Gauss2dRot_General:
             else:
                 self.__dict__[parameter] = self.defaults[parameter]
 
+        sigy = self.sigx*(1+self.sigy_scale)
         Xr = (x - self.x0)/self.sigx * np.cos(self.phi) + (y-self.y0)/self.sigx * np.sin(self.phi)
-        Yr =-(x - self.x0)/self.sigy * np.sin(self.phi) + (y-self.y0)/self.sigy * np.cos(self.phi)
+        Yr =-(x - self.x0)/sigy * np.sin(self.phi) + (y-self.y0)/sigy * np.cos(self.phi)
         model = self.A * np.exp( - 0.5 * (Xr**2 + Yr**2)) + self.B
         return model
 

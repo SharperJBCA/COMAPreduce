@@ -30,6 +30,7 @@ def getClass(strname):
     """
     
     modulename, classname = strname.split('.')
+    classname = classname.split('(')[0]
     module_ = getattr(Analysis,modulename)
     class_  = getattr(module_,classname)
     return class_

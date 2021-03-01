@@ -270,7 +270,8 @@ class FitSource(DataStructure):
                  allowed_sources= ['jupiter','TauA','CasA','CygA','mars'],
                  binwidth = 1,
                  level2='level2',
-                 fwhm_mode = 'ModelFWHMPrior',
+                 fwhm_prior = 'none',
+                 fit_alt_scan = True,
                  fitfunc='Gauss2dRot',**kwargs):
         """
         average_width - how many channels to average over
@@ -301,6 +302,8 @@ class FitSource(DataStructure):
         self.level2=level2
 
         self.model = Fitting.Gauss2dRot_General()
+
+        self.fit_alt_scan = fit_alt_scan
         
         # Beam modes allowed: 
         # 1) ModelFWHMPrior - Use James beam model fits as a prior
@@ -308,7 +311,7 @@ class FitSource(DataStructure):
         # 3) BootstrapPrior - Fit width using averaged data, use fitted widths as priors on other frequencies
         # 4) FullBootstrapPrior - Use FWHM fitted to Full data average
         # 5) NoPrior - Use no prior on FWHM
-        self.fwhm_mode = fwhm_mode
+        self.fwhm_prior = fwhm_prior
 
         # FWHM models derived from James' beam models - generally too big?
         self.xfwhm = np.poly1d([ 5.22778336e-03, -3.76962352e-01,  1.11007533e+01])
@@ -387,7 +390,8 @@ class FitSource(DataStructure):
             self.maps, self.feed_avg, self.scan_maps = self.create_maps(data,alltod,filters,sky_data_flag)
 
             # Zero step - check for timing errors
-            self.fit_altscan_position(data,self.scan_maps)
+            if self.fit_alt_scan:
+                self.fit_altscan_position(data,self.scan_maps)
 
             self.logger(f'{fname}:{self.name}: Fitting global source offset')
             # First get the positions of the sources from the feed average
@@ -399,6 +403,20 @@ class FitSource(DataStructure):
         else:
             self.nodata = True
             return
+
+    def get_fwhm_prior(self,freq):
+        """
+        Returns the appropriate fwhm_priors
+        """
+        if (self.fwhm_prior == 'ModelFWHMPrior'):
+            P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355,
+                               'width':self.xfwhm(freq)/60./2.355/1e2},
+                       'sigy':{'mean':self.yfwhm(freq)/60./2.355,
+                               'width':self.yfwhm(freq)/60./2.355/1e2}}
+        else:
+            P0_priors = {}
+
+        return P0_priors
 
     def fit_altscan_position(self,data,scan_maps):
         """
@@ -421,7 +439,7 @@ class FitSource(DataStructure):
                 return True
             return False
 
-        self.alt_scan_parameters = [k for k,v in self.model.fixed.items() if not v]
+        self.alt_scan_parameters = self.model.get_param_names()
         self.alt_scan_fits ={'CW':{'Values':np.zeros((self.model.nparams)),
                                    'Errors':np.zeros((self.model.nparams))},
                              'CCW':{'Values':np.zeros((self.model.nparams)),
@@ -429,14 +447,8 @@ class FitSource(DataStructure):
         for key in ['CW','CCW']:
             m,c,x,y,P0 = self.prepare_maps(scan_maps[key]['map'],scan_maps[key]['cov'],scan_maps[key]['xygrid'])
 
-            if (self.fwhm_mode == 'ModelFWHMPriors') & (self.source.upper() == 'JUPITER') & (self.source.upper() == 'CYGA'):
-                freq = 30. # GHz - always the center of the band for band average, need colour corrections?
-                P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355,
-                                   'width':self.xfwhm(freq)/60./2.355/1e2},
-                           'sigy':{'mean':self.yfwhm(freq)/60./2.355,
-                                   'width':self.yfwhm(freq)/60./2.355/1e2}}
-            else:
-                P0_priors = {}
+            freq = 30
+            P0_priors = self.get_fwhm_prior(freq)
             # Perform the least-sqaures fit
             try:
                 result, error,samples = self.model(P0, (x,y), m, c,limfunc=limfunc,
@@ -465,7 +477,7 @@ class FitSource(DataStructure):
               'x0':x[np.argmax(m)],
               'sigx':2./60.,
               'y0':y[np.argmax(m)],
-              'sigy':2./60.,
+              'sigy_scale':0,
               'phi':0,
               'B':0}
         P0 = {k:v for k,v in P0.items() if not self.model.fixed[k]}
@@ -490,8 +502,9 @@ class FitSource(DataStructure):
             return False
         self.model.set_fixed(**{})
 
-        self.avg_map_parameters = [k for k,v in self.model.fixed.items() if not v]
-        self.avg_map_fits   = {'Values':np.zeros((maps['map'].shape[0],self.model.nparams)),
+        self.avg_map_parameters = self.model.get_param_names()
+
+        self.avg_map_fits   = {'Values': np.zeros((maps['map'].shape[0],self.model.nparams)),
                                'Errors': np.zeros((maps['map'].shape[0],self.model.nparams)) }
         for ifeed in tqdm(self.feedlist,desc=f'{self.name}:source_position:{self.source}'):
 
@@ -500,15 +513,9 @@ class FitSource(DataStructure):
             except AssertionError:
                 continue
 
-            if (self.fwhm_mode == 'ModelFWHMPriors') & (self.source.upper() == 'JUPITER') & (self.source.upper() == 'CYGA'):
-                freq = 30. # GHz - always the center of the band for band average, need colour corrections?
-                P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355,
-                                   'width':self.xfwhm(freq)/60./2.355/1e2},
-                           'sigy':{'mean':self.yfwhm(freq)/60./2.355,
-                                   'width':self.yfwhm(freq)/60./2.355/1e2}}
-            else:
-                P0_priors = {}
-            
+            freq = 30
+            P0_priors = self.get_fwhm_prior(freq)
+
             # Perform the least-sqaures fit
             try:
                 result, error,samples = self.model(P0, (x,y), m, c,limfunc=limfunc,
@@ -535,7 +542,8 @@ class FitSource(DataStructure):
                 return True
             return False
 
-        self.map_parameters = [k for k,v in self.model.fixed.items() if not v]
+        self.map_parameters = self.model.get_param_names()
+
 
         # Setup fit containers
         self.map_fits ={'Values': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],self.model.nparams)),
@@ -551,20 +559,7 @@ class FitSource(DataStructure):
                     if np.nansum(m) == 0:
                         continue
 
-                    if (self.fwhm_mode == 'ModelFWHMPrior') & (self.source.upper() == 'JUPITER') & (self.source.upper() == 'CYGA'):
-                        P0_priors={'sigx':{'mean':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355,
-                                           'width':self.xfwhm(self.map_freqs[isb,ichan])/60./2.355/1e2},
-                                   'sigy':{'mean':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355,
-                                           'width':self.yfwhm(self.map_freqs[isb,ichan])/60./2.355/1e2}}
-                    elif (self.fwhm_mode == 'BootstrapPrior') & (self.source.upper() == 'JUPITER') & (self.source.upper() == 'CYGA'):
-                        P0_priors={'sigx':{'mean':self.avg_map_fits['Values'][ifeed,2],
-                                           'width':self.avg_map_fits['Values'][ifeed,2]/1e2},
-                                   'sigy':{'mean':self.avg_map_fits['Values'][ifeed,4],
-                                           'width':self.avg_map_fits['Values'][ifeed,4]/1e2}}
-                    
-                    else:
-                        P0_priors = {}
-
+                    P0_priors = self.get_fwhm_prior(self.map_freqs[isb,ichan])
 
                     self.model.set_defaults(x0=self.avg_map_fits['Values'][ifeed,1],
                                             y0=self.avg_map_fits['Values'][ifeed,3],
@@ -835,23 +830,24 @@ class FitSource(DataStructure):
         
 
         # Alternative scan fits
-        for valerr in ['Values','Errors']:
-            gauss_fits = output.create_group(f'Gauss_AltScan_{valerr}')
-            gauss_fits.attrs['FitFunc'] = self.model.__name__
-            gauss_fits.attrs['source_el'] = self.src_el
-            gauss_fits.attrs['source_az'] = self.src_az
+        if self.fit_alt_scan:
+            for valerr in ['Values','Errors']:
+                gauss_fits = output.create_group(f'Gauss_AltScan_{valerr}')
+                gauss_fits.attrs['FitFunc'] = self.model.__name__
+                gauss_fits.attrs['source_el'] = self.src_el
+                gauss_fits.attrs['source_az'] = self.src_az
+                
+                for key in ['CW','CCW']:
+                    dnames = self.alt_scan_parameters
+                    dsets = [np.array([self.alt_scan_fits[key][valerr]]) for iparam in range(self.alt_scan_fits[key][valerr].shape[-1])]
 
-            for key in ['CW','CCW']:
-                dnames = self.alt_scan_parameters
-                dsets = [np.array([self.alt_scan_fits[key][valerr]]) for iparam in range(self.alt_scan_fits[key][valerr].shape[-1])]
-
-                gauss_fits_scan = gauss_fits.create_group(key)
-                for (dname, dset) in zip(dnames, dsets):
-                    if dname in output:
-                        del output[dname]
-                    gauss_dset = gauss_fits_scan.create_dataset(dname,  data=dset)
-                    gauss_dset.attrs['Unit'] = units[dname]
-
+                    gauss_fits_scan = gauss_fits.create_group(key)
+                    for (dname, dset) in zip(dnames, dsets):
+                        if dname in output:
+                            del output[dname]
+                        gauss_dset = gauss_fits_scan.create_dataset(dname,  data=dset)
+                        gauss_dset.attrs['Unit'] = units[dname]
+                        
         output.attrs['source'] = self.getSource(data)
         output.close()
         self.linkfile(data)
