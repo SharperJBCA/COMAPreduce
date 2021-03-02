@@ -51,7 +51,13 @@ binFuncs = Extension(name='comancpipeline.Tools.binFuncs',
 
 config = {'name':'comancpipeline',
           'version':__version__,
-          'packages':['comancpipeline','comancpipeline.Analysis','comancpipeline.Tools','comancpipeline.MapMaking'],
+          'packages':['comancpipeline',
+                      'comancpipeline.Analysis',
+                      'comancpipeline.data',
+                      'comancpipeline.Tools',
+                      'comancpipeline.MapMaking'],
+          'package_data':{'':["*.dat"]},
+          'include_package_data':True,
           'ext_modules':cythonize([ffuncs,pysla, filters,binFuncs],
                                   compiler_directives={'language_level':"3"})}
 

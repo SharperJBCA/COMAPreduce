@@ -4,6 +4,7 @@ import numpy as np
 from comancpipeline.Analysis.BaseClasses import DataStructure
 from comancpipeline.Analysis import Calibration
 from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, binFuncs, stats
+from comancpipeline.data import Data
 from scipy.optimize import fmin, leastsq, minimize
 from scipy.interpolate import interp1d
 from scipy.ndimage.filters import median_filter
@@ -317,6 +318,9 @@ class FitSource(DataStructure):
         self.xfwhm = np.poly1d([ 5.22778336e-03, -3.76962352e-01,  1.11007533e+01])
         self.yfwhm = np.poly1d([ 6.07782238e-03, -4.26787057e-01,  1.18196903e+01])
 
+        # Fitted fwhm's
+        self.fitted_fwhm = {feed:np.poly1d(fit) for feed,fit in Data.average_beam_widths.items()}
+
 
     def __str__(self):
         return 'Fitting source using {}'.format(self.fitfunc.__name__)
@@ -404,15 +408,19 @@ class FitSource(DataStructure):
             self.nodata = True
             return
 
-    def get_fwhm_prior(self,freq):
+    def get_fwhm_prior(self,freq,feed):
         """
         Returns the appropriate fwhm_priors
         """
+        self.fitted_fwhm = {feed:np.poly1d(fit) for feed,fit in Data.average_beam_widths.items()}
+
+
         if (self.fwhm_prior == 'ModelFWHMPrior'):
             P0_priors={'sigx':{'mean':self.xfwhm(freq)/60./2.355,
-                               'width':self.xfwhm(freq)/60./2.355/1e2},
-                       'sigy':{'mean':self.yfwhm(freq)/60./2.355,
-                               'width':self.yfwhm(freq)/60./2.355/1e2}}
+                               'width':self.xfwhm(freq)/60./2.355/1e2}}
+        elif (self.fwhm_prior == 'DataFWHMPrior'):
+            P0_priors={'sigx':{'mean':self.fitted_fwhm[feed](1./freq)/60./2.355,
+                               'width':self.fitted_fwhm[feed](1./freq)/60./2.355/1e2}}
         else:
             P0_priors = {}
 
@@ -441,20 +449,24 @@ class FitSource(DataStructure):
 
         self.alt_scan_parameters = self.model.get_param_names()
         self.alt_scan_fits ={'CW':{'Values':np.zeros((self.model.nparams)),
-                                   'Errors':np.zeros((self.model.nparams))},
+                                   'Errors':np.zeros((self.model.nparams)),
+                                   'Chi2': np.zeros((2))},
                              'CCW':{'Values':np.zeros((self.model.nparams)),
-                                    'Errors':np.zeros((self.model.nparams))}}
+                                    'Errors':np.zeros((self.model.nparams)),
+                                    'Chi2': np.zeros(2)}}
         for key in ['CW','CCW']:
             m,c,x,y,P0 = self.prepare_maps(scan_maps[key]['map'],scan_maps[key]['cov'],scan_maps[key]['xygrid'])
 
             freq = 30
-            P0_priors = self.get_fwhm_prior(freq)
+            P0_priors = self.get_fwhm_prior(freq,1)
             # Perform the least-sqaures fit
             try:
-                result, error,samples = self.model(P0, (x,y), m, c,limfunc=limfunc,
+                result, error,samples,min_chi2,ddof = self.model(P0, (x,y), m, c,
                                                    P0_priors=P0_priors,return_array=True)
                 self.alt_scan_fits[key]['Values'][:] = result
                 self.alt_scan_fits[key]['Errors'][:] = error
+                self.alt_scan_fits[key]['Chi2'][:] = min_chi2,ddof
+
             except ValueError as e:
                 self.logger(f'{fname}:emcee:{e}',error=e)
                 
@@ -477,7 +489,7 @@ class FitSource(DataStructure):
               'x0':x[np.argmax(m)],
               'sigx':2./60.,
               'y0':y[np.argmax(m)],
-              'sigy_scale':0,
+              'sigy_scale':1,
               'phi':0,
               'B':0}
         P0 = {k:v for k,v in P0.items() if not self.model.fixed[k]}
@@ -505,7 +517,9 @@ class FitSource(DataStructure):
         self.avg_map_parameters = self.model.get_param_names()
 
         self.avg_map_fits   = {'Values': np.zeros((maps['map'].shape[0],self.model.nparams)),
-                               'Errors': np.zeros((maps['map'].shape[0],self.model.nparams)) }
+                               'Errors': np.zeros((maps['map'].shape[0],self.model.nparams)),
+                               'Chi2': np.zeros((maps['map'].shape[0],2))}
+ 
         for ifeed in tqdm(self.feedlist,desc=f'{self.name}:source_position:{self.source}'):
 
             try:
@@ -514,18 +528,18 @@ class FitSource(DataStructure):
                 continue
 
             freq = 30
-            P0_priors = self.get_fwhm_prior(freq)
+            P0_priors = self.get_fwhm_prior(freq,self.feeds[ifeed])
 
             # Perform the least-sqaures fit
             try:
-                result, error,samples = self.model(P0, (x,y), m, c,limfunc=limfunc,
-                                                   P0_priors=P0_priors,return_array=True)
+                result, error,samples, min_chi2, ddof = self.model(P0, (x,y), m, c,
+                                                                   P0_priors=P0_priors,return_array=True)
+                self.avg_map_fits['Values'][ifeed,:] = result
+                self.avg_map_fits['Errors'][ifeed,:] = error
+                self.avg_map_fits['Chi2'][ifeed,:] = min_chi2, ddof
             except ValueError as e:
                 self.logger(f'{fname}:emcee:{e}',error=e)
-                result = 0
-                error = 0
-            self.avg_map_fits['Values'][ifeed,:] = result
-            self.avg_map_fits['Errors'][ifeed,:] = error
+                
 
     def fit_map(self,data,maps):
         """
@@ -547,7 +561,8 @@ class FitSource(DataStructure):
 
         # Setup fit containers
         self.map_fits ={'Values': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],self.model.nparams)),
-                        'Errors': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],self.model.nparams))}
+                        'Errors': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],self.model.nparams)),
+                        'Chi2': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],2))}
         for ifeed in tqdm(self.feedlist,desc=f'{self.name}:fit_map:{self.source}'):        
             for isb in range(maps['map'].shape[1]):
                 for ichan in range(maps['map'].shape[2]):
@@ -559,31 +574,33 @@ class FitSource(DataStructure):
                     if np.nansum(m) == 0:
                         continue
 
-                    P0_priors = self.get_fwhm_prior(self.map_freqs[isb,ichan])
+                    P0_priors = self.get_fwhm_prior(self.map_freqs[isb,ichan],self.feeds[ifeed])
 
                     self.model.set_defaults(x0=self.avg_map_fits['Values'][ifeed,1],
                                             y0=self.avg_map_fits['Values'][ifeed,3],
                                             phi=self.avg_map_fits['Values'][ifeed,5])
 
                     try:
-                        result, error, samples = self.model(P0, (x,y), m, c,P0_priors=P0_priors,limfunc=limfunc,return_array=True)
+                        result, error, samples, min_chi2, ddof = self.model(P0, (x,y), m, c,P0_priors=P0_priors,return_array=True)
                         #import corner
                         #from matplotlib import pyplot
                         #corner.corner(samples)
                         #pyplot.show()
+                        self.map_fits['Values'][ifeed,isb,ichan,:] = result
+                        self.map_fits['Errors'][ifeed,isb,ichan,:] = error
+                        self.map_fits['Chi2'][ifeed,isb,ichan,:] = min_chi2, ddof
+
                     except ValueError as e:
                         result = 0
                         error = 0
                         self.logger(f'{fname}:emcee:{e}',error=e)
                 
-                    self.map_fits['Values'][ifeed,isb,ichan,:] = result
-                    self.map_fits['Errors'][ifeed,isb,ichan,:] = error
 
     def aperture_phot(self,data,x,y,v):
         """
         Get the integrated flux of source
         """
-        r = np.sqrt(x**2 + y**2)
+        r = np.sqrt((x-self.avg_map_fits['Values'][ifeed,1])**2 + (y-self.avg_map_fits['Values'][ifeed,3])**2)
         
         inner = (r < 8./60.) & np.isfinite(data) 
         outer = (r > 8.5/60.) & (r < 12./60.) & np.isfinite(data)
@@ -759,7 +776,7 @@ class FitSource(DataStructure):
 
         # We will store these in a separate file and link them to the level2s
         fname = data.filename.split('/')[-1]
-        units = {'A':'K','x0':'degrees','y0':'degrees','sigx':'degrees','sigy':'degrees','B':'K','phi':'radians'}
+        units = {'A':'K','x0':'degrees','y0':'degrees','sigx':'degrees','sigy':'degrees','sigy_scale':'none','B':'K','phi':'radians'}
 
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
         if os.path.exists(outfile):
@@ -791,7 +808,7 @@ class FitSource(DataStructure):
         ## Narrow channel fits
         ##
 
-        for valerr in ['Values','Errors']:
+        for valerr in ['Values','Errors','Chi2']:
             gauss_fits = output.create_group(f'Gauss_Narrow_{valerr}')
             gauss_fits.attrs['FitFunc'] = self.model.__name__
             gauss_fits.attrs['source_el'] = self.src_el
@@ -811,7 +828,7 @@ class FitSource(DataStructure):
         ## WRITE AVERAGED DATA
         ##
 
-        for valerr in ['Values','Errors']:
+        for valerr in ['Values','Errors','Chi2']:
             gauss_fits = output.create_group(f'Gauss_Average_{valerr}')
             gauss_fits.attrs['FitFunc'] = self.model.__name__
             gauss_fits.attrs['source_el'] = self.src_el
@@ -831,7 +848,7 @@ class FitSource(DataStructure):
 
         # Alternative scan fits
         if self.fit_alt_scan:
-            for valerr in ['Values','Errors']:
+            for valerr in ['Values','Errors','Chi2']:
                 gauss_fits = output.create_group(f'Gauss_AltScan_{valerr}')
                 gauss_fits.attrs['FitFunc'] = self.model.__name__
                 gauss_fits.attrs['source_el'] = self.src_el

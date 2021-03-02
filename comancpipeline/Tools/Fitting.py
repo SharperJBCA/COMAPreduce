@@ -362,12 +362,13 @@ class Gauss2dRot_Gradient_FixedPos:
 
 class Gauss2dRot_General:
 
-    def __init__(self,defaults={'x0':0,'y0':0,'sigx':0,'sigy_scale':0,'phi':0,'A':0,'B':0},
-                 fixed={'x0':False,'y0':False,'sigx':False,'sigy_scale':False,'phi':False,'A':False,'B':False},
+    def __init__(self,defaults={'x0':0,'y0':0,'sigx':0,'sigy_scale':1,'phi':0,'A':0,'B':0},
+                 fixed=[],
                  use_bootstrap=False):
         self.__name__ = Gauss2dRot_General.__name__
         
         self.use_bootstrap = use_bootstrap
+        fixed = {k:True for k in fixed}
         self.set_fixed(**fixed)
         self.defaults = defaults
 
@@ -375,15 +376,29 @@ class Gauss2dRot_General:
         self.A = 0
         self.B = 0
         self.sigx = 0
-        self.sigy_scale = 0
+        self.sigy_scale = 1
         self.x0 = 0
         self.y0 = 0
         self.phi = 0
 
         self.idx = {k:i for i,k in enumerate(self.param_names)}
 
-    def _limfunc(self,P):
-        return False
+    def limfunc(self,P):
+
+        lims = {'A':lambda P: False,
+                'B':lambda P: False,
+                'x0':lambda P: False,
+                'y0':lambda P: False,
+                'phi':lambda P: (P['phi'] < -np.pi/2.) | (P['phi'] > np.pi/2.),
+                'sigx': lambda P: (P['sigx'] < 0),
+                'sigy_scale': lambda P: (P['sigy_scale'] < 1) | (P['sigy_scale'] > 10)}
+
+        params = self.get_param_names()
+
+        Pz = {k:p for k,p in zip(params,P)}
+        lims = [lims[k](Pz) for k in params]
+
+        return any(lims)
 
     def get_param_names(self):
         
@@ -396,7 +411,7 @@ class Gauss2dRot_General:
         
         self.P0_priors = P0_priors
         if isinstance(limfunc,type(None)):
-            self.limfunc = self._limfunc
+            self.limfunc = self.limfunc
         else:
             self.limfunc = limfunc
 
@@ -415,30 +430,24 @@ class Gauss2dRot_General:
         else:
             # Perform the least-sqaures fit
             result = minimize(self.minimize_errfunc,P0,args=(xy,z,covariance),method='CG')
-    
-            #if 'sigy_scale' in P0_dict:
-            #    result.x[self.idx['sigy_scale']] = np.abs()
-        
             pos = result.x + 1e-4 * np.random.normal(size=(nwalkers, len(result.x)))
             sampler = emcee.EnsembleSampler(nwalkers,len(result.x),self.emcee_errfunc, 
                                             args=(xy,z,covariance))
             sampler.run_mcmc(pos,samples,progress=True)
             
             flat_samples = sampler.get_chain(discard=discard,thin=thin,flat=True)
-            #import corner
-            #from matplotlib import pyplot
-            #corner.corner(flat_samples)
-            #pyplot.show()
             result = np.nanmedian(flat_samples,axis=0)
             error  = stats.MAD(flat_samples ,axis=0)
-        
+
+            min_chi2 = self.emcee_errfunc(result,xy,z,covariance)
+            ddof = len(z)
+
         Value_dict = {k:result[i] for k, i in self.idx.items()}
         Error_dict = {k:error[i]  for k, i in self.idx.items()}
-
         if return_array:
-            return result, error, flat_samples
+            return result, error, flat_samples, min_chi2, ddof
         else:
-            return Value_dict, Error_dict, flat_samples
+            return Value_dict, Error_dict, flat_samples, min_chi2, ddof
 
     def Priors(self,P):
         prior = 0
@@ -463,11 +472,17 @@ class Gauss2dRot_General:
         for k,v in kwargs.items():
             self.defaults[k] = v
 
-    def emcee_errfunc(self,P,xy,z,cov):    
+    def emcee_errfunc(self,P,xy,z,cov):  
         if self.limfunc(P):
             return -1e32
         else:
-            return -np.sum( (self.func(P,xy) - z)**2/cov ) - self.Priors(P)
+            chi2 = -np.sum( (self.func(P,xy) - z)**2/cov ) - self.Priors(P)
+
+            if np.isfinite(chi2):
+                return chi2
+            else:
+                print('Inf found:', chi2, P)
+                retrun -1e32
 
     def minimize_errfunc(self,P,xy,z,cov):
         if self.limfunc(P):
@@ -483,7 +498,11 @@ class Gauss2dRot_General:
             else:
                 self.__dict__[parameter] = self.defaults[parameter]
 
-        sigy = self.sigx*(1+self.sigy_scale)
+        if self.fixed['sigy_scale']:
+            sigy = self.sigx
+        else:
+            sigy = self.sigx*self.sigy_scale
+
         Xr = (x - self.x0)/self.sigx * np.cos(self.phi) + (y-self.y0)/self.sigx * np.sin(self.phi)
         Yr =-(x - self.x0)/sigy * np.sin(self.phi) + (y-self.y0)/sigy * np.cos(self.phi)
         model = self.A * np.exp( - 0.5 * (Xr**2 + Yr**2)) + self.B

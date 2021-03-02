@@ -1,0 +1,4 @@
+import numpy as np
+
+path = __file__
+average_beam_widths = np.loadtxt('')
