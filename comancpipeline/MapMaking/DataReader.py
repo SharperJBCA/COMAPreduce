@@ -7,6 +7,7 @@ import pandas as pd
 from scipy import linalg as la
 import healpy as hp
 from comancpipeline.Tools import  binFuncs, stats
+from comancpipeline.data import Data
 
 from comancpipeline.MapMaking import MapTypes, OffsetTypes
 
@@ -30,14 +31,16 @@ class ReadDataLevel2:
         self.Nsamples = 0
         self.Nhorns = 0
         self.keeptod = keeptod
-        self.iband = iband
+        self.iband = int(iband)
         self.ifreq = ifreq
+
+        self.cal_source = parameters['Inputs']['calibration_source']
 
         # READ PARAMETERS
         self.offset_length = parameters['Destriper']['offset']
 
         self.Feeds  = parameters['Inputs']['feeds']
-        print(self.Feeds)
+
         try:
             self.Nfeeds = len(parameters['Inputs']['feeds'])
             self.Feeds = [int(f) for f in self.Feeds]
@@ -218,7 +221,26 @@ class ReadDataLevel2:
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)
         nFeeds, nSamples = tod.shape
-        
+
+
+        this_obsid = int(filename.split('/')[-1].split('-')[1])
+        # Get Gain Calibration Factors
+
+        cal_factors = np.zeros(len(self.FeedIndex))
+        for ifeed,feed_num in enumerate(self.Feeds):
+            obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
+            gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:,:]
+            gains = np.reshape(gains,(gains.shape[0],gains.shape[1]*gains.shape[2]))
+            gains = gains[:,self.iband]
+
+            # now find the nearest non-nan obsid to calibrate off
+            gd = np.isfinite(gains)
+            obsids = obsids[gd]
+            gains  = gains[gd]
+            obs_idx = np.argmin((obsids - this_obsid)**2)
+            cal_factors[ifeed] = gains[obs_idx]
+        tod = tod/cal_factors[:,None]
+        weights = weights*cal_factors[:,None]**2
         # Remove any bad data
         tod     = tod.flatten()
         weights = weights.flatten()

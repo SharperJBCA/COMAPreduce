@@ -56,7 +56,7 @@ config = {'name':'comancpipeline',
                       'comancpipeline.data',
                       'comancpipeline.Tools',
                       'comancpipeline.MapMaking'],
-          'package_data':{'':["*.dat"]},
+          'package_data':{'':["*.dat","gains.hd5"]},
           'include_package_data':True,
           'ext_modules':cythonize([ffuncs,pysla, filters,binFuncs],
                                   compiler_directives={'language_level':"3"})}
