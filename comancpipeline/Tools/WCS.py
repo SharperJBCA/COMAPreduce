@@ -17,7 +17,7 @@ def query_disc(x0,y0,r, wcs, shape):
 
     return select,xpix_world[select],ypix_world[select]
 
-def query_aperture(x0,y0,r0, r1, wcs, shape):
+def query_annullus(x0,y0,r0, r1, wcs, shape):
     """
     """
     nypix,nxpix = shape
