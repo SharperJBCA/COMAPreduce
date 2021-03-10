@@ -5,6 +5,31 @@ from matplotlib import pyplot
 from astropy import wcs
 from astropy.io import fits
 
+def query_disc(x0,y0,r, wcs, shape):
+    """
+    """
+    nypix,nxpix = shape
+    xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
+    xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
+
+    rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
+    select = np.where((rpix_world < r))[0]
+
+    return select,xpix_world[select],ypix_world[select]
+
+def query_aperture(x0,y0,r0, r1, wcs, shape):
+    """
+    """
+    nypix,nxpix = shape
+    xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
+    xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
+
+    rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
+    select = np.where((rpix_world >= r0) & (rpix_world < r1))[0]
+
+    return select,xpix_world[select],ypix_world[select]
+
+
 def Info2WCS(naxis, cdelt, crval, ctype=['RA---TAN', 'DEC--TAN']):
     """
     Define a wcs object

@@ -11,6 +11,8 @@ from comancpipeline.data import Data
 
 from comancpipeline.MapMaking import MapTypes, OffsetTypes
 
+from scipy.signal import find_peaks
+
 def GetFeeds(file_feeds, selected_feeds):
 
     feed_indices = np.array([np.argmin(np.abs(f-file_feeds)) for i,f in enumerate(selected_feeds) ])
@@ -157,7 +159,15 @@ class ReadDataLevel2:
             tod_in = dset[ifeed,self.iband,:]
             wei_in = wei_dset[ifeed,self.iband,:]
             flags_in = flags[ifeed,:]
-            #wei_in[flags_in > 0] = 0
+            samples = np.arange(tod_in.size)
+
+            peaks, properties = find_peaks(np.abs(tod_in),prominence=1,width=[0,150])
+            widths = (properties['right_ips']-properties['left_ips'])*2.
+
+            for peak,width in zip(peaks,widths):
+                wei_in[np.abs(samples-peak) < width] = 0
+
+            wei_in[flags_in > 0.5] = 0
 
             # then the data for each scan
             last = 0
