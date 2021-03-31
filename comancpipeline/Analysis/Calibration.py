@@ -391,18 +391,21 @@ class CreateLevel2Cont(DataStructure):
         lvl2['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
         lvl2.attrs['vane-version'] = lvl2['Vane'].attrs['version']
 
+
+
 class CalculateVaneMeasurement(DataStructure):
     """
     Calculates the Tsys and Gain factors from a COMAP vane in/out measurement.
     """
     def __init__(self, output_dir='AmbientLoads/',
+                 do_plots=False,
                  elLim=5, feeds = 'all',
                  minSamples=200, tCold=2.74, 
                  tHotOffset=273.15,prefix='VaneCal',**kwargs):
         super().__init__(**kwargs)
 
         self.name = 'CalculateVaneMeasurement'
-
+        self.do_plots=do_plots
         self.feeds_select = feeds
 
         self.output_dir = output_dir
@@ -627,19 +630,46 @@ class CalculateVaneMeasurement(DataStructure):
                     self.Tsys[vane_event,horn,sb,:] = tsys
                     self.Gain[vane_event,horn,sb,:] = ((vHot - vCold)/(tHot - self.tCold))
 
+                    if self.do_plots:
+                        pyplot.plot(time,btod_slice[0,:],'-',color='k')
+                        pyplot.plot(time[idCold],btod_slice[0,idCold],'.',color='C0',label='Cold')
+                        pyplot.plot(time[idHot],btod_slice[0,idHot],'.',color='C3',label='Hot')
+                        pyplot.axhline(np.nanmedian(btod_slice[0,idCold]),color='C0',lw=3,ls='--')
+                        pyplot.axhline(np.nanmedian(btod_slice[0,idHot]),color='C3',lw=3,ls='--')
+                        pyplot.xlabel('Sample')
+                        pyplot.ylabel('RU (V)')
+                        pyplot.grid()
+                        pyplot.savefig('figures/Tsys_Example.png')
+                        pyplot.clf()
+
                     chans = np.arange(tsys.size)
                     peaks,properties = find_peaks(tsys,prominence=5,width=[0,60])
                     widths = (properties['right_ips']-properties['left_ips'])*2
                     bad = np.zeros(tsys.size,dtype=bool)
                     bad[[0,512,len(bad)-1]] = True
                     bad[np.arange(0,1024,64,dtype=int)] = True
+                    frequency   = data['spectrometer/frequency'][sb,:]
+
+                    if self.do_plots:
+                        pyplot.plot(frequency,tsys,'k',lw=3)
                     for peak,width in zip(peaks,widths):
                         sel = np.abs(chans - peak) < width
                         bad[sel] = True
-
+                        f0 = np.argmin((chans - (peak - width))**2)
+                        f1 = np.argmin((chans - (peak + width))**2)
+                        if self.do_plots:
+                            pyplot.fill_between([frequency[f0],frequency[f1]],[0,0],[200,200],color='grey',alpha=0.5,hatch='/')
                     self.Spikes[vane_event,horn,sb,:] = bad
 
                     tod_slice[sb,:,:] /= self.Gain[vane_event,horn,sb,:,np.newaxis]
+
+                if self.do_plots:
+                    pyplot.ylim(0,200)
+                    pyplot.xlabel('Frequency (GHz)')
+                    pyplot.ylabel(r'$T_\mathrm{sys}$')
+                    pyplot.xlim(26,30)
+                    pyplot.savefig('figures/Tsys_Spikes_Example.png')
+                    pyplot.show()
 
 
     def write(self,data):
@@ -679,3 +709,271 @@ class CalculateVaneMeasurement(DataStructure):
         output.attrs['version'] = __vane_version__
                         
         output.close()
+
+
+
+class CreateLevel2RRL(DataStructure):
+    """
+    Takes level 1 files and select RRL channels, filters data around lines.
+    """
+
+    def __init__(self, feeds='all', output_dir='', nworkers= 1,
+                 average_width=512,calvanedir='AncillaryData/CalVanes',
+                 cal_mode = 'Vane', cal_prefix='',level2='level2rrl',
+                 calvane_prefix='CalVane',**kwargs):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
+        super().__init__(**kwargs)
+
+        self.name = 'CreateLevel2RRL'
+        self.feeds_select = feeds
+
+        self.output_dir = output_dir
+
+        self.calvanedir = calvanedir
+        self.calvane_prefix = calvane_prefix
+
+        self.cal_mode = cal_mode
+        self.cal_prefix=cal_prefix
+
+        self.level2=level2
+
+        R = 10973731.6
+        c = 3e8 
+        self.rrl_qnumbers = np.array([58,59,60,61,62])
+        self.rrl_frequencies = R*c*(1./self.rrl_qnumbers**2 - 1./(self.rrl_qnumbers+1)**2)
+        self.binwidth = 3 # store three bins for each line
+        
+
+    def __str__(self):
+        return "Creating level2 file with channel binning of {}".format(self.average_width)
+
+    def run(self,data):
+        """
+        Sets up feeds that are needed to be called,
+        grabs the pointer to the time ordered data,
+        and calls the averaging routine in SourceFitting.FitSource.average(*args)
+
+        """
+        # Setup feed indexing
+        # self.feeds : feed horn ID (in array indexing, only chosen feeds)
+        # self.feedlist : all feed IDs in data file (in lvl1 indexing)
+        # self.feeddict : map between feed ID and feed array index in lvl1
+        self.feeds, self.feed_index, self.feed_dict = self.getFeeds(data,self.feeds_select)
+
+
+        # Setup output file here, we will have to write in sections.
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+        if os.path.isfile(self.outfilename):
+            os.remove(self.outfilename)
+
+
+        # Opening file here to write out data bit by bit
+        self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['spectrometer/tod'].shape
+        avg_tod_shape = (self.i_nFeeds, self.i_nBands, self.i_nChannels//self.average_width, self.i_nSamples)
+        self.avg_tod = np.zeros(avg_tod_shape,dtype=data['spectrometer/tod'].dtype)
+
+        # Average the data and apply the gains
+        self.average_obs(data.filename,data, self.avg_tod)
+
+    def okay_level2_version(self,h):
+        """
+        Check level 2 file is up to date
+        """
+        
+        if not 'version' in h.attrs:
+            return False
+        if not h.attrs['version'] == __level2_version__:
+            return False
+        if not 'vane-version' in h.attrs:
+            return False
+        if not h.attrs['vane-version'] == h['Vane'].attrs['version']:
+            return False
+
+        return True
+
+    def __call__(self,data):
+        """
+        Modify baseclass __call__ to change file from the level1 file to the level2 file.
+        """
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+        self.comment = self.getComment(data)
+        prefix = data.filename.split('/')[-1].split('.hd5')[0]
+        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+
+        print(self.outfilename)
+        print(os.path.exists(self.outfilename),(not self.overwrite))
+        
+        # Skip files that are already calibrated:
+        if os.path.exists(self.outfilename) & (not self.overwrite): 
+            self.logger(f'{fname}:{self.name}: Level 2 file exists...checking vane version...')
+            self.outfile = h5py.File(self.outfilename,'r')
+            lvl2 = self.outfile[self.level2]
+            if self.okay_level2_version(lvl2):
+                self.logger(f'{fname}:{self.name}: Vane calibration up to date. Skipping.')
+                data.close()
+                return self.outfile
+            else:
+                self.outfile.close()
+
+        self.logger(f'{fname}:{self.name}: Applying vane calibration. Bin width {self.average_width}.')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing level 2 file: {self.outfilename}')
+        self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
+        # Now change to the level2 file for all future analyses.
+        if data:
+            data.close() # just double check we close the level 1 file.
+        return self.outfile
+
+    def average_obs(self,filename,data, tod):
+        """
+        Average TOD together
+        """
+
+        # --- Average down the data
+        width = self.average_width
+        nHorns, nSBs, nChans, nSamples = tod.shape
+        nHorns = len(self.feeds)
+
+
+        frequency = data['spectrometer/frequency'][...]
+        self.avg_frequency = np.zeros((nSBs, nChans))
+        # Averaging the data either using a Tsys/Calvane measurement or assume equal weights
+        try:
+            # Altered to allow Skydip files to be calibrated using the neighbouring
+            # cal-vane files (following SKYDIP-LISSAJOUS obs. plan)
+            if 'Sky nod' in self.comment:
+                cname, gain, tsys,spikes = self.getcalibration_skydip(data)
+            else:
+                cname, gain, tsys,spikes = self.getcalibration_obs(data)
+        except ValueError:
+            cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
+            gain = np.ones((2, nHorns, nSBs, nChans*width))
+            tsys = np.ones((2, nHorns, nSBs, nChans*width))
+
+
+        # Future: Astro Calibration
+        # if self.cal_mode.upper() == 'ASTRO':
+        # gain = self.getcalibration_astro(data)
+        for ifeed, feed in enumerate(tqdm(self.feeds,desc=self.name)):
+            feed_array_index = self.feed_dict[feed]
+            d = data['spectrometer/tod'][feed_array_index,...] 
+
+            for sb in range(nSBs):
+                # Weights/gains already snipped to just the feeds we want
+                w, g,chan_flag = 1./tsys[0,ifeed, sb, :]**2, gain[0,ifeed, sb, :], spikes[0,ifeed,sb,:]
+                w[chan_flag] = 0
+
+                gvals = np.zeros(nChans)
+                for chan in range(nChans):
+                    try:
+                        bot = np.nansum(w[chan*width:(chan+1)*width])
+                    except:
+                        continue
+
+                    caltod = d[sb,chan*width:(chan+1)*width,:]/g[chan*width:(chan+1)*width,np.newaxis]
+
+                    if width > 1:
+                        self.avg_tod[ifeed,sb,chan,:] = np.sum(caltod*w[chan*width:(chan+1)*width,np.newaxis],axis=0)/bot
+                    else:
+                        self.avg_tod[ifeed,sb,chan,:] = caltod
+
+
+                    self.avg_frequency[sb,chan] = np.mean(frequency[sb,chan*width:(chan+1)*width])
+
+    def getcalibration_skydip(self,data):
+        """
+        No vane measurements in sky dips, find nearest valid obsid.
+        """
+        obsidSearch = int(data.filename.split('/')[-1][6:13]) + 1
+        searchstring = "{:07d}".format(obsidSearch)
+        calFileDir = listdir(self.calvanedir)
+        calFileFil1 = [s for s in calFileDir  if searchstring in s]
+        calFileName = [s for s in calFileFil1 if '.hd5' in s]
+
+        if calFileName == []:
+            return data
+        cname = '{}/{}'.format(self.calvanedir,calFileName[0])
+        gain_file = h5py.File(cname,'r')
+        gain = gain_file['Gain'][...] # (event, horn, sideband, frequency)
+        tsys = gain_file['Tsys'][...] # (event, horn, sideband, frequency) - use for weights
+        spikes=gain_file['Spikes'][...]
+        gain_file.close()
+        return cname, gain, tsys, spikes
+
+    def getcalibration_obs(self,data):
+        """
+        Open vane calibration file.
+        """
+        fname = data.filename.split('/')[-1]
+        cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
+        gain_file = h5py.File(cname,'r')
+        gain = gain_file['Gain'][...] # (event, horn, sideband, frequency)
+        tsys = gain_file['Tsys'][...] # (event, horn, sideband, frequency) - use for weights
+        spikes = gain_file['Spikes'][...]
+        gain_file.close()
+        return cname, gain, tsys, spikes
+
+    def okay_vane_version(self,h):
+        """
+        Check to see if this vane version is up to date
+        """
+        if not 'version' in h.attrs:
+            return False
+        if not 'Spikes' in h:
+            return False
+        if not h.attrs['version'] == __vane_version__:
+            return False
+        
+        return True
+
+
+    def write(self,data):
+        """
+        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        """
+
+        if os.path.exists(self.outfilename):
+            self.outfile = h5py.File(self.outfilename,'a')
+        else:
+            self.outfile = h5py.File(self.outfilename,'w')
+
+        # Set permissions and group
+        os.chmod(self.outfilename,0o664)
+        shutil.chown(self.outfilename, group='comap')
+
+
+        if self.level2 in self.outfile:
+            del self.outfile[self.level2]
+        lvl2 = self.outfile.create_group(self.level2)
+
+        tod_dset = lvl2.create_dataset('averaged_tod',data=self.avg_tod, dtype=self.avg_tod.dtype)
+        tod_dset.attrs['Unit'] = 'K'
+        tod_dset.attrs['Calibration'] = '{self.cal_mode}:{self.cal_prefix}'
+
+        freq_dset = lvl2.create_dataset('frequency',data=self.avg_frequency, dtype=self.avg_frequency.dtype)
+
+        # Link the Level1 data
+        data_filename = data.filename
+        fname = data.filename.split('/')[-1]
+        data.close()
+        if not 'level1' in self.outfile:
+            self.outfile['level1'] = h5py.ExternalLink(data_filename,'/')
+        lvl2.attrs['version'] = __level2_version__
+
+        # Add version info
+        lvl2.attrs['pipeline-version'] = comancpipeline.__version__
+
+        # Link the Level1 data
+        if 'Vane' in lvl2:
+            del lvl2['Vane']
+        lvl2['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
+        lvl2.attrs['vane-version'] = lvl2['Vane'].attrs['version']

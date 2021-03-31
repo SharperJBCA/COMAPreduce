@@ -247,9 +247,9 @@ class FnoiseStats(DataStructure):
         #    nFeeds -= 1
         nScans = len(scan_edges)
 
-        self.powerspectra = np.zeros((nFeeds, nBands, nScans, self.nbins))
-        self.freqspectra = np.zeros((nFeeds, nBands, nScans, self.nbins))
-        self.fnoise_fits = np.zeros((nFeeds, nBands, nScans, 3))
+        self.powerspectra = np.zeros((nFeeds, nBands, nChannels, nScans, self.nbins))
+        self.freqspectra = np.zeros((nFeeds, nBands, nChannels, nScans, self.nbins))
+        self.fnoise_fits = np.zeros((nFeeds, nBands, nChannels, nScans, 3))
         self.wnoise_auto = np.zeros((nFeeds, nBands, nChannels, nScans, 1))
         self.atmos = np.zeros((nFeeds, nBands, nScans, 3))
         self.atmos_errs = np.zeros((nFeeds, nBands, nScans, 3))
@@ -277,11 +277,7 @@ class FnoiseStats(DataStructure):
                     self.atmos[ifeed,iband,iscan,:] = atmos
                     self.atmos_errs[ifeed,iband,iscan,:] = atmos_errs
 
-                    ps, nu, f_fits, w_auto = self.FitPowerSpectrum(band_average-atmos_filter-local_filter_tods[ifeed,iband,:])
-                    self.powerspectra[ifeed,iband,iscan,:] = ps
-                    self.freqspectra[ifeed,iband,iscan,:]  = nu
-                    self.fnoise_fits[ifeed,iband,iscan,0]  = w_auto
-                    self.fnoise_fits[ifeed,iband,iscan,1:] = f_fits
+                    #ps, nu, f_fits, w_auto = self.FitPowerSpectrum(band_average-atmos_filter-local_filter_tods[ifeed,iband,:])
 
                     #self.logger(f'{fname}:{self.name}: Feed {feeds[ifeed]} Band {bands[iband]} RMS  - {w_auto:.3f}K')
                     #self.logger(f'{fname}:{self.name}: Feed {feeds[ifeed]} Band {bands[iband]} Knee - {f_fits[0]:.3f}')
@@ -294,11 +290,22 @@ class FnoiseStats(DataStructure):
                         atmos_coeff,med_coeff,offset = self.coefficient_jointfit(tod[ifeed,iband,ichan,start:end], 
                                                                                  atmos_filter,
                                                                                  local_filter_tods[ifeed,iband,:])
+
                         w_auto = stats.AutoRMS(tod[ifeed,iband,ichan,start:end])
                         self.wnoise_auto[ifeed,iband,ichan,iscan,:]  = w_auto
                         self.filter_coefficients[ifeed,iband,ichan,iscan,:] = med_coeff
                         self.atmos_coefficients[ifeed,iband,ichan,iscan,:]  = atmos_coeff
+                        resid = tod[ifeed,iband,ichan,start:end]-atmos_filter*atmos_coeff-local_filter_tods[ifeed,iband,:]*med_coeff - offset
+                        ps, nu, f_fits, w_auto = self.FitPowerSpectrum(resid)
+
+                        self.powerspectra[ifeed,iband,ichan,iscan,:] = ps
+                        self.freqspectra[ifeed,iband,ichan,iscan,:]  = nu
+                        self.fnoise_fits[ifeed,iband,ichan,iscan,0]  = w_auto
+                        self.fnoise_fits[ifeed,iband,ichan,iscan,1:] = f_fits
+
+
                         pbar.update(1)
+
             self.filter_tods += [local_filter_tods]
         pbar.close()
 
@@ -615,3 +622,181 @@ class SkyDipStats(DataStructure):
             if dname in SkyDipStats:
                 del SkyDipStats[dname]
             SkyDipStats.create_dataset(dname,  data=dset)
+
+
+class SunDistance(DataStructure):
+    """
+    Takes level 1 files, bins and calibrates them for continuum analysis.
+    """
+
+    def __init__(self,level2='level2',**kwargs):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
+        super().__init__(**kwargs)
+        self.name = 'SunDistance'
+        self.level2=level2
+
+    def __str__(self):
+        return "Calculating sun distance."
+
+    def run(self, data):
+        """
+        Expects a level2 file structure to be passed.
+        """
+        fname = data.filename.split('/')[-1]
+
+        az  = data['level1/spectrometer/pixel_pointing/pixel_az'][0,:]
+        el  = data['level1/spectrometer/pixel_pointing/pixel_el'][0,:]
+        mjd = data['level1/spectrometer/MJD'][:]
+
+        self.distances = {k:np.zeros(az.size) for k in ['sun','moon']}
+
+        for src, v in self.distances.items():
+            s_az, s_el, s_ra, s_dec = Coordinates.sourcePosition(src, mjd, Coordinates.comap_longitude, Coordinates.comap_latitude)
+            self.distances[src] = Coordinates.AngularSeperation(az,el,s_az,s_el)
+
+        sources = list(self.distances.keys())
+        for src in sources:
+            self.distances[f'{src}_mean'] = np.array([np.mean(self.distances[src])])
+        
+
+    def __call__(self,data):
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+        source  = self.getSource(data)
+        comment = self.getComment(data)
+
+        self.logger(f'{fname}:{self.name}: {source} - {comment}')
+
+        if ('level2/Statistics/Distances' in data) & (not self.overwrite):
+            return data
+
+        # Want to ensure the data file is read/write
+        data = self.setReadWrite(data)
+
+        self.logger(f'{fname}:{self.name}: Calculating Sun distance.')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing Sun distance to level 2 file ({fname})')
+        self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
+
+        return data
+
+    def write(self,data):
+        """
+        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        """
+        fname = data.filename.split('/')[-1]
+
+        if not self.level2 in data:
+            return
+        lvl2 = data[self.level2]
+        if not 'Statistics' in lvl2:
+            statistics = lvl2.create_group('Statistics')
+        else:
+            statistics = lvl2['Statistics']
+
+        if not 'Distances' in statistics:
+            distance_grp = statistics.create_group('Distances')
+        else:
+            distance_grp = lvl2['distance_grp']
+
+        
+        for dname, dset in self.distances.items():
+            if dname in distance_grp:
+                del distance_grp[dname]
+            distance_grp.create_dataset(dname,data=dset)
+
+
+class WindSpeed(DataStructure):
+    """
+    Takes level 1 files, bins and calibrates them for continuum analysis.
+    """
+
+    def __init__(self,level2='level2',**kwargs):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
+        super().__init__(**kwargs)
+        self.name = 'WindSpeed'
+        self.level2=level2
+
+    def __str__(self):
+        return "Calculating sun distance."
+
+    def run(self, data):
+        """
+        Expects a level2 file structure to be passed.
+        """
+        fname = data.filename.split('/')[-1]
+
+        az  = data['level1/spectrometer/pixel_pointing/pixel_az'][0,:]
+        el  = data['level1/spectrometer/pixel_pointing/pixel_el'][0,:]
+        mjd = data['level1/spectrometer/MJD'][:]
+
+        self.distances = {k:np.zeros(az.size) for k in ['sun','moon']}
+
+        for src, v in self.distances.items():
+            s_az, s_el, s_ra, s_dec = Coordinates.sourcePosition(src, mjd, Coordinates.comap_longitude, Coordinates.comap_latitude)
+            self.distances[src] = Coordinates.AngularSeperation(az,el,s_az,s_el)
+
+        sources = list(self.distances.keys())
+        for src in sources:
+            self.distances[f'{src}_mean'] = np.array([np.mean(self.distances[src])])
+        
+
+    def __call__(self,data):
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+        source  = self.getSource(data)
+        comment = self.getComment(data)
+
+        self.logger(f'{fname}:{self.name}: {source} - {comment}')
+
+        if ('level2/Statistics/Distances' in data) & (not self.overwrite):
+            return data
+
+        # Want to ensure the data file is read/write
+        data = self.setReadWrite(data)
+
+        self.logger(f'{fname}:{self.name}: Calculating Sun distance.')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing Sun distance to level 2 file ({fname})')
+        self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
+
+        return data
+
+    def write(self,data):
+        """
+        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        """
+        fname = data.filename.split('/')[-1]
+
+        if not self.level2 in data:
+            return
+        lvl2 = data[self.level2]
+        if not 'Statistics' in lvl2:
+            statistics = lvl2.create_group('Statistics')
+        else:
+            statistics = lvl2['Statistics']
+
+        if not 'Distances' in statistics:
+            distance_grp = statistics.create_group('Distances')
+        else:
+            distance_grp = lvl2['distance_grp']
+
+        
+        for dname, dset in self.distances.items():
+            if dname in distance_grp:
+                del distance_grp[dname]
+            distance_grp.create_dataset(dname,data=dset)

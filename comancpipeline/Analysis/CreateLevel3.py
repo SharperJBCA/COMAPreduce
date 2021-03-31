@@ -116,13 +116,16 @@ class CreateLevel3(DataStructure):
         tod_shape = d[f'{self.level2}/averaged_tod'].shape
 
         scan_edges = d[f'{self.level2}/Statistics/scan_edges'][...]
+        nscans = scan_edges.shape[0]
         nchannels = 8
         self.all_tod     = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
         self.all_weights = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
         frequency = d['level1/spectrometer/frequency'][...]
         frequency = np.mean(np.reshape(frequency,(frequency.shape[0],frequency.shape[1]//16,16)) ,axis=-1).flatten()
         feeds = d['level1/spectrometer/feeds'][...]
-
+        feedids = np.concatenate([np.arange(8).astype(int)+i*8 for i in range(20) if i+1 in feeds])
+        xfeed,yfeed = np.meshgrid(feedids,feedids)
+        self.correlation_matrix = np.zeros((nscans,20*8,20*8))
         # Read in data from each feed
         for index, ifeed in enumerate(range(tod_shape[0])):
             if feeds[ifeed] == 20:
@@ -136,22 +139,25 @@ class CreateLevel3(DataStructure):
             atmos = d[f'{self.level2}/Statistics/atmos'][ifeed,...]
             atmos_coefficient = d[f'{self.level2}/Statistics/atmos_coefficients'][ifeed,...]
             wnoise_auto = d[f'{self.level2}/Statistics/wnoise_auto'][ifeed,...]
+            fnoise_fits = d[f'{self.level2}/Statistics/fnoise_fits'][ifeed,...]
 
             # Create gain masks/channel masks/calfactors
-            if isinstance(self.gainmask, type(None)):
-                self.gainmask = np.zeros((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
-            if isinstance(self.channelmask, type(None)):
-                self.channelmask = np.zeros((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
-            if isinstance(self.calfactors, type(None)):
-                self.calfactors = np.ones((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
+            # if isinstance(self.gainmask, type(None)):
+            #     self.gainmask = np.zeros((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
+            # if isinstance(self.channelmask, type(None)):
+            #     self.channelmask = np.zeros((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
+            # if isinstance(self.calfactors, type(None)):
+            #     self.calfactors = np.ones((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
 
-            self.channelmask = self.channelmask | self.gainmask
+            # self.channelmask = self.channelmask | self.gainmask
 
 
 
             # then the data for each scan
             last = 0
+            scan_samples = []
             for iscan,(start,end) in enumerate(scan_edges):
+                scan_samples = np.arange(start,end,dtype=int)
                 median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{iscan:02d}'][ifeed,...]
                 N = int((end-start))
                 end = start+N
@@ -160,36 +166,59 @@ class CreateLevel3(DataStructure):
                 # Subtract atmospheric fluctuations per channel
                 for iband in range(4):
                     for ichannel in range(64):
-                        if self.channelmask[ifeed,iband,ichannel] == False:
-                            amdl = Statistics.AtmosGroundModel(atmos[iband,iscan],az[start:end],el[start:end]) *\
-                                   atmos_coefficient[iband,ichannel,iscan,0]
-                            tod[iband,ichannel,:] -= median_filter[iband,:N] * medfilt_coefficient[iband,ichannel,iscan,0]
-                            tod[iband,ichannel,:] -= amdl
-                            tod[iband,ichannel,:] -= np.nanmedian(tod[iband,ichannel,:])
-                tod /= self.calfactors[ifeed,:,:,None] # Calibrate to Jupiter temperature scale
+                        #if self.channelmask[ifeed,iband,ichannel] == False:
+                        amdl = Statistics.AtmosGroundModel(atmos[iband,iscan],az[start:end],el[start:end]) *\
+                               atmos_coefficient[iband,ichannel,iscan,0]
+                        tod[iband,ichannel,:] -= median_filter[iband,:N] * medfilt_coefficient[iband,ichannel,iscan,0]
+                        tod[iband,ichannel,:] -= amdl
+                        tod[iband,ichannel,:] -= np.nanmedian(tod[iband,ichannel,:])
+                
+                #tod /= self.calfactors[ifeed,:,:,None] # Calibrate to Jupiter temperature scale
                 # Then average together the channels
-                wnoise = wnoise_auto[:,:,iscan,:]
-                channels = (self.channelmask[ifeed].flatten() == False)
-                channels = np.where((channels))[0]
+                wnoise = wnoise_auto[:,:,iscan,0]
+                fnoise = fnoise_fits[:,:,iscan,:]
+                fnoise_power = fnoise[:,:,0] * np.sqrt(fnoise[:,:,1]**fnoise[:,:,2])
+
+                simple_weights = 1./wnoise**2
+                noise_weights = 1./(wnoise**2 + fnoise_power**2)
+                noise_weights[(wnoise == 0) | np.isnan(noise_weights) | np.isinf(noise_weights)] = 0
+                simple_weights[(wnoise == 0) | np.isnan(simple_weights) | np.isinf(simple_weights)] = 0
+
+                #channels = (self.channelmask[ifeed].flatten() == False)
+                #channels = np.where((channels))[0]
 
                 tod    = np.reshape(tod,(tod.shape[0]*tod.shape[1], tod.shape[2]))
-                wnoise = np.reshape(wnoise,(wnoise.shape[0]*wnoise.shape[1], wnoise.shape[2]))
+                noise_weights = np.reshape(noise_weights,(noise_weights.shape[0]*noise_weights.shape[1]))
+                simple_weights = np.reshape(simple_weights,(simple_weights.shape[0]*simple_weights.shape[1]))
+                blanks = np.ones(tod.shape)
+                noise_weights  = blanks*noise_weights[:,None]
+                simple_weights = blanks*simple_weights[:,None]
 
-                nancheck = np.sum(tod[channels,:],axis=1)
-                channels = channels[np.isfinite(nancheck) & (nancheck != 0)]
-                nancheck = np.sum(wnoise[channels,:],axis=1)
-                channels = channels[np.isfinite(nancheck) & (nancheck != 0)]
+                simple_weights[np.isnan(tod)] = 0
+                noise_weights[np.isnan(tod)] = 0
+                tod[np.isnan(tod)] = 0
 
-                tod, wnoise = tod[channels,:], wnoise[channels,:]
-                freq = frequency[channels]
+            
 
-                for ichan, (flow,fhigh) in enumerate(zip([26,27,28,29,30,31,32],[28,29,30,31,32,33,34])):
+                #nancheck = np.sum(tod[channels,:],axis=1)
+                #channels = channels[np.isfinite(nancheck) & (nancheck != 0)]
+                #nancheck = np.sum(wnoise[channels,:],axis=1)
+                #channels = channels[np.isfinite(nancheck) & (nancheck != 0)]
+
+                #tod, wnoise = tod[channels,:], wnoise[channels,:]
+                freq = frequency#[channels]
+
+                
+                for ichan, (flow,fhigh) in enumerate(zip(np.arange(8)+26,np.arange(8)+27)):
                     sel = np.where(((freq >= flow) & (freq < fhigh)))[0]
-                    top = np.sum(tod[sel,:]/wnoise[sel,:]**2,axis=0)
-                    bot = np.sum(1/wnoise[sel,:]**2,axis=0)
-
+                    top = np.sum(tod[sel,:]*noise_weights[sel,:],axis=0)
+                    bot = np.sum(blanks[sel,:]*noise_weights[sel,:],axis=0)
                     self.all_tod[index,ichan,start:end] = top/bot
                     self.all_weights[index,ichan,start:end] = bot
+
+                self.correlation_matrix[iscan,xfeed.flatten(),yfeed.flatten()]  = stats.correlation(self.all_tod[...,scan_samples]).flatten()
+
+
 
     def write(self,data):
         """
@@ -224,3 +253,10 @@ class CreateLevel3(DataStructure):
         if self.level3 in data.keys():
             del data[self.level3]
         data[self.level3] = h5py.ExternalLink(self.outfile,'/')
+
+        stats = data['level2/Statistics']
+        if 'correlation_matrix' in stats:
+            del stats['correlation_matrix']
+        dset = stats.create_dataset('correlation_matrix',  data= self.correlation_matrix)
+        dset.attrs['level3'] = f'{self.level3}'
+        dset.attrs['BW'] = 1

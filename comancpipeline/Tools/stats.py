@@ -57,3 +57,45 @@ def weighted_var(x,e):
 
     v = np.sum((x-m)**2/e**2)/np.sum(1./e**2)
     return v
+
+def norm(tod):
+    """
+    Normalise a TOD (Band,Sample)
+    """
+    rms = np.nanstd(tod,axis=1)
+    mean = np.nanmean(tod,axis=1)
+
+    return (tod-mean[:,None])/rms[:,None]
+
+
+def downsample_time(tod,stepsize, binsize):
+    """
+    Downsample a TOD format: (Band,Sample) to a sampling time of binsize
+    """
+
+    Nsamples = int(binsize/stepsize)
+    nbins = int(tod.shape[1]/Nsamples)
+
+    binedges = np.arange(0,nbins+1)*binsize
+    time = np.arange(tod.shape[1])*stepsize
+
+    tod_out = np.zeros((tod.shape[0],nbins))
+
+    for i in range(tod.shape[0]):
+        tod_out[i] = np.histogram(time,binedges,weights=tod[i])[0]/np.histogram(time,binedges)[0]
+
+    return time,(binedges[1:]+binedges[:-1])/2.,tod_out
+
+def correlation(tod):
+    """
+    Create correlation matrix for 1 second steps in the data
+
+    TOD : (Feed,Band,Sample)
+    """
+    tod = np.reshape(tod,(tod.shape[0]*tod.shape[1],tod.shape[-1]))
+    time,mids,tod = downsample_time(tod,1./50., 1)
+    tod = norm(tod)
+
+    C = tod.dot(tod.T)/tod.shape[1]
+
+    return C
