@@ -89,6 +89,65 @@ subroutine planet(jd, np, dist, len_bn)
   
 end subroutine planet
 
+subroutine h2e_full(az, el, mjd, lon, lat,dut, ra, dec, len_bn)
+  implicit none
+  
+  integer, intent(in) :: len_bn
+  real*8, intent(in) :: lon
+  real*8, intent(in) :: lat
+  real*8, intent(in) :: dut
+  real*8, intent(in) :: az(len_bn)
+  real*8, intent(in) :: el(len_bn)
+  real*8, intent(in) :: mjd(len_bn)
+  real*8, intent(out) :: ra(len_bn)
+  real*8, intent(out) :: dec(len_bn)
+
+  interface
+     real*8 FUNCTION sla_gmst(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_gmst
+  end interface
+
+  interface
+     real*8 FUNCTION sla_dranrm(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dranrm
+  end interface
+
+  interface
+     real*8 FUNCTION sla_dtt(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dtt
+  end interface
+
+  !f2py integer len_bn
+  !f2py real*8 lon, lat
+  !f2py real*8 ra,dec,mjd
+
+  integer :: i
+
+  real*8 :: ra_temp, dec_temp
+  real*8 :: pi = 3.14159265359
+  real*8 :: zob
+  real*8 :: SECPERDAY = 86400.
+  real*8 :: djtt
+  do i=1, len_bn
+     ! call sla_dh2e(az(i), el(i), lat, ra(i), dec(i))
+     
+     zob = pi / 2D0 - el(i)
+     call sla_oap('A',az(i), zob, mjd(i), dut, lon, lat, 0D0, 0D0,0D0,0D0,0D0,0D0,0.55,0D0,ra(i),dec(i))
+
+     djtt = mjd(i) + sla_dtt(mjd(i))/SECPERDAY
+
+     ra_temp = ra(i)
+     dec_temp = dec(i)
+     call sla_amp(ra_temp,dec_temp, djtt, 2000D0,ra(i),dec(i))
+     ra(i) = sla_dranrm(ra(i))
+  enddo    
+
+  
+end subroutine h2e_full
+
 
 subroutine h2e(az, el, mjd, lon, lat, ra, dec, len_bn)
   implicit none

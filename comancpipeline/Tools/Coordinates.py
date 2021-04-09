@@ -272,6 +272,35 @@ def h2e(az, el, mjd, lon, lat, degrees=True):
     ra, dec = pysla.h2e(az*c, el*c, mjd, lon*c, lat*c)
     return ra/c, dec/c
 
+from astropy.utils import iers
+from astropy.time import Time
+from astropy.utils.data import clear_download_cache
+from astroplan import download_IERS_A
+def h2e_full(az, el, mjd, lon, lat, degrees=True): 
+    """
+    Horizon to equatorial coordinates
+
+    args:
+    az - arraylike, azimuth
+    el - arraylike, elevation
+    mjd- arraylike, modified julian date
+    lon- double, longitude
+    lat- double, latitude
+    """
+
+    if degrees:
+        c = np.pi/180.
+    else:
+        c = 1.
+    try:
+        iers_b = iers.IERS_B.open()
+        dut = iers_b.ut1_utc(Time(mjd[0],format='mjd')).value
+    except iers.iers.IERSRangeError:
+        dut = 0
+
+    ra, dec = pysla.h2e_full(az*c, el*c, mjd, lon*c, lat*c,dut)
+    return ra/c, dec/c
+
 def e2h(ra, dec, mjd, lon, lat, degrees=True, return_lha=False):
     """
     Horizon to equatorial coordinates
