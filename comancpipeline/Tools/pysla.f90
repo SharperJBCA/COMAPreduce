@@ -141,6 +141,7 @@ subroutine h2e_full(az, el, mjd, lon, lat,dut, ra, dec, len_bn)
 
      ra_temp = ra(i)
      dec_temp = dec(i)
+     ! RA, DEC, DATE, EPOCH
      call sla_amp(ra_temp,dec_temp, djtt, 2000D0,ra(i),dec(i))
      ra(i) = sla_dranrm(ra(i))
   enddo    
@@ -174,6 +175,22 @@ subroutine h2e(az, el, mjd, lon, lat, ra, dec, len_bn)
      END FUNCTION sla_dranrm
   end interface
 
+  interface
+     real*8 FUNCTION sla_dtt(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dtt
+  end interface
+
+  interface
+     real*8 FUNCTION sla_eqeqx(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_eqeqx
+  end interface
+
+
+  real*8 :: SECPERDAY = 86400.
+  real*8 :: mjd_tt
+  real*8 :: eq
   !f2py integer len_bn
   !f2py real*8 lon, lat
   !f2py real*8 ra,dec,mjd
@@ -185,7 +202,9 @@ subroutine h2e(az, el, mjd, lon, lat, ra, dec, len_bn)
   do i=1, len_bn
      call sla_dh2e(az(i), el(i), lat, ra(i), dec(i))
      gmst = sla_gmst(mjd(i))
-     ra(i) = gmst + lon - ra(i)
+     mjd_tt = mjd(i) + sla_dtt(mjd(i))/SECPERDAY
+     eq = sla_eqeqx(mjd_tt)
+     ra(i) = gmst + lon - ra(i) + eq
      ra(i) = sla_dranrm(ra(i))
   enddo    
 
@@ -244,21 +263,46 @@ subroutine precess(ra, dec,mjd, len_bn)
   real*8, intent(inout) :: dec(len_bn)
 
   interface
-     real*8 FUNCTION sla_epb(mjddummy)
+     real*8 FUNCTION sla_epj(mjddummy)
      real*8 :: mjddummy
-     END FUNCTION sla_epb
+     END FUNCTION sla_epj
   end interface
+  interface
+     real*8 FUNCTION sla_dranrm(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dranrm
+  end interface
+  interface
+     real*8 FUNCTION sla_dtt(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dtt
+  end interface
+
+  interface
+     real*8 FUNCTION sla_eqeqx(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_eqeqx
+  end interface
+
+
+  real*8 :: SECPERDAY = 86400.
+  real*8 :: mjd_tt
 
   !f2py integer len_bn
   !f2py real*8 mjd
   !f2py real*8 ra,dec
 
   integer :: i
-  real*8 :: epoch
+  real*8 :: RNUT(3,3)
+  real*8 :: V(3), Vrot(3)
 
   do i=1, len_bn
-     epoch = sla_epb(mjd(i))
-     call sla_preces('FK5', epoch, 2000D0, ra(i), dec(i))
+     mjd_tt = mjd(i) + sla_dtt(mjd(i))/SECPERDAY
+     call sla_prenut(2000D0,mjd_tt,RNUT)
+     call sla_dcs2c(ra(i),dec(i),V)
+     call sla_dimxv(RNUT,V,Vrot)
+     call sla_dcc2s(Vrot,ra(i),dec(i))
+     ra(i) = sla_dranrm(ra(i))
   enddo    
   
 end subroutine precess
