@@ -244,12 +244,11 @@ def sourcePosition(src, mjd, lon, lat):
         d0 *= 180./np.pi
         r0 = np.interp(mjd,mjd[::index_step],r0)
         d0 = np.interp(mjd,mjd[::index_step],d0)
-        #r0,d0 = precess(r0, d0, mjd)
+        az, el = e2h(r0,d0,mjd,lon ,lat) # Use a straight conversion here as rdplan handles precession/nutation/aberration
     else:
         r0, d0 = mjd*0 + skypos[0], mjd*0 + skypos[1]
-        r0, d0 = precess2year(r0,d0,mjd) # Change to epoch of observation
+        az, el = e2h_full(r0,d0,mjd,lon,lat) # Use the full conversion to precess/nutate/aberrate to observer coordinate frame
 
-    az, el = e2h(r0,d0,mjd,lon ,lat)
     return az, el, r0, d0
 
 def h2e(az, el, mjd, lon, lat, degrees=True): 
@@ -300,6 +299,38 @@ def h2e_full(az, el, mjd, lon, lat, degrees=True):
 
     ra, dec = pysla.h2e_full(az*c, el*c, mjd, lon*c, lat*c,dut)
     return ra/c, dec/c
+
+def e2h_full(ra, dec, mjd, lon, lat, degrees=True, return_lha=False):
+    """
+    Horizon to equatorial coordinates
+
+    args:
+    az - arraylike, azimuth
+    el - arraylike, elevation
+    mjd- arraylike, modified julian date
+    lon- double, longitude
+    lat- double, latitude
+    """
+
+    if degrees:
+        c = np.pi/180.
+    else:
+        c = 1.
+
+    if not isinstance(ra, np.ndarray):
+        ra = np.array([ra])
+    if not isinstance(dec, np.ndarray):
+        dec = np.array([dec])
+    if not isinstance(mjd, np.ndarray):
+        mjd = np.array([mjd])
+
+    dut = 0. # UT1-UTC, get from the IERS database, not implemented. 
+    az, el = pysla.e2h_full(ra*c, dec*c, mjd, lon*c, lat*c, dut)
+    az = np.mod(az,2*np.pi)
+    if return_lha:
+        return az/c, el/c
+    else:
+        return az/c, el/c
 
 def e2h(ra, dec, mjd, lon, lat, degrees=True, return_lha=False):
     """

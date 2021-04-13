@@ -146,8 +146,61 @@ subroutine h2e_full(az, el, mjd, lon, lat,dut, ra, dec, len_bn)
      ra(i) = sla_dranrm(ra(i))
   enddo    
 
-  
 end subroutine h2e_full
+
+
+subroutine e2h_full(ra, dec, mjd, lon, lat,dut, az, el, len_bn)
+  implicit none
+  
+  integer, intent(in) :: len_bn
+  real*8, intent(in) :: lon
+  real*8, intent(in) :: lat
+  real*8, intent(in) :: dut
+  real*8, intent(in) :: ra(len_bn)
+  real*8, intent(in) :: dec(len_bn)
+  real*8, intent(in) :: mjd(len_bn)
+  real*8, intent(out) :: az(len_bn)
+  real*8, intent(out) :: el(len_bn)
+
+  interface
+     real*8 FUNCTION sla_gmst(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_gmst
+  end interface
+
+  interface
+     real*8 FUNCTION sla_dranrm(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dranrm
+  end interface
+
+  interface
+     real*8 FUNCTION sla_dtt(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dtt
+  end interface
+
+  !f2py integer len_bn
+  !f2py real*8 lon, lat
+  !f2py real*8 ra,dec,mjd
+
+  integer :: i
+
+  real*8 :: ra_temp, dec_temp, ha
+  real*8 :: pi = 3.14159265359
+  real*8 :: SECPERDAY = 86400.
+  real*8 :: djtt
+  do i=1, len_bn
+     ! call sla_dh2e(az(i), el(i), lat, ra(i), dec(i))
+     djtt = mjd(i) + sla_dtt(mjd(i))/SECPERDAY
+     ! Convert from Mean to Apparent position
+     call sla_map(ra(i),dec(i), 0D0, 0D0, 0D0, 0D0, 2000D0, djtt,ra_temp,dec_temp)
+     call sla_aop(ra_temp,dec_temp, mjd(i), dut, lon, lat, 0D0, 0D0, 0D0, 0D0, 0D0, 0D0, 0.55D0, 0D0, & 
+          az(i), el(i), ha, dec_temp, ra_temp) 
+     el(i) = pi / 2D0 - el(i)
+  enddo    
+
+end subroutine e2h_full
 
 
 subroutine h2e(az, el, mjd, lon, lat, ra, dec, len_bn)
