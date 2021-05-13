@@ -19,10 +19,10 @@ comap_latitude  =   37.0 + 14./60. + 2/60.**2
 def sex2deg(dms,hours=False):
 
     d,m,s = dms.split(':')
-    if float(d) == 0:
-        sign = 1
+    if '-' in d:
+        sign = -1
     else:
-        sign = float(d)/np.abs(float(d))
+        sign = 1
 
     out = np.abs(float(d)) + float(m)/60. + float(s)/60.**2
     out *= sign

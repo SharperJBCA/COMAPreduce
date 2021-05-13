@@ -4,6 +4,7 @@ from matplotlib import pyplot
 
 from astropy import wcs
 from astropy.io import fits
+from comancpipeline.Tools import Coordinates
 
 def query_disc(x0,y0,r, wcs, shape):
     """
@@ -26,8 +27,29 @@ def query_annullus(x0,y0,r0, r1, wcs, shape):
 
     rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
     select = np.where((rpix_world >= r0) & (rpix_world < r1))[0]
-
+    
     return select,xpix_world[select],ypix_world[select]
+
+def query_slice(x0,y0,x1,y1,wcs,shape,width=None):
+
+    nypix,nxpix = shape
+    xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
+    xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
+
+    if isinstance(width,type(None)):
+        width = np.abs(wcs.wcs.cdelt[1])
+
+    m = (y1-y0)/(x1-x0)
+    yvec = m * (xpix_world-x0) + y0 
+
+    xmid = (x1+x0)/2.
+    xwidth=np.abs(x1-x0)/2.
+    ymid = (y1+y0)/2.
+    ywidth=np.abs(y1-y0)/2.
+
+    select = (np.abs(yvec-ypix_world) < width) &  (np.abs(xpix_world-xmid) < xwidth) & (np.abs(ypix_world-ymid) < ywidth) 
+    angular_dist = Coordinates.AngularSeperation(x0,y0,xpix_world[select], ypix_world[select])
+    return select,xpix_world[select], ypix_world[select], angular_dist
 
 
 def Info2WCS(naxis, cdelt, crval, ctype=['RA---TAN', 'DEC--TAN']):
