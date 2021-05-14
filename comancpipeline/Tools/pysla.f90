@@ -54,7 +54,7 @@ subroutine rdplan(jd, np, lon, lat, ra, dec, diam, len_bn)
 
 
   do k=1, len_bn
-     call sla_rdplan(jd(k),np,lon*pi/180.0,lat*pi/180.0,ra(k),dec(k),diam(k))
+     call sla_rdplan(jd(k),np,lon,lat,ra(k),dec(k),diam(k))
   enddo
   
 end subroutine rdplan

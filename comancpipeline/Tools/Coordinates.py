@@ -156,7 +156,7 @@ def rdplan(mjd, planet, lon, lat, degrees=True):
     else   =   Sun
     """
 
-    if not degrees:
+    if degrees:
         c = np.pi/180.
     else:
         c = 1.
