@@ -400,7 +400,7 @@ class FitSource(DataStructure):
             self.logger(f'{fname}:{self.name}: Fitting global source offset')
             # First get the positions of the sources from the feed average
             self.fit_source_position(data,self.feed_avg)
-
+            self.fit_peak_az_and_el(data)
             self.logger(f'{fname}:{self.name}: Fitting source bands ({freqwidth:.1f}MHz).')
             # Finally, fit the data in the maps
             self.fit_map(data,self.maps)
@@ -540,6 +540,19 @@ class FitSource(DataStructure):
             except ValueError as e:
                 self.logger(f'{fname}:emcee:{e}',error=e)
                 
+    def fit_peak_az_and_el(self,data):
+        """
+        Use the best fit source position fit to determine the absolute azimuth and elevation position
+        """
+
+        az  = data['level1/spectrometer/pixel_pointing/pixel_az'][0,:]
+        el  = data['level1/spectrometer/pixel_pointing/pixel_el'][0,:]
+        tod_model = self.model.func(self.avg_map_fits['Values'][0,:], (az,el))
+        imax = np.argmax(tod_model)
+        az_max = az[imax]
+        el_max = el[imax]
+        self.az_el_peak   = {'AZ_PEAK': np.array([az_max]),
+                             'EL_PEAK': np.array([el_max])}
 
     def fit_map(self,data,maps):
         """
@@ -787,6 +800,15 @@ class FitSource(DataStructure):
         # Set permissions and group
         os.chmod(outfile,0o664)
         shutil.chown(outfile, group='comap')
+
+
+        # Write Peak Az/El Positions
+        for dname, dset in self.az_el_peak.items():
+            if dname in output:
+                del output[dname]
+            output.create_dataset(dname,  data=dset)
+
+        
 
         # Store datasets in root
         dnames = ['Maps','Covs']

@@ -220,9 +220,6 @@ class CreateLevel2Cont(DataStructure):
         self.comment = self.getComment(data)
         prefix = data.filename.split('/')[-1].split('.hd5')[0]
         self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
-
-        print(self.outfilename)
-        print(os.path.exists(self.outfilename),(not self.overwrite))
         
         # Skip files that are already calibrated:
         if os.path.exists(self.outfilename) & (not self.overwrite): 
@@ -641,7 +638,7 @@ class CalculateVaneMeasurement(DataStructure):
                         pyplot.grid()
                         pyplot.savefig('figures/Tsys_Example.png')
                         pyplot.clf()
-
+                    
                     chans = np.arange(tsys.size)
                     peaks,properties = find_peaks(tsys,prominence=5,width=[0,60])
                     widths = (properties['right_ips']-properties['left_ips'])*2

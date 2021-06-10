@@ -5,6 +5,31 @@ from matplotlib import pyplot
 from astropy import wcs
 from astropy.io import fits
 from comancpipeline.Tools import Coordinates
+from astropy.coordinates import SkyCoord
+
+def xlim_proj(w,x0,x1):
+    pyplot.xlim(w.world_to_pixel(SkyCoord(x0,0,frame='galactic',unit='deg'))[0],\
+                w.world_to_pixel(SkyCoord(x1,0,frame='galactic',unit='deg'))[0])
+
+def ylim_proj(w,y0,y1):
+    z =(w.world_to_pixel(SkyCoord(w.wcs.crval[0],y0,frame='galactic',unit='deg'))[1],\
+        w.world_to_pixel(SkyCoord(w.wcs.crval[0],y1,frame='galactic',unit='deg'))[1])
+    pyplot.ylim(*z)
+
+def get_xlim_ylim(x0,y0,width,wcs,shape):
+
+    nypix,nxpix = shape
+    xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
+    xpix_world,ypix_world = wcs.wcs_pix2world(xpix, ypix,0)
+    
+    select = (xpix_world < (x0 + width/2.)) & (xpix_world > (x0 - width/2.)) &\
+             (ypix_world < (y0 + width/2.)) & (ypix_world > (y0 - width/2.))
+
+    xflat = np.where((np.sum(select,axis=0) > 0))[0]
+    yflat = np.where((np.sum(select,axis=1) > 0))[0]
+
+    return (min(xflat),max(xflat)), (min(yflat),max(yflat)), np.where(select.flatten())[0]
+
 
 def query_disc(x0,y0,r, wcs, shape):
     """
@@ -14,7 +39,7 @@ def query_disc(x0,y0,r, wcs, shape):
     xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
 
     rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
-    select = np.where((rpix_world < r))[0]
+    select = (rpix_world < r)
 
     return select,xpix_world[select],ypix_world[select]
 
@@ -43,11 +68,17 @@ def query_slice(x0,y0,x1,y1,wcs,shape,width=None):
     yvec = m * (xpix_world-x0) + y0 
 
     xmid = (x1+x0)/2.
-    xwidth=np.abs(x1-x0)/2.
+    if x1 != x0:
+        xwidth=np.abs(x1-x0)/2.
+    else:
+        xwidth = width
     ymid = (y1+y0)/2.
-    ywidth=np.abs(y1-y0)/2.
+    if y1 != y0:
+        ywidth=np.abs(y1-y0)/2.
+    else:
+        ywidth = width
 
-    select = (np.abs(yvec-ypix_world) < width) &  (np.abs(xpix_world-xmid) < xwidth) & (np.abs(ypix_world-ymid) < ywidth) 
+    select = (np.abs(yvec-ypix_world) < width) & (np.abs(ypix_world-ymid) < ywidth)  & (np.abs(xpix_world-xmid) < xwidth)  
     angular_dist = Coordinates.AngularSeperation(x0,y0,xpix_world[select], ypix_world[select])
     return select,xpix_world[select], ypix_world[select], angular_dist
 

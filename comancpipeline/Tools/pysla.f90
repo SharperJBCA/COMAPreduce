@@ -290,6 +290,22 @@ subroutine e2h(ra, dec, mjd, lon, lat, az, el,lha, len_bn)
      END FUNCTION sla_dranrm
   end interface
 
+  interface
+     real*8 FUNCTION sla_dtt(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dtt
+  end interface
+
+  interface
+     real*8 FUNCTION sla_eqeqx(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_eqeqx
+  end interface
+
+
+  real*8 :: SECPERDAY = 86400.
+  real*8 :: mjd_tt
+  real*8 :: eq
 
   !f2pye2h integer len_bn
   !f2py real*8 lon, lat
@@ -300,7 +316,9 @@ subroutine e2h(ra, dec, mjd, lon, lat, az, el,lha, len_bn)
 
   do i=1, len_bn
      gmst = sla_gmst(mjd(i))
-     lha(i) = lon + gmst - ra(i) ! CONVERT TO LHA
+     mjd_tt = mjd(i) + sla_dtt(mjd(i))/SECPERDAY
+     eq = sla_eqeqx(mjd_tt)
+     lha(i) = lon + gmst - ra(i) + eq ! CONVERT TO LHA
      call sla_de2h(lha(i), dec(i), lat, az(i), el(i))
   enddo    
 
@@ -460,6 +478,23 @@ subroutine pa(ra, dec,mjd, lon,lat,pang, len_bn)
      END FUNCTION sla_pa
   end interface
 
+  interface
+     real*8 FUNCTION sla_dtt(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dtt
+  end interface
+
+  interface
+     real*8 FUNCTION sla_eqeqx(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_eqeqx
+  end interface
+
+
+  real*8 :: SECPERDAY = 86400.
+  real*8 :: mjd_tt
+  real*8 :: eq
+
   !f2py integer len_bn
   !f2py real*8 mjd, lon, lat
   !f2py real*8 ra,dec, pang
@@ -469,7 +504,9 @@ subroutine pa(ra, dec,mjd, lon,lat,pang, len_bn)
 
   do i=1, len_bn
      gmst = sla_gmst(mjd(i))
-     ha = gmst + lon - ra(i)
+     mjd_tt = mjd(i) + sla_dtt(mjd(i))/SECPERDAY
+     eq = sla_eqeqx(mjd_tt)
+     ha = gmst + lon - ra(i) + eq
      pang(i) = sla_pa(ha, dec(i), lat)
   enddo    
 
