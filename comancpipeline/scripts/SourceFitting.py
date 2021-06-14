@@ -155,6 +155,20 @@ class FitSource(SourceFitting.FitSource):
             self.nodata = True
             return
 
+    def fit_peak_az_and_el(self,data):
+        """
+        Use the best fit source position fit to determine the absolute azimuth and elevation position
+        """
+
+        az  = data['spectrometer/pixel_pointing/pixel_az'][0,:]
+        el  = data['spectrometer/pixel_pointing/pixel_el'][0,:]
+        tod_model = self.model.func(self.avg_map_fits['Values'][0,:], (az,el))
+        imax = np.argmax(tod_model)
+        az_max = az[imax]
+        el_max = el[imax]
+        self.az_el_peak   = {'AZ_PEAK': np.array([az_max]),
+                             'EL_PEAK': np.array([el_max])}
+
 
     def fit_source(self,data, maps,limfunc=None,fixed_parameters={}):
         """
