@@ -140,6 +140,7 @@ class FitSource(SourceFitting.FitSource):
             self.logger(f'{fname}:{self.name}: Fitting global source offset')
             # First get the positions of the sources from the feed average
             self.model_fits['feed_avg'] = self.fit_source(data, self.maps['feed_avg'],limfunc=limfunc)
+            self.fit_peak_az_and_el(data)
 
             self.logger(f'{fname}:{self.name}: Fitting source bands.')
             # Finally, fit the data in the maps
@@ -149,7 +150,6 @@ class FitSource(SourceFitting.FitSource):
                     return True
                 return False
             self.model_fits['maps'] = self.fit_source(data, self.maps['maps'],limfunc=limfunc,fixed_parameters={'x0':True,'y0':True,'phi':True})
-            self.fit_peak_az_and_el(data)
 
         else:
             self.nodata = True
@@ -162,7 +162,7 @@ class FitSource(SourceFitting.FitSource):
 
         az  = data['spectrometer/pixel_pointing/pixel_az'][0,:]
         el  = data['spectrometer/pixel_pointing/pixel_el'][0,:]
-        tod_model = self.model.func(self.model_fits['maps']['Values'][0,:], (az,el))
+        tod_model = self.model.func(self.model_fits['feed_avg']['Values'][0,0,:], (az,el))
         imax = np.argmax(tod_model)
         az_max = az[imax]
         el_max = el[imax]
