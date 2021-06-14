@@ -1,5 +1,5 @@
 from comancpipeline.Analysis.BaseClasses import DataStructure
-from comancpipeline.Analysis import Calibration
+from comancpipeline.Analysis import Calibration, SourceFitting
 from comancpipeline.data import Data
 
 from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, binFuncs, stats
@@ -16,7 +16,7 @@ from matplotlib import pyplot
 from scipy.ndimage.filters import median_filter
 import os
 
-class FitSource(DataStructure):
+class FitSource(SourceFitting.FitSource):
     """
     Base source fitting class.
 
@@ -149,6 +149,8 @@ class FitSource(DataStructure):
                     return True
                 return False
             self.model_fits['maps'] = self.fit_source(data, self.maps['maps'],limfunc=limfunc,fixed_parameters={'x0':True,'y0':True,'phi':True})
+            self.fit_peak_az_and_el(data)
+
         else:
             self.nodata = True
             return
@@ -363,6 +365,11 @@ class FitSource(DataStructure):
             os.remove(outfile)
 
         output = h5py.File(outfile,'a')
+        # Write Peak Az/El Positions
+        for dname, dset in self.az_el_peak.items():
+            if dname in output:
+                del output[dname]
+            output.create_dataset(dname,  data=dset)
                   
         if 'Maps' in output:
             del output['Maps']
