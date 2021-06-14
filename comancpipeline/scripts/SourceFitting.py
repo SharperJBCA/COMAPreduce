@@ -162,7 +162,7 @@ class FitSource(SourceFitting.FitSource):
 
         az  = data['spectrometer/pixel_pointing/pixel_az'][0,:]
         el  = data['spectrometer/pixel_pointing/pixel_el'][0,:]
-        tod_model = self.model.func(self.avg_map_fits['Values'][0,:], (az,el))
+        tod_model = self.model.func(self.model_fits['maps']['Values'][0,:], (az,el))
         imax = np.argmax(tod_model)
         az_max = az[imax]
         el_max = el[imax]
