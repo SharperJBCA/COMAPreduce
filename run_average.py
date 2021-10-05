@@ -4,13 +4,10 @@ rank = comm.Get_rank()
 
 import numpy as np
 #from comancpipeline.Tools import *
-from comancpipeline.Analysis import BaseClasses
-from comancpipeline.Analysis import Calibration
 from comancpipeline.Tools import Parser, Logging
 import sys
 import h5py
 import os
-from comancpipeline.Analysis.Calibration import NoHotError,NoColdError,NoDiodeError
 import click
 
 import ast
@@ -33,9 +30,16 @@ def call_main(parameters, classinfo, start, end):
     main(parameters, classinfo, start, end)
 
 def main(parameters,classinfo, start=None, end=None):
-
     # Get the inputs:
-    jobobjs, filelist, mainConfig, classConfig, logger = Parser.parse_parameters(parameters)
+    jobobjs, prejobobjs, filelist, mainConfig, classConfig, logger = Parser.parse_parameters(parameters)
+    logger(f'STARTING')
+
+    # Only let rank 0 do prejobs
+    if rank == 0:
+        for job in prejobobjs:
+            job()
+
+    comm.Barrier()
 
     # Move this to parser and link to job objects?
 
@@ -49,13 +53,14 @@ def main(parameters,classinfo, start=None, end=None):
         print('Opening : {}'.format(filename))
         try:
             dh5 = h5py.File(filename, 'r')
-        except OSError:
-            print('Error: Could not open {}'.format(filename.split('/')[-1]))
+        except OSError as e:
+            logger(f'{fname}:{e}',error=e)
             continue
 
         for job in jobobjs:
             if rank == 0:
                 print(job,flush=True)
+            #if True:
             try:
                 dh5 = job(dh5)
             except Exception as e: 

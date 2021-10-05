@@ -1,0 +1,25 @@
+#!/bin/bash
+#PBS -l nodes=1:ppn=32
+
+# Name of Job 
+#PBS -N comap_pipeline_taua_rerun
+
+# Logs
+#PBS -j oe
+
+# Email
+#PBS -m ae
+#PBS -M stuart.harper@manchester.ac.uk
+
+#PBS -V
+
+cd $PBS_O_WORKDIR
+echo "Running job in" $PBS_O_WORKDIR
+pwd
+
+echo "list of nodes being used";
+cat $PBS_NODEFILE
+
+num_procs=$(cat $PBS_NODEFILE | wc -l)
+
+mpirun -n 16 python batchrun.py ParameterFiles/inputs_fornax_TauA.ini
