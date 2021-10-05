@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
 import h5py
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
 
@@ -21,7 +21,7 @@ from scipy.optimize import minimize
 
 from tqdm import tqdm
 
-class SigmaClip(DataStructure): 
+class SigmaClip(BaseClasses.DataStructure): 
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """

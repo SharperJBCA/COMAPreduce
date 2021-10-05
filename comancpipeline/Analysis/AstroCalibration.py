@@ -1,7 +1,7 @@
 import concurrent.futures
 
 import numpy as np
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis import Calibration
 from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, binFuncs, stats, CaliModels
 from scipy.optimize import fmin, leastsq, minimize
@@ -44,7 +44,7 @@ sourcecodes = {'jupiter':0,
                'CasA':2,
                'CygA':3}
 
-class AstroCal(DataStructure):
+class AstroCal(BaseClasses.DataStructure):
     """
     Read in all the calibration factors, update Level 2 files with astro factors
 

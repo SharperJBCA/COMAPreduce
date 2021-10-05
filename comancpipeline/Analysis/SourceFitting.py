@@ -1,7 +1,7 @@
 import concurrent.futures
 
 import numpy as np
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis import Calibration
 from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, binFuncs, stats
 from comancpipeline.data import Data
@@ -254,7 +254,7 @@ def fisher(_x,_y,P):
     return F
 
 
-class FitSource(DataStructure):
+class FitSource(BaseClasses.DataStructure):
     """
     Base source fitting class.
 
@@ -272,7 +272,9 @@ class FitSource(DataStructure):
                  binwidth = 1,
                  level2='level2',
                  fwhm_prior = 'none',
-                 fit_alt_scan = True,
+                 fit_alt_scan = False,
+                 use_leastsqs=False,
+                 use_bootstrap=False,
                  fitfunc='Gauss2dRot',**kwargs):
         """
         average_width - how many channels to average over
@@ -302,7 +304,7 @@ class FitSource(DataStructure):
 
         self.level2=level2
 
-        self.model = Fitting.Gauss2dRot_General()
+        self.model = Fitting.Gauss2dRot_General(use_leastsqs=use_leastsqs,use_bootstrap=use_bootstrap)
 
         self.fit_alt_scan = fit_alt_scan
         
@@ -368,13 +370,12 @@ class FitSource(DataStructure):
     def run(self,data):
         """
         """
-
+        
         fname = data.filename.split('/')[-1]
         # Get data structures we need
         alltod = data[f'{self.level2}/averaged_tod']
 
         self.feeds, self.feedlist, self.feeddict = self.getFeeds(data,self.feeds_select)
-
         freq = data[f'{self.level2}/frequency'][...]
         
         sky_data_flag = ~Calibration.get_vane_flag(data['level1']) 
@@ -385,7 +386,6 @@ class FitSource(DataStructure):
         if self.source in Coordinates.CalibratorList:
             
             nHorns, nSBs, nChans, nSamples = alltod.shape   
-
             # First we will apply a median filter
             filters = self.filter_data(alltod,sky_data_flag,500)
 
@@ -468,7 +468,11 @@ class FitSource(DataStructure):
                 self.alt_scan_fits[key]['Chi2'][:] = min_chi2,ddof
 
             except ValueError as e:
-                self.logger(f'{fname}:emcee:{e}',error=e)
+                try:
+                    self.logger(f'{fname}:emcee:{e}',error=e)
+                except TypeError:
+                    self.logger(f'{fname}:emcee:{e}')
+
                 
     def prepare_maps(self,_m,_c,xygrid):
         """
@@ -519,7 +523,7 @@ class FitSource(DataStructure):
         self.avg_map_fits   = {'Values': np.zeros((maps['map'].shape[0],self.model.nparams)),
                                'Errors': np.zeros((maps['map'].shape[0],self.model.nparams)),
                                'Chi2': np.zeros((maps['map'].shape[0],2))}
- 
+
         for ifeed in tqdm(self.feedlist,desc=f'{self.name}:source_position:{self.source}'):
 
             try:
@@ -532,13 +536,20 @@ class FitSource(DataStructure):
 
             # Perform the least-sqaures fit
             try:
-                result, error,samples, min_chi2, ddof = self.model(P0, (x,y), m, c,
+                gd = (c != 0) & np.isfinite(m) & np.isfinite(c)
+
+                result, error,samples, min_chi2, ddof = self.model(P0, (x[gd],y[gd]), m[gd], c[gd],
                                                                    P0_priors=P0_priors,return_array=True)
+
                 self.avg_map_fits['Values'][ifeed,:] = result
                 self.avg_map_fits['Errors'][ifeed,:] = error
                 self.avg_map_fits['Chi2'][ifeed,:] = min_chi2, ddof
             except ValueError as e:
-                self.logger(f'{fname}:emcee:{e}',error=e)
+                try:
+                    self.logger(f'{fname}:emcee:{e}',error=e)
+                except TypeError:
+                    self.logger(f'{fname}:emcee:{e}')
+
                 
     def fit_peak_az_and_el(self,data):
         """
@@ -576,6 +587,7 @@ class FitSource(DataStructure):
         self.map_fits ={'Values': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],self.model.nparams)),
                         'Errors': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],self.model.nparams)),
                         'Chi2': np.zeros((maps['map'].shape[0],maps['map'].shape[1],maps['map'].shape[2],2))}
+
         for ifeed in tqdm(self.feedlist,desc=f'{self.name}:fit_map:{self.source}'):        
             for isb in range(maps['map'].shape[1]):
                 for ichan in range(maps['map'].shape[2]):
@@ -593,20 +605,25 @@ class FitSource(DataStructure):
                                             y0=self.avg_map_fits['Values'][ifeed,3],
                                             phi=self.avg_map_fits['Values'][ifeed,5])
 
+                    print('INFO',ifeed,isb,ichan)
                     try:
-                        result, error, samples, min_chi2, ddof = self.model(P0, (x,y), m, c,P0_priors=P0_priors,return_array=True)
-                        #import corner
-                        #from matplotlib import pyplot
-                        #corner.corner(samples)
-                        #pyplot.show()
+                        gd = (c != 0) & np.isfinite(m) & np.isfinite(c)
+
+                        result, error,samples, min_chi2, ddof = self.model(P0, (x[gd],y[gd]), m[gd], c[gd],
+                                                                           P0_priors=P0_priors,return_array=True)
+
                         self.map_fits['Values'][ifeed,isb,ichan,:] = result
                         self.map_fits['Errors'][ifeed,isb,ichan,:] = error
                         self.map_fits['Chi2'][ifeed,isb,ichan,:] = min_chi2, ddof
-
+                        
                     except ValueError as e:
                         result = 0
                         error = 0
-                        self.logger(f'{fname}:emcee:{e}',error=e)
+                        try:
+                            self.logger(f'{fname}:emcee:{e}',error=e)
+                        except TypeError:
+                            self.logger(f'{fname}:emcee:{e}')
+
                 
 
     def aperture_phot(self,data,x,y,v):
@@ -665,6 +682,7 @@ class FitSource(DataStructure):
                      'CCW':{'map':np.zeros((self.Nx,self.Ny)),
                             'cov':np.zeros((self.Nx,self.Ny))}}
 
+
         azSource, elSource, raSource, decSource = Coordinates.sourcePosition(self.source, mjd, self.lon, self.lat)
         self.src_el = np.mean(elSource)
         self.src_az = np.mean(azSource)
@@ -706,13 +724,12 @@ class FitSource(DataStructure):
                                 binFuncs.binValues(temp_maps[k], pixels[direction], weights=weights[k][direction],mask=mask[direction])
                                 scan_maps[key][k] += np.reshape(temp_maps[k],(self.Ny,self.Nx))
 
+
         xygrid = np.meshgrid((np.arange(self.Nx)+0.5)*self.dx - self.Nx*self.dx/2.,
                              (np.arange(self.Ny)+0.5)*self.dy - self.Ny*self.dy/2.)
 
         feed_avg['xygrid'] = xygrid
         maps['xygrid'] = xygrid
-        
-        feed_avg = self.average_maps(feed_avg)
         
         for key in scan_maps.keys():
             scan_maps[key] = self.average_maps(scan_maps[key])
@@ -745,12 +762,14 @@ class FitSource(DataStructure):
         Dx = (Nx*dx)
         Dy = (Ny*dy)
 
-        pX = ((x+Dx/2.)/dx).astype(int)
-        pY = ((y+Dy/2.)/dy).astype(int)
+        # Not Nx + 1 to account for rounding
+        pX = (x/dx + (Nx + 2)/2.).astype(int)
+        pY = (y/dy + (Ny + 2)/2.).astype(int)
         pixels = pX + pY*Nx
         pixels[((pX < 0) | (pX >= Nx)) | ((pY < 0) | (pY >= Ny))] = -1
 
-        return pixels,((x+Dx/2.)/dx),((y+Dy/2.)/dy)
+        # here we do use Nx + 1 as you want the precise float value of the pixel.
+        return pixels,x/dx + (Nx + 1)/2.,  y/dx + (Nx + 1.)/2.
         
         
 
@@ -795,6 +814,7 @@ class FitSource(DataStructure):
         if os.path.exists(outfile):
             os.remove(outfile)
 
+        print ('WRITING: ',outfile)
         output = h5py.File(outfile,'a')
 
         # Set permissions and group
@@ -842,6 +862,7 @@ class FitSource(DataStructure):
             for (dname, dset) in zip(dnames, dsets):
                 if dname in output:
                     del output[dname]
+                print(dname,dset.shape,units[dname])
                 gauss_dset = gauss_fits.create_dataset(dname,  data=dset)
                 gauss_dset.attrs['Unit'] = units[dname]
         

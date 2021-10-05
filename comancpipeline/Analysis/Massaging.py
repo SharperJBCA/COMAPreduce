@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
 import h5py
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import BaseClasses 
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Tools import Coordinates, Types
 from os import listdir, getcwd
@@ -10,7 +10,7 @@ from os.path import isfile, join
 #from mpi4py import MPI 
 #comm = MPI.COMM_WORLD
 
-class CheckDsetSizes(DataStructure):
+class CheckDsetSizes(BaseClasses.DataStructure):
     """
     Changes fullFieldLength dimension to match dset dimensions if they have changed
     """
@@ -32,7 +32,7 @@ class CheckDsetSizes(DataStructure):
                         except IndexError:
                             pass
 
-class CopyDsets(DataStructure):
+class CopyDsets(BaseClasses.DataStructure):
 
     def __init__(self, data_dir=None):
 

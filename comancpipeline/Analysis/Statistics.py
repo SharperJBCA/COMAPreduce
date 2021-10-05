@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
 import h5py
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
 
@@ -41,7 +41,7 @@ def AtmosGroundModel(fits,az,el):
 
 
 
-class RepointEdges(DataStructure):
+class RepointEdges(BaseClasses.DataStructure):
     """
     Scan Edge Split - Each time the telescope stops to repoint this is defined as the edge of a scan
     """
@@ -110,7 +110,7 @@ class RepointEdges(DataStructure):
 
 
 
-class ScanEdges(DataStructure):
+class ScanEdges(BaseClasses.DataStructure):
     """
     Splits up observations into "scans" based on parameter inputs
     """
@@ -203,7 +203,7 @@ class ScanEdges(DataStructure):
             statistics.create_dataset(dname,  data=dset)
 
 
-class FnoiseStats(DataStructure):
+class FnoiseStats(BaseClasses.DataStructure):
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
@@ -485,7 +485,7 @@ class FnoiseStats(DataStructure):
             statistics[dname].attrs['medfilt_stepsize'] = self.medfilt_stepsize
 
 
-class SkyDipStats(DataStructure):
+class SkyDipStats(BaseClasses.DataStructure):
     """
     Takes level 2 files, bins and calibrates them for continuum analysis.
     Does not require scan_edges to run
@@ -624,7 +624,7 @@ class SkyDipStats(DataStructure):
             SkyDipStats.create_dataset(dname,  data=dset)
 
 
-class SunDistance(DataStructure):
+class SunDistance(BaseClasses.DataStructure):
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
@@ -713,7 +713,7 @@ class SunDistance(DataStructure):
             distance_grp.create_dataset(dname,data=dset)
 
 
-class WindSpeed(DataStructure):
+class WindSpeed(BaseClasses.DataStructure):
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """

@@ -13,7 +13,7 @@ import healpy as hp
 from comancpipeline.Tools.median_filter import medfilt
 from comancpipeline.Tools import  binFuncs, stats
 
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
 from comancpipeline.Analysis import Statistics
@@ -28,7 +28,7 @@ from tqdm import tqdm
 
 __level3_version__='v2'
 
-class CreateLevel3(DataStructure):
+class CreateLevel3(BaseClasses.DataStructure):
     def __init__(self,level2='level2',level3='level3',output_dir = None,
                  channel_mask=None, gain_mask=None, calibration_factors=None, **kwargs):
         """

@@ -1,5 +1,5 @@
 import numpy as np
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs
 from scipy.optimize import fmin, leastsq
 from scipy.interpolate import interp1d
@@ -72,7 +72,7 @@ sources = {'TauA':Source([5,34,31.94],[22,0,52.2]),
            'CygA':Source([19,59,28.36],[40,44,2.10])}
 
 
-class SimulateObservation(DataStructure):
+class SimulateObservation(BaseClasses.DataStructure):
     """
     Base source fitting class.
 
@@ -272,7 +272,7 @@ class SimulateDiffuse(SimulateObservation):
             #pyplot.plot(self.Diffuse(self.ra[0,:],self.dec[0,:]))
             #pyplot.show()
 
-class SimulateNoise(DataStructure):
+class SimulateNoise(BaseClasses.DataStructure):
     """
     Base source fitting class.
 
@@ -319,7 +319,7 @@ class SimulateNoise(DataStructure):
                 for k in range(nChans):
                     tod[i,j,k,:] = self.realisation(nSamples)
 
-class SimulateWhiteNoise(DataStructure):
+class SimulateWhiteNoise(BaseClasses.DataStructure):
     """
     Base source fitting class.
 
@@ -375,7 +375,7 @@ class SimulateWhiteNoise(DataStructure):
             data.updatedset('spectrometer/tod', tod)
             data.setAttr('comap', 'sim_tod', True)
 
-class SimulateSignal(DataStructure):
+class SimulateSignal(BaseClasses.DataStructure):
     """
     Base source fitting class.
 

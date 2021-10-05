@@ -6,25 +6,25 @@ from astropy.time import Time
 
 kb = 1.38064852e-23
 cspeed  = 3e-1 # Gm/second
-
+cspeed_full = 299792458.
 # At 5.2 AU, ref Weiland et al 2011
 nujwmap = np.array([22.85, 33.11, 40.82, 60.85, 93.32])
 Tjwmap  = np.array([136.2, 147.2, 154.8, 165.6, 173.5])
-nujkarim2014 = [34.688,
-               34.188,
-               33.688,
-               33.188,
-               32.688,
-               32.188,
-               31.688,
-               31.188,
-               30.688,
-               30.188,
-               29.688,
-               29.188,
-               28.688,
-               28.188,
-               27.688]
+nujkarim2014 = np.array([34.688,
+                         34.188,
+                         33.688,
+                         33.188,
+                         32.688,
+                         32.188,
+                         31.688,
+                         31.188,
+                         30.688,
+                         30.188,
+                         29.688,
+                         29.188,
+                         28.688,
+                         28.188,
+                         27.688])
 Tjkarim2014 = [151.013,
                150.385,
                149.615,
@@ -41,7 +41,8 @@ Tjkarim2014 = [151.013,
                142.369,
                141.757]
 
-jupfit  = np.poly1d(np.polyfit(np.log10(nujkarim2014), np.log10(Tjkarim2014), 1))
+jupfit  = np.poly1d(np.polyfit(np.log10(nujkarim2014/30.), np.log10(Tjkarim2014), 1))
+print(jupfit[0],jupfit[1],jupfit)
 jupAng0 = 2.481e-8 # sr
 
 def JupiterFlux(nu, mjd, lon=0, lat=0, source='jupiter',allpos=False,return_jansky=False):
@@ -53,9 +54,9 @@ def JupiterFlux(nu, mjd, lon=0, lat=0, source='jupiter',allpos=False,return_jans
     jupAng = jupAng0*(5.2/dist)**2
     
     if return_jansky:
-        return 2. * kb * (nu/cspeed)**2 * 10**jupfit(np.log10(nu)) * jupAng * 1e26
+        return 2. * kb * (nu/cspeed)**2 * 10**jupfit(np.log10(nu/30.)) * jupAng * 1e26
     else:
-        return 10**jupfit(np.log10(nu)) * jupAng , dist
+        return 10**jupfit(np.log10(nu/30.)) * jupAng , dist
 
 def CygAFlux(nu, mjd=None, lon=0,lat=0,source='CygA',**kwargs):
     """
@@ -131,13 +132,51 @@ def TauAFlux(nu, mjd=None, lon=0,lat=0,source='TauA',**kwargs):
 
     return 10**logS*sec
     
+class JupiterFluxModel:
+    def __init__(self,flux_model='karim2014'):
+        
+        self.flux_model_name = flux_model
+
+        self.model = getattr(self,self.flux_model_name)
+        self.jupAng0 = 2.481e-8 # sr
+        self.ref_year = None
+        # Setup parameters
+        self.model(0)
+
+    def karim2014(self,nu,mjd=51544, lon=0, lat=0, source='jupiter',allpos=False,return_jansky=False,**kwargs):
+        """
+        args:
+        nu - in GHz
+        mjd - 
+        """
+        
+        self.P = {'a':jupfit[0],
+                  'b':jupfit[1],
+                  'c': 0}
+
+        r0, d0, dist = Coordinates.getPlanetPosition(source, lon, lat, mjd,allpos=allpos)
+        jupAng = self.jupAng0*(5.2/dist)**2
+    
+        if return_jansky:
+            return 2. * kb * (nu/cspeed)**2 * 10**jupfit(np.log10(nu/30.)) * jupAng * 1e26
+        else:
+            return 10**jupfit(np.log10(nu/30.)) * jupAng , dist
+
+        
 
 class TauAFluxModel:
     def __init__(self,flux_model='weiland_combined',secular_model='weiland_secular'):
         
         self.flux_model_name = flux_model
-    
         self.sec_model_name = secular_model
+
+        self.model = getattr(self,self.flux_model_name)
+        self.sec_model = getattr(self,self.sec_model_name)
+
+        # Setup parameters
+        self.model(0)
+        self.sec_model(0,0)
+
 
     def __call__(self, nu, mjd, **kwargs):
         """
@@ -154,9 +193,9 @@ class TauAFluxModel:
         """
         Weiland 2011, Table 16
         """
-        rate = 0.21/100.
+        self.rate = 0.21/100.
         years = (mjd - Time(datetime(self.ref_year,1,1),format='datetime').mjd)/365.25
-        sec= (1 - rate*years)
+        sec= (1 - self.rate*years)
         
         return sec
 
@@ -164,9 +203,9 @@ class TauAFluxModel:
         """
         Hafez 2008
         """
-        rate = 0.22/100.
+        self.rate = 0.22/100.
         years = (mjd - Time(datetime(self.ref_year,1,1),format='datetime').mjd)/365.25
-        sec= (1 - rate*years)
+        sec= (1 - self.rate*years)
         
         return sec
 
@@ -174,9 +213,9 @@ class TauAFluxModel:
         """
         Trotter 2020
         """
-        rate = 0.1/100.
+        self.rate = 0.1/100.
         years = (mjd - Time(datetime(self.ref_year,1,1),format='datetime').mjd)/365.25
-        sec= (1 - rate*years)
+        sec= (1 - self.rate*years)
         
         return sec
 
@@ -252,9 +291,15 @@ class TauAFluxModel:
 class CasAFluxModel:
     def __init__(self,flux_model='weiland_combined',secular_model='weiland_secular'):
         
-        self.flux_model_name = flux_model
-    
+        self.flux_model_name = flux_model    
         self.sec_model_name = secular_model
+
+        self.model = getattr(self,self.flux_model_name)
+        self.sec_model = getattr(self,self.sec_model_name)
+
+        # Setup parameters
+        self.model(0)
+        self.sec_model(0,0)
 
     def __call__(self, nu, mjd, **kwargs):
         """
@@ -307,9 +352,9 @@ class CasAFluxModel:
         """
         Weiland 2011, Table 16
         """
-        rate = 0.51/100.
+        self.rate = 0.51/100.
         years = (mjd - Time(datetime(self.ref_year,1,1),format='datetime').mjd)/365.25
-        sec= (1 - rate*years)
+        sec= (1 - self.rate*years)
         
         return sec
 
@@ -335,9 +380,9 @@ class CasAFluxModel:
         """
         Hafez 2008
         """
-        rate = 0.394/100.
+        self.rate = 0.394/100.
         years = (mjd - Time(datetime(self.ref_year,1,1),format='datetime').mjd)/365.25
-        sec= (1 - rate*years)
+        sec= (1 - self.rate*years)
         
         return sec
 
@@ -362,9 +407,9 @@ class CasAFluxModel:
         """
         Baars 1977, in text
         """
-        rate = (0.394 - 0.3 * np.log10(nu))/100.
+        self.rate = (0.394 - 0.3 * np.log10(nu))/100.
         years = (mjd - Time(datetime(self.ref_year,1,1),format='datetime').mjd)/365.25
-        sec= (1 - rate*years)
+        sec= (1 - self.rate*years)
         
         return sec
 

@@ -364,10 +364,12 @@ class Gauss2dRot_General:
 
     def __init__(self,defaults={'x0':0,'y0':0,'sigx':0,'sigy_scale':1,'phi':0,'A':0,'B':0},
                  fixed=[],
-                 use_bootstrap=False):
+                 use_bootstrap=False,
+                 use_leastsqs =False):
         self.__name__ = Gauss2dRot_General.__name__
         
         self.use_bootstrap = use_bootstrap
+        self.use_leastsqs  = use_leastsqs
         fixed = {k:True for k in fixed}
         self.set_fixed(**fixed)
         self.defaults = defaults
@@ -408,7 +410,9 @@ class Gauss2dRot_General:
                  limfunc=None, nwalkers=32, samples=5000, discard=100,thin=15,return_array=False):
 
 
-        
+        normalise =  1#np.max(z)
+        z /= normalise
+        covariance /= normalise**2
         self.P0_priors = P0_priors
         if isinstance(limfunc,type(None)):
             self.limfunc = self.limfunc
@@ -426,10 +430,16 @@ class Gauss2dRot_General:
                 results[i] = minimize(self.minimize_errfunc,P0,args=((xy[0][sel],xy[1][sel]),z[sel],covariance[sel]),method='CG').x
             error = stats.MAD(results,axis=0)
             result  = np.nanmedian(results,axis=0)
-            
+        elif self.use_leastsqs:
+            result = minimize(self.minimize_errfunc,P0,args=(xy,z,covariance),method='CG').x
+            error = result*0.
+            flat_samples = np.zeros(1)
+            min_chi2 = self.emcee_errfunc(result,xy,z,covariance)
+            ddof = len(z)
+
         else:
             # Perform the least-sqaures fit
-            result = minimize(self.minimize_errfunc,P0,args=(xy,z,covariance),method='CG')
+            result = minimize(self.minimize_errfunc,P0,args=(xy,z,covariance),method='Nelder-Mead')
             pos = result.x + 1e-4 * np.random.normal(size=(nwalkers, len(result.x)))
             sampler = emcee.EnsembleSampler(nwalkers,len(result.x),self.emcee_errfunc, 
                                             args=(xy,z,covariance))
@@ -439,11 +449,25 @@ class Gauss2dRot_General:
             result = np.nanmedian(flat_samples,axis=0)
             error  = stats.MAD(flat_samples ,axis=0)
 
+            zchi   = ((flat_samples - result[None,:])/error[None,:])**2
+            zchi   = np.max(zchi,axis=1)
+            gd = (zchi < 15)
+            flat_samples = flat_samples[gd,:]
+            result = np.nanmedian(flat_samples,axis=0)
+            error  = stats.MAD(flat_samples ,axis=0)
+
             min_chi2 = self.emcee_errfunc(result,xy,z,covariance)
             ddof = len(z)
 
+        z *= normalise
+        covariance *= normalise**2
         Value_dict = {k:result[i] for k, i in self.idx.items()}
         Error_dict = {k:error[i]  for k, i in self.idx.items()}
+
+        for k in ['A','B']:
+            Value_dict[k] *= normalise
+            Error_dict[k] *= normalise
+
         if return_array:
             return result, error, flat_samples, min_chi2, ddof
         else:
@@ -476,13 +500,12 @@ class Gauss2dRot_General:
         if self.limfunc(P):
             return -1e32
         else:
-            chi2 = -np.sum( (self.func(P,xy) - z)**2/cov ) - self.Priors(P)
-
+            #print(np.sum(self.Priors(P)))
+            chi2 = -np.sum( (self.func(P,xy) - z)**2/cov ) #- self.Priors(P)
             if np.isfinite(chi2):
                 return chi2
             else:
-                print('Inf found:', chi2, P)
-                retrun -1e32
+                return -1e32
 
     def minimize_errfunc(self,P,xy,z,cov):
         if self.limfunc(P):

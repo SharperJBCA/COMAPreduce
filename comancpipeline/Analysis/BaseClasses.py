@@ -1,9 +1,10 @@
 import h5py
 #from mpi4py import MPI
-from comancpipeline.Tools import Parser, Types
 import numpy as np
 import configparser
 import time
+from astropy.time import Time
+from datetime import datetime
 #comm = MPI.COMM_WORLD
 
 class DataStructure(object):
@@ -53,6 +54,30 @@ class DataStructure(object):
         select[a[:trim]] = False
         return select
 
+    def getMJD(self,data):
+        """
+        Return start MJD
+        """
+        if 'level1' in data:
+            target = 'level1/comap'
+        else:
+            target = 'comap'
+
+        dt = datetime.strptime(data[target].attrs['utc_start'].decode(),'%Y-%m-%d-%H:%M:%S')
+
+        return Time(dt).mjd
+
+    def getObsID(self,data):
+        """
+        Return ObsID
+        """
+        if 'level1' in data:
+            target = 'level1/comap'
+        else:
+            target = 'comap'
+
+        return data[target].attrs['obsid'].decode('utf-8')
+
     def getFeeds(self,data,feeds_select):
         """
         Return list of feeds and feed indices
@@ -77,7 +102,8 @@ class DataStructure(object):
         feed_indices = np.array([i for i,f in enumerate(feeds) if f in data_feeds])
         feed_dict    = {f:i for i,f in enumerate(feeds)}
         feed_strs = '..'.join([str(f) for f in feeds])
-        self.logger(f'{fname}:{self.name}: Processing feeds {feed_strs}')
+        if hasattr(self,'name'):
+            self.logger(f'{fname}:{self.name}: Processing feeds {feed_strs}')
         return feeds, feed_indices, feed_dict
 
 

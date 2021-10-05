@@ -1,4 +1,4 @@
-from comancpipeline.Analysis.BaseClasses import DataStructure
+from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types
 
 from comancpipeline.Tools.WCS import DefineWCS
