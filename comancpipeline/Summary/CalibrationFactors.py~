@@ -1,0 +1,65 @@
+# CalibrationFactors.py
+# 
+# Read in calibration files and summarise them for Data module.
+#
+# Output format: 
+#  {Source}/obsid
+#  {Source}/gain
+#
+import numpy as np
+import h5py
+from tqdm import tqdm
+from glob import glob
+from comancpipeline.Analysis import BaseClasses 
+
+class CalibrationGains(BaseClasses.DataStructure):
+
+    def __init__(self,**kwargs):
+        for k,v in kwargs.items():
+            setattr(self,k,v)
+
+    def __call__(self):
+        
+        # Step 1: Get the files 
+        filelist = glob(f'{self.calibration_directory}/{self.calibration_prefix}_*.hd5')
+
+        # Convert to level 2 path
+        filelist = [self.level2_directory+'/'+f.split(self.calibration_prefix+'_')[-1] for f in filelist]
+
+        # Step 2: Create output data structure
+        output = {}
+        nobs   = len(filelist)
+
+        # Step 3: Loop over files, get source name and obs id
+        for ifile,filename in enumerate(filelist):
+            data = h5py.File(filename,'r')
+
+            source  = self.getSource(data)
+            comment = self.getComment(data)
+            
+            if not source in output:
+                output[source] = {}
+            # Read calibration
+            for k,v in data[self.calibration_prefix]['Gauss_Narrow_Values'].items():
+                if not k in output[source]:
+                    output[source][k] = np.zeros([nobs]+list(v.shape))
+                output[source][k][ifile,...] = v[...]
+
+
+            # Read pointing
+            for k in ['x0','y0']:
+                v = data[self.calibration_prefix]['Gauss_Average_Values'][k]
+                if not k in output[source]:
+                    output[source][k] = np.zeros([nobs]+list(v.shape))
+                output[source][k][ifile,...] = v[...]
+
+            h.close()
+
+        # Step 4: Save to file
+        self.write(output)
+
+    def write(self,output):
+
+        General.save_dict_hdf5(output,
+                               f'{self.calibration_directory}/{self.calibration_output_filename}')
+
