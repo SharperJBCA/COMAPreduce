@@ -1,0 +1,74 @@
+import numpy as np
+import h5py 
+
+from comancpipeline.MapMaking import MapTypes
+import sys
+from tqdm import tqdm
+from astropy.io import fits
+from matplotlib import pyplot
+
+def read_data(filelistname, feedidxs=[1,2,3,8,9,10,11,12,13,14,15,16,17,18,19]):
+    """
+    Read in all the data from a given list of files
+
+    Arguments
+    filelistname - List of strings containing the files to processed
+    
+    Keywords
+    feedidxs - List of integers indexing the COMAP feed assignments (1...19)
+    """
+    filelist = np.loadtxt(filelistname,dtype=str)
+    nfeeds = len(feedidxs)
+
+    # First we must count how much data we have in total
+    nsamples_list = []
+    data_cuts = [0]
+    data_starts = []
+    for filename in filelist:
+        h = h5py.File(filename)
+
+        # Features are used to index particular parts of the data, feature 8192=2^13 means vane calibration
+        # feature 0 indicates the telescope is waiting to start the observation
+        # We igure both of these features
+        features = h['level1/spectrometer/features'][:]
+        select = (features != 8192) & (features != 0)
+        N = np.sum(select)
+        select = np.where(select)[0]
+
+        # Total number of samples is: Time_Observed * sample_rate * N_feeds
+        data_cuts += [N*nfeeds]
+
+        # The good data is just the middle of the observation, we store the start and end point.
+        # Could also use level2/Statistics/ScanEdges 
+        data_starts += [[int(np.min(select)),int(np.max(select))+1]]
+        nsamples_list += [N]
+        h.close()
+
+    nsamples = sum(nsamples_list)
+
+    data = np.zeros((nfeeds*nsamples))
+    weights = np.zeros((nfeeds*nsamples))
+    ra  = np.zeros((nfeeds*nsamples))
+    dec = np.zeros((nfeeds*nsamples))
+
+    for ifile,filename in enumerate(tqdm(filelist)):
+        h = h5py.File(filename)
+        d    = h['level2rrl/averaged_tod'][:,0,:]
+        ra_  = h['level1/spectrometer/pixel_pointing/pixel_ra'][...]
+        dec_ = h['level1/spectrometer/pixel_pointing/pixel_dec'][...]
+
+        for ifeed,feedidx in enumerate(feedidxs):
+            lo = data_cuts[ifile] + ifeed*nsamples_list[ifile]
+            hi = data_cuts[ifile] + (ifeed+1)*nsamples_list[ifile]
+            ilo,ihi=data_starts[ifile]
+            data[lo:hi] = d[feedidx-1,ilo:ihi]
+            ra[lo:hi]  = ra_[feedidx-1,ilo:ihi]
+            dec[lo:hi] = dec_[feedidx-1,ilo:ihi]
+
+            z   = data[lo:hi]
+            N   = int(z.size//2 * 2)
+            rms = np.nanstd(z[1:N:2]-z[0:N:2])/np.sqrt(2)
+            weights[lo:hi] = 1./rms**2
+        h.close()
+    
+    return data,ra,dec, weights

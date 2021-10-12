@@ -5,7 +5,7 @@ import comancpipeline
 from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
-
+from comancpipeline.data import Data
 from comancpipeline.Tools import Coordinates, Types, stats
 from os import listdir, getcwd
 from os.path import isfile, join
@@ -84,7 +84,6 @@ class BandAverage(BaseClasses.DataStructure):
         self.feeds = feeds
 
         vane = data[f'{self.level2}/Vane']
-        print(vane.keys())
         statistics = data[f'{self.level2}/Statistics']
         frequency  = data[f'{self.level2}/frequency'][...]
         scan_edges = data[f'{self.level2}/Statistics/scan_edges'][...]
@@ -188,8 +187,6 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         # Setup output file here, we will have to write in sections.
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
-        if os.path.isfile(self.outfilename):
-            os.remove(self.outfilename)
 
 
         # Opening file here to write out data bit by bit
@@ -204,17 +201,16 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         """
         Check level 2 file is up to date
         """
-        
-        if not 'version' in h.attrs:
-            return False
-        if not h.attrs['version'] == __level2_version__:
-            return False
-        if not 'vane-version' in h.attrs:
-            return False
-        if not h.attrs['vane-version'] == h['Vane'].attrs['version']:
+        if not self.level2 in h:
             return False
 
-        if not self.level2 in h:
+        if not 'version' in h[self.level2].attrs:
+            return False
+        if not h[self.level2].attrs['version'] == __level2_version__:
+            return False
+        if not 'vane-version' in h[self.level2].attrs:
+            return False
+        if not h[self.level2].attrs['vane-version'] == h[self.level2]['Vane'].attrs['version']:
             return False
 
         return True
@@ -236,13 +232,13 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
             self.output_dir = self.data_dirs[data_dir_search[0]]
         self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
         
-        # Skip files that are already calibrated:
+
+        # Skip files that are already calibrated:        
         if os.path.exists(self.outfilename) & (not self.overwrite): 
             self.logger(f'{fname}:{self.name}: Level 2 file exists...checking vane version...')
             self.outfile = h5py.File(self.outfilename,'r')
             if self.level2 in self.outfile:
-                lvl2 = self.outfile[self.level2]
-                if self.okay_level2_version(lvl2):
+                if self.okay_level2_version(self.outfile):
                     self.logger(f'{fname}:{self.name}: Vane calibration up to date. Skipping.')
                     data.close()
                     return self.outfile
@@ -376,16 +372,17 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """
-
         if os.path.exists(self.outfilename):
             self.outfile = h5py.File(self.outfilename,'a')
         else:
             self.outfile = h5py.File(self.outfilename,'w')
 
         # Set permissions and group
-        os.chmod(self.outfilename,0o664)
-        shutil.chown(self.outfilename, group='comap')
-
+        try:
+            os.chmod(self.outfilename,0o664)
+            shutil.chown(self.outfilename, group='comap')
+        except (OSError,PermissionError) as e:
+            pass
 
         if self.level2 in self.outfile:
             del self.outfile[self.level2]
@@ -710,13 +707,17 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         fname = data.filename.split('/')[-1]
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
         if os.path.exists(outfile):
-            os.remove(outfile)
+            output = h5py.File(outfile,'a')
+        else:
+            output = h5py.File(outfile,'w')
 
-        output = h5py.File(outfile,'a')
 
         # Set permissions and group
-        os.chmod(outfile,0o664)
-        shutil.chown(outfile, group='comap')
+        try:
+            os.chmod(outfile,0o664)
+            shutil.chown(outfile, group='comap')
+        except (OSError,PermissionError) as e:
+            pass
 
         # Store datasets in root
         dnames = ['Tsys','Gain','VaneEdges','Spikes']
@@ -743,7 +744,8 @@ class CreateLevel2RRL(CreateLevel2Cont):
 
     def __init__(self, feeds='all', output_dir='', nworkers= 1,
                  average_width=512,calvanedir='AncillaryData/CalVanes',
-                 cal_mode = 'Vane', cal_prefix='',level2='level2rrl',
+                 cal_mode = 'Vane', cal_prefix='',level2='level2rrl',cal_source='taua',
+                 data_dirs = None,
                  calvane_prefix='CalVane',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
@@ -755,6 +757,13 @@ class CreateLevel2RRL(CreateLevel2Cont):
         self.feeds_select = feeds
 
         self.output_dir = output_dir
+        if isinstance(data_dirs,type(None)):
+            self.data_dirs = [self.output_dir]
+        else:
+            if isinstance(data_dirs,list):
+                self.data_dirs = data_dirs
+            else:
+                self.data_dirs = [data_dirs]
 
         self.calvanedir = calvanedir
         self.calvane_prefix = calvane_prefix
@@ -775,7 +784,7 @@ class CreateLevel2RRL(CreateLevel2Cont):
                                        32.85219558])
         self.rrl_qnumbers=np.array([62,61,60,59,58])
         self.binwidth = 3 # store three bins for each line
-        
+        self.cal_source = cal_source
 
     def __str__(self):
         return "Creating level2 RRL file"
@@ -783,6 +792,34 @@ class CreateLevel2RRL(CreateLevel2Cont):
     def frequency2velocity(self,rrl_freq,freqs):
         cspeed = 299792458.0
         return (rrl_freq-freqs)/rrl_freq*cspeed/1e3
+
+    def calibrate_data(self,data):
+        """
+        Calibrates data using a given calibration source
+        """
+
+        this_obsid = int(self.getObsID(data))
+        # Get Gain Calibration Factors
+        nfeeds = len(self.feeds)
+        self.cal_factors = np.zeros((nfeeds,len(self.rrl_qnumbers),21))
+
+        for iqno in range(len(self.rrl_qnumbers)):
+            for ifeed,feed_num in enumerate(self.feeds):
+                obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
+                gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:,:]
+                frequency = Data.feed_gains[self.cal_source.lower()]['frequency'][...]
+                # now find the nearest non-nan obsid to calibrate off
+                obs_idx = np.argmin((obsids - this_obsid)**2)
+                
+                x,y = frequency.flatten(), gains[obs_idx].flatten()
+                xsort = np.argsort(x)
+                x,y = x[xsort],y[xsort]
+                gd = np.isfinite(x) & np.isfinite(y)
+                mdl = interp1d(x[gd],y[gd],kind='nearest', bounds_error=False, fill_value='extrapolate')
+                gain_interp = mdl(self.frequency[ifeed,iqno,:])
+                self.cal_factors[ifeed,iqno,...] = gain_interp
+        self.spectra = self.spectra/self.cal_factors[:,:,:,None]
+
 
     def run(self,data):
         """
@@ -801,15 +838,13 @@ class CreateLevel2RRL(CreateLevel2Cont):
         # Setup output file here, we will have to write in sections.
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
-        if os.path.isfile(self.outfilename):
-            os.remove(self.outfilename)
-
 
         # Opening file here to write out data bit by bit
         self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['spectrometer/tod'].shape
 
         # Average the data and apply the gains
         self.average_obs(data.filename,data)
+        self.calibrate_data(data)
 
     def __call__(self,data):
         """
@@ -824,7 +859,11 @@ class CreateLevel2RRL(CreateLevel2Cont):
         prefix = data.filename.split('/')[-1].split('.hd5')[0]
         self.outfilename = '{}/{}_Level2RRL.hd5'.format(self.output_dir,prefix)
 
-        
+        data_dir_search = np.where([os.path.exists('{}/{}_Level2Cont.hd5'.format(data_dir,prefix)) for data_dir in self.data_dirs])[0]
+        if len(data_dir_search) > 0:
+            self.output_dir = self.data_dirs[data_dir_search[0]]
+        self.level2filename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+
         # Skip files that are already calibrated:
         if os.path.exists(self.outfilename) & (not self.overwrite): 
             self.logger(f'{fname}:{self.name}: Level 2 file exists...checking vane version...')
@@ -840,6 +879,7 @@ class CreateLevel2RRL(CreateLevel2Cont):
         self.logger(f'{fname}:{self.name}: Applying vane calibration.')
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing level 2 file: {self.outfilename}')
+        # Want to ensure the data file is read/write
         self.write(data)
         self.logger(f'{fname}:{self.name}: Done.')
         # Now change to the level2 file for all future analyses.
@@ -879,6 +919,7 @@ class CreateLevel2RRL(CreateLevel2Cont):
         self.output = np.zeros((nHorns,len(self.rrl_frequencies),11,nSamples))
         self.spectra  = np.zeros((len(self.feeds),len(self.rrl_qnumbers),21,nSamples))*np.nan
         self.velocity = np.zeros((len(self.feeds),len(self.rrl_qnumbers),21))*np.nan
+        self.frequency = np.zeros((len(self.feeds),len(self.rrl_qnumbers),21))*np.nan
         for ifeed, feed in enumerate(tqdm(self.feeds,desc=self.name)):
             feed_array_index = self.feed_dict[feed]
             ra  = data['spectrometer/pixel_pointing/pixel_ra'][feed_array_index,...]
@@ -900,17 +941,10 @@ class CreateLevel2RRL(CreateLevel2Cont):
                         lo = int(np.max([ichan - 10,0]))
                         hi = int(np.min([ichan + 11,nChans]))
                     
-                        #print(ifeed,sb,qno,lo,hi)
                         self.spectra[ifeed,iqno,:(hi-lo),:] = s1[lo:hi]
                         self.velocity[ifeed,iqno,:(hi-lo)]  = velocity[lo:hi]
+                        self.frequency[ifeed,iqno,:(hi-lo)]  = frequencies[sb,lo:hi]
 
-        #np.save('figures/RRLs/{}.npy'.format(data.filename.split('/')[-1].split('.h')[0]),{'spectra':spectra,'frequencies':frequencies,'rrls':self.rrl_frequencies})
-        #np.savez('figures/RRLs/FullData_{}.npy'.format(data.filename.split('/')[-1].split('.h')[0]),spectra=self.spectra,velocity=self.velocity,rrls=self.rrl_frequencies)
-        #stop
-        #pyplot.plot(frequencies[sb,:],spectra.T)
-        #pyplot.plot(frequencies[sb,:],np.nanmean(spectra[:19],axis=0),'k',lw=3)
-        #pyplot.axvline(frequency,color='r')
-        #pyplot.show()
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 RRL file with an external link to the original level 1 data
@@ -921,37 +955,40 @@ class CreateLevel2RRL(CreateLevel2Cont):
             self.outfile = h5py.File(self.outfilename,'w')
 
         # Set permissions and group
-        os.chmod(self.outfilename,0o664)
-        shutil.chown(self.outfilename, group='comap')
+        try: 
+            os.chmod(self.outfilename,0o664)
+            shutil.chown(self.outfilename, group='comap')
+        except (OSError,PermissionError) as e:
+            pass
 
-        print(self.outfilename)
-        if self.level2 in self.outfile:
-            del self.outfile[self.level2]
-        print('Writing...')
-        lvl2 = self.outfile.create_group(self.level2)
-
-        tod_dset = lvl2.create_dataset('tod',data=self.spectra, dtype=self.spectra.dtype)
+        if 'tod' in self.outfile:
+            del self.outfile['tod']
+        tod_dset = self.outfile.create_dataset('tod',data=self.spectra, dtype=self.spectra.dtype)
+            
         tod_dset.attrs['Unit'] = 'K'
         tod_dset.attrs['Calibration'] = '{self.cal_mode}:{self.cal_prefix}'
-        tod_dset = lvl2.create_dataset('velocity',data=self.velocity, dtype=self.velocity.dtype)
+
+        if 'velocity' in self.outfile:
+            del self.outfile['velocity']
+        tod_dset = self.outfile.create_dataset('velocity',data=self.velocity, dtype=self.velocity.dtype)
         tod_dset.attrs['Unit'] = 'km/s'
 
-        freq_dset = lvl2.create_dataset('frequency',data=self.rrl_frequencies, dtype=self.rrl_frequencies.dtype)
+        if 'frequency' in self.outfile:
+            del self.outfile['frequency']
+        freq_dset = self.outfile.create_dataset('frequency',data=self.rrl_frequencies, dtype=self.rrl_frequencies.dtype)
 
         # Link the Level1 data
         data_filename = data.filename
         fname = data.filename.split('/')[-1]
         data.close()
-        if not 'level1' in self.outfile:
-            self.outfile['level1'] = h5py.ExternalLink(data_filename,'/')
-        lvl2.attrs['version'] = __level2_version__
+        
+        # Link to the level2 continuum file
+        if os.path.exists(self.level2filename):
+            data = h5py.File(self.level2filename,'a')
+        else:
+            data = h5py.File(self.level2filename,'w')
 
-        # Add version info
-        lvl2.attrs['pipeline-version'] = comancpipeline.__version__
-
-        # Link the Level1 data
-        if 'Vane' in lvl2:
-            del lvl2['Vane']
-        lvl2['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
-        lvl2.attrs['vane-version'] = lvl2['Vane'].attrs['version']
-
+        if 'rrls' in data.keys():
+            del data['rrls']
+        data['rrls'] = h5py.ExternalLink(self.outfilename,'/')
+        data.close()

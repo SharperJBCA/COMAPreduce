@@ -1,0 +1,15 @@
+import numpy as np
+
+def gaunt(Te,v, Z = 1):
+    """
+    Gaunt factor from Planck Int. XV 2014
+    """
+
+    T4 = Te/1e4
+    A = 5.960 - np.sqrt(3)/np.pi * np.log(Z * v * T4**-1.5)
+
+    return np.log(np.exp(A) + 2.71828)
+
+def line_ratio(Te,v):
+
+    return 6.985e3 * Te**-1.15 * v**1.1 / gaunt(Te,v) / (1.08)

@@ -25,11 +25,12 @@ import os
 import shutil
 
 from tqdm import tqdm
+from comancpipeline.data import Data
 
 __level3_version__='v2'
 
 class CreateLevel3(BaseClasses.DataStructure):
-    def __init__(self,level2='level2',level3='level3',output_dir = None,
+    def __init__(self,level2='level2',level3='level3',output_dir = None,cal_source='taua',
                  channel_mask=None, gain_mask=None, calibration_factors=None, **kwargs):
         """
         """
@@ -55,6 +56,7 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         self.level2=level2
         self.level3=level3
+        self.cal_source=cal_source
 
     def __str__(self):
         return "Creating Level 3"
@@ -99,6 +101,8 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         self.logger(f'{fname}:{self.name}: Creating {self.level3} data.')
         self.run(data)
+        self.calibrate_data(data)
+
         # Want to ensure the data file is read/write
         data = self.setReadWrite(data)
 
@@ -107,6 +111,28 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
+
+    def calibrate_data(self,data):
+        """
+        Calibrates data using a given calibration source
+        """
+        feeds, feed_indices, feed_dict = self.getFeeds(data,'all')
+        this_obsid = int(self.getObsID(data))
+        # Get Gain Calibration Factors
+
+        nfeeds, nchan, ntod = self.all_tod.shape
+        self.cal_factors = np.zeros((nfeeds,nchan))
+        print(self.all_tod.shape, self.cal_factors.shape)
+        for ifeed,feed_num in enumerate(feeds):
+            obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
+            gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:,:]
+
+            # now find the nearest non-nan obsid to calibrate off
+            obs_idx = np.argmin((obsids - this_obsid)**2)
+            self.cal_factors[ifeed,...] = gains[obs_idx].flatten()
+        self.all_tod = self.all_tod/self.cal_factors[:,:,None]
+        self.all_weights = self.all_weights*self.cal_factors[:,:,None]**2
+
 
 
     def run(self, d):
@@ -118,10 +144,11 @@ class CreateLevel3(BaseClasses.DataStructure):
         scan_edges = d[f'{self.level2}/Statistics/scan_edges'][...]
         nscans = scan_edges.shape[0]
         nchannels = 8
-        self.all_tod     = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
-        self.all_weights = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
+        self.all_tod       = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
+        self.all_weights   = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
+        self.all_frequency = np.zeros((nchannels)) 
         frequency = d['level1/spectrometer/frequency'][...]
-        frequency = np.mean(np.reshape(frequency,(frequency.shape[0],frequency.shape[1]//16,16)) ,axis=-1).flatten()
+        self.frequency = np.mean(np.reshape(frequency,(frequency.shape[0],frequency.shape[1]//16,16)) ,axis=-1).flatten()
         feeds = d['level1/spectrometer/feeds'][...]
         feedids = np.concatenate([np.arange(8).astype(int)+i*8 for i in range(20) if i+1 in feeds])
         xfeed,yfeed = np.meshgrid(feedids,feedids)
@@ -198,24 +225,14 @@ class CreateLevel3(BaseClasses.DataStructure):
                 noise_weights[np.isnan(tod)] = 0
                 tod[np.isnan(tod)] = 0
 
-            
-
-                #nancheck = np.sum(tod[channels,:],axis=1)
-                #channels = channels[np.isfinite(nancheck) & (nancheck != 0)]
-                #nancheck = np.sum(wnoise[channels,:],axis=1)
-                #channels = channels[np.isfinite(nancheck) & (nancheck != 0)]
-
-                #tod, wnoise = tod[channels,:], wnoise[channels,:]
-                freq = frequency#[channels]
-
                 
                 for ichan, (flow,fhigh) in enumerate(zip(np.arange(8)+26,np.arange(8)+27)):
-                    sel = np.where(((freq >= flow) & (freq < fhigh)))[0]
+                    sel = np.where(((self.frequency >= flow) & (self.frequency < fhigh)))[0]
                     top = np.sum(tod[sel,:]*noise_weights[sel,:],axis=0)
                     bot = np.sum(blanks[sel,:]*noise_weights[sel,:],axis=0)
                     self.all_tod[index,ichan,start:end] = top/bot
                     self.all_weights[index,ichan,start:end] = bot
-
+                    self.all_frequency[ichan] = (fhigh+flow)/2.
                 self.correlation_matrix[iscan,xfeed.flatten(),yfeed.flatten()]  = stats.correlation(self.all_tod[...,scan_samples]).flatten()
 
 
@@ -229,17 +246,22 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         # We will store these in a separate file and link them to the level2s
         fname = data.filename.split('/')[-1]
+        
         if os.path.exists(self.outfile):
-            os.remove(self.outfile)
-        output = h5py.File(self.outfile,'a')
+            output = h5py.File(self.outfile,'a')
+        else:
+            output = h5py.File(self.outfile,'w')
 
         # Set permissions and group
-        os.chmod(self.outfile,0o664)
-        shutil.chown(self.outfile, group='comap')
+        try:
+            os.chmod(self.outfile,0o664)
+            shutil.chown(self.outfile, group='comap')
+        except (OSError, PermissionError) as e:
+            pass
 
         # Store datasets in root
-        dnames = ['tod','weights']
-        dsets = [self.all_tod, self.all_weights]
+        dnames = ['tod','weights','cal_factors','frequency']
+        dsets = [self.all_tod, self.all_weights,self.cal_factors, self.all_frequency]
 
         for (dname, dset) in zip(dnames, dsets):
             if dname in output:
@@ -247,6 +269,7 @@ class CreateLevel3(BaseClasses.DataStructure):
             output.create_dataset(dname,  data=dset)
 
         output.attrs['version'] = __level3_version__
+        output['cal_factors'].attrs['source'] = self.cal_source
                         
         output.close()
         

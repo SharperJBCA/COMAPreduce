@@ -15,9 +15,10 @@ from scipy.signal import find_peaks
 
 def GetFeeds(file_feeds, selected_feeds):
 
-    feed_indices = np.array([np.argmin(np.abs(f-file_feeds)) for i,f in enumerate(selected_feeds) ])
-
-    return feed_indices
+    feed_indices = np.array([np.argmin(np.abs(f-file_feeds)) for i,f in enumerate(selected_feeds)])
+    distances = np.array([np.abs(f-file_feeds[feed_indices[i]]) > 0 for i, f in enumerate(selected_feeds)])
+    gd = (distances == 0)
+    return feed_indices[gd]
 
 class ReadDataLevel2:
 
@@ -296,23 +297,7 @@ class ReadDataLevel2:
 
 
         this_obsid = int(filename.split('/')[-1].split('-')[1])
-        # Get Gain Calibration Factors
 
-        cal_factors = np.zeros(len(self.FeedIndex))
-        for ifeed,feed_num in enumerate(self.Feeds):
-            obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
-            gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:,:]
-            gains = np.reshape(gains,(gains.shape[0],gains.shape[1]*gains.shape[2]))
-            gains = gains[:,self.iband]
-
-            # now find the nearest non-nan obsid to calibrate off
-            gd = np.isfinite(gains)
-            obsids = obsids[gd]
-            gains  = gains[gd]
-            obs_idx = np.argmin((obsids - this_obsid)**2)
-            cal_factors[ifeed] = gains[obs_idx]
-        tod = tod/cal_factors[:,None]
-        weights = weights*cal_factors[:,None]**2
         # Remove any bad data
         tod     = tod.flatten()
         weights = weights.flatten()
@@ -540,23 +525,7 @@ class ReadDataLevel2_MADAM:
 
 
         this_obsid = int(filename.split('/')[-1].split('-')[1])
-        # Get Gain Calibration Factors
 
-        cal_factors = np.zeros(len(self.FeedIndex))
-        for ifeed,feed_num in enumerate(self.Feeds):
-            obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
-            gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:,:]
-            gains = np.reshape(gains,(gains.shape[0],gains.shape[1]*gains.shape[2]))
-            gains = gains[:,self.iband]
-
-            # now find the nearest non-nan obsid to calibrate off
-            gd = np.isfinite(gains)
-            obsids = obsids[gd]
-            gains  = gains[gd]
-            obs_idx = np.argmin((obsids - this_obsid)**2)
-            cal_factors[ifeed] = gains[obs_idx]
-        tod = tod/cal_factors[:,None]
-        weights = weights*cal_factors[:,None]**2
         # Remove any bad data
         tod     = tod.flatten()
         weights = weights.flatten()

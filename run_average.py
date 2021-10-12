@@ -54,7 +54,7 @@ def main(parameters,classinfo, start=None, end=None):
         try:
             dh5 = h5py.File(filename, 'r')
         except OSError as e:
-            logger(f'{fname}:{e}',error=e)
+            logger(f'{filename}:{e}',error=e)
             continue
 
         for job in jobobjs:

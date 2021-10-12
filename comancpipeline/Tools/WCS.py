@@ -4,8 +4,9 @@ from matplotlib import pyplot
 
 from astropy import wcs
 from astropy.io import fits
-from comancpipeline.Tools import Coordinates
+from comancpipeline.Tools import Coordinates, binFuncs
 from astropy.coordinates import SkyCoord
+
 
 def xlim_proj(w,x0,x1):
     pyplot.xlim(w.world_to_pixel(SkyCoord(x0,0,frame='galactic',unit='deg'))[0],\
@@ -103,7 +104,7 @@ def Info2WCS(naxis, cdelt, crval, ctype=['RA---TAN', 'DEC--TAN']):
 
 
     w.wcs.crpix = [naxis[0]/2.+1, naxis[1]/2.+1]
-    w.wcs.cdelt = np.array([-cdelt[0], cdelt[1]])
+    w.wcs.cdelt = np.array([cdelt[0], cdelt[1]])
     w.wcs.crval = [crval[0], crval[1]]
     w.wcs.ctype = ctype
 
@@ -247,3 +248,56 @@ def ang2pixWCS(wcs, ra, dec, ctype=['RA---TAN', 'DEC--TAN']):
     pix = ang2pix(naxis, wcs.wcs.cdelt, wcs.wcs.crval, dec, ra, ctype=ctype).astype('int')
 
     return pix
+
+def query_disc(x0,y0,r, wcs, shape):
+    """
+    """
+    nypix,nxpix = shape
+    xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
+    xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
+
+    rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
+    select = (rpix_world < r)
+
+    return select,xpix_world[select],ypix_world[select]
+
+
+
+
+def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering='C',weights=None):
+    """
+    """
+
+    if isinstance(weights,type(None)):
+        weights = np.ones(map_in.size)
+
+    # Get pixel coordinates of the input wcs
+    nypix,nxpix = shape_in
+    ypix,xpix = np.meshgrid(np.arange(nypix),np.arange(nxpix))
+    if ordering=='C':
+        ra, dec = wcs_in.wcs_pix2world(xpix.T.flatten(), ypix.T.flatten(),0)
+    else:
+        ra, dec = wcs_in.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
+
+    c0 = wcs_in.wcs.ctype[0].split('-')[0]
+    c1 = wcs_target.wcs.ctype[0].split('-')[0]
+    if c0 != c1:
+        if c0 == 'GLON':
+            ra,dec = Coordinates.g2e(ra,dec)#
+
+    # Convert to pixel coordinate of the output wcs
+    pix_target = ang2pixWCS(wcs_target, ra.flatten(), dec.flatten(), ctype=wcs_target.wcs.ctype)
+
+    # Create empty target map
+    map_out = np.zeros(shape_target).flatten().astype(np.float64)
+    hit_out = np.zeros(shape_target).flatten().astype(np.float64)
+
+    # Bin data to target map
+    
+    good = np.isfinite(map_in) & np.isfinite(weights)
+    binFuncs.binValues(map_out, pix_target.astype(np.int64), 
+                       weights=(map_in/weights).astype(np.float64), mask=good.astype(np.int64))
+    binFuncs.binValues(hit_out, pix_target.astype(np.int64), 
+                       weights=(1./weights).astype(np.float64),mask=good.astype(np.int64))
+
+    return np.reshape(map_out/hit_out,shape_target), np.reshape(1./hit_out,shape_target)
