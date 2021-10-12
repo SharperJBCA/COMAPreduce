@@ -76,7 +76,11 @@ class DataStructure(object):
         else:
             target = 'comap'
 
-        return data[target].attrs['obsid'].decode('utf-8')
+        s = data[target].attrs['obsid']
+        if isinstance(s,str):
+            return s
+        else:
+            return s.decode('utf-8')
 
     def getFeeds(self,data,feeds_select):
         """
