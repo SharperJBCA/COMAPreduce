@@ -60,6 +60,9 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.level3=level3
         self.cal_source=cal_source
 
+        self.set_permissions = set_permissions
+        self.permissions_group = permissions_group
+
     def __str__(self):
         return "Creating Level 3"
 

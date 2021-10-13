@@ -283,7 +283,7 @@ def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering=
     c1 = wcs_target.wcs.ctype[0].split('-')[0]
     if c0 != c1:
         if c0 == 'GLON':
-            ra,dec = Coordinates.g2e(ra,dec)#
+            ra,dec = Coordinates.g2e(ra,dec)
 
     # Convert to pixel coordinate of the output wcs
     pix_target = ang2pixWCS(wcs_target, ra.flatten(), dec.flatten(), ctype=wcs_target.wcs.ctype)
