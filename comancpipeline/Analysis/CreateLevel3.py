@@ -31,6 +31,8 @@ __level3_version__='v2'
 
 class CreateLevel3(BaseClasses.DataStructure):
     def __init__(self,level2='level2',level3='level3',output_dir = None,cal_source='taua',
+                 set_permissions=True,
+                 permissions_group='comap',
                  channel_mask=None, gain_mask=None, calibration_factors=None, **kwargs):
         """
         """
@@ -253,11 +255,9 @@ class CreateLevel3(BaseClasses.DataStructure):
             output = h5py.File(self.outfile,'w')
 
         # Set permissions and group
-        try:
-            os.chmod(self.outfile,0o664)
-            shutil.chown(self.outfile, group='comap')
-        except (OSError, PermissionError) as e:
-            pass
+        if self.set_permissions:
+            os.chmod(self.outfilename,0o664)
+            shutil.chown(self.outfilename, group=self.permissions_group)
 
         # Store datasets in root
         dnames = ['tod','weights','cal_factors','frequency']

@@ -137,6 +137,8 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
                  average_width=512,calvanedir='AncillaryData/CalVanes',
                  cal_mode = 'Vane', cal_prefix='',level2='level2',
                  data_dirs=None,
+                 set_permissions=True,
+                 permissions_group='comap',
                  calvane_prefix='CalVane',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
@@ -378,11 +380,9 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
             self.outfile = h5py.File(self.outfilename,'w')
 
         # Set permissions and group
-        try:
+        if self.set_permissions:
             os.chmod(self.outfilename,0o664)
-            shutil.chown(self.outfilename, group='comap')
-        except (OSError,PermissionError) as e:
-            pass
+            shutil.chown(self.outfilename, group=self.permissions_group)
 
         if self.level2 in self.outfile:
             del self.outfile[self.level2]
@@ -421,6 +421,8 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
                  do_plots=False,
                  elLim=5, feeds = 'all',
                  minSamples=200, tCold=2.74, 
+                 set_permissions=True,
+                 permissions_group='comap',
                  tHotOffset=273.15,prefix='VaneCal',**kwargs):
         super().__init__(**kwargs)
 
@@ -436,6 +438,9 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
 
         self.tCold = tCold # K, cmb
         self.tHotOffset = tHotOffset # celcius -> kelvin
+
+        self.set_permissions = set_permissions
+        self.permissions_group = permissions_group
 
     def __str__(self):
         return "Calculating Tsys and Gain from Ambient Load observation."
@@ -713,11 +718,9 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
 
 
         # Set permissions and group
-        try:
-            os.chmod(outfile,0o664)
-            shutil.chown(outfile, group='comap')
-        except (OSError,PermissionError) as e:
-            pass
+        if self.set_permissions:
+            os.chmod(self.outfilename,0o664)
+            shutil.chown(self.outfilename, group=self.permissions_group)
 
         # Store datasets in root
         dnames = ['Tsys','Gain','VaneEdges','Spikes']
@@ -746,6 +749,8 @@ class CreateLevel2RRL(CreateLevel2Cont):
                  average_width=512,calvanedir='AncillaryData/CalVanes',
                  cal_mode = 'Vane', cal_prefix='',level2='level2rrl',cal_source='taua',
                  data_dirs = None,
+                 set_permissions=True,
+                 permissions_group='comap',
                  calvane_prefix='CalVane',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
@@ -785,6 +790,9 @@ class CreateLevel2RRL(CreateLevel2Cont):
         self.rrl_qnumbers=np.array([62,61,60,59,58])
         self.binwidth = 3 # store three bins for each line
         self.cal_source = cal_source
+
+        self.set_permissions = set_permissions
+        self.permissions_group=permissions_group
 
     def __str__(self):
         return "Creating level2 RRL file"
@@ -955,11 +963,9 @@ class CreateLevel2RRL(CreateLevel2Cont):
             self.outfile = h5py.File(self.outfilename,'w')
 
         # Set permissions and group
-        try: 
+        if self.set_permissions:
             os.chmod(self.outfilename,0o664)
-            shutil.chown(self.outfilename, group='comap')
-        except (OSError,PermissionError) as e:
-            pass
+            shutil.chown(self.outfilename, group=self.permissions_group)
 
         if 'tod' in self.outfile:
             del self.outfile['tod']
