@@ -54,7 +54,24 @@ class DataStructure(object):
         select[a[:trim]] = False
         return select
 
-    def getMJD(self,data):
+    @staticmethod
+    def getFeatures(data):
+        """
+        Get the feature bits, will check to see if it exists in level 1 first,
+        otherwise it will create the features.
+        """
+        if 'level1' in data:
+            target = 'level1/spectrometer'
+        else:
+            target = 'spectrometer'
+
+        if 'features' in data[target]:
+            return data[target][features][...]
+        else:
+            return 
+
+    @staticmethod
+    def getMJD(data):
         """
         Return start MJD
         """
@@ -67,7 +84,8 @@ class DataStructure(object):
 
         return Time(dt).mjd
 
-    def getObsID(self,data):
+    @staticmethod
+    def getObsID(data):
         """
         Return ObsID
         """
@@ -82,7 +100,8 @@ class DataStructure(object):
         else:
             return s.decode('utf-8')
 
-    def getFeeds(self,data,feeds_select):
+    @staticmethod
+    def getFeeds(data,feeds_select):
         """
         Return list of feeds and feed indices
         """
@@ -96,28 +115,23 @@ class DataStructure(object):
         if feeds_select == 'all':
             feeds = data_feeds
         else:
-            if (not isinstance(feeds_select,list)) & (not isinstance(feeds_select,np.ndarray)) :
-                self.feeds = [int(feeds_select)]
-                feeds = self.feeds
-            else:
-                feeds = [int(f) for f in feeds_select]
+            if not isinstance(feeds_select,np.ndarray) and not isinstance(feeds_select,list):
+                feeds_select = [feeds_select]
+            feeds = [int(f) for f in feeds_select]
 
         # Now find the feed indices
         feed_indices = np.array([i for i,f in enumerate(feeds) if f in data_feeds])
         feed_dict    = {f:i for i,f in enumerate(feeds)}
         feed_strs = '..'.join([str(f) for f in feeds])
-        if hasattr(self,'name'):
-            self.logger(f'{fname}:{self.name}: Processing feeds {feed_strs}')
         return feeds, feed_indices, feed_dict
 
-
-    def getComment(self,data):
+    @staticmethod
+    def getComment(data):
         """
         """
         fname = data.filename.split('/')[-1]
-        comment = self.getAttr(data,'comment')
+        comment = DataStructure.getAttr(data,'comment')
         if comment == '':
-            self.logger(f'{fname}:{self.name}: No comment found.')
             comment = 'No Comment'
         return comment
 
@@ -125,7 +139,7 @@ class DataStructure(object):
         """
         """
         fname = data.filename.split('/')[-1]
-        source = self.getAttr(data,'source')
+        source = DataStructure.getAttr(data,'source')
         
         
         source_split = source.split(',')
@@ -140,8 +154,8 @@ class DataStructure(object):
             source = ''
         return source.strip()
 
-
-    def getAttr(self,data,attrname):
+    @staticmethod
+    def getAttr(data,attrname):
         
         if 'level1' in data:
             target = 'level1/comap'

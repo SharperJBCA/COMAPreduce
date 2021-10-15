@@ -1005,6 +1005,9 @@ class CreateLevel2RRL(CreateLevel2Cont):
             del self.outfile['frequency']
         freq_dset = self.outfile.create_dataset('frequency',data=self.rrl_frequencies, dtype=self.rrl_frequencies.dtype)
 
+        if 'feeds' in self.outfile:
+            del self.outfile['feeds']
+        freq_dset = self.outfile.create_dataset('feeds',data=np.array(self.feeds), dtype=np.array(self.feeds).dtype)
 
         self.outfile.attrs['version'] = __level2_version__
 
@@ -1022,6 +1025,7 @@ class CreateLevel2RRL(CreateLevel2Cont):
         data.close()
         
         # Link to the level2 continuum file
+        print(self.level2filename)
         if os.path.exists(self.level2filename):
             data = h5py.File(self.level2filename,'a')
         else:
@@ -1031,3 +1035,4 @@ class CreateLevel2RRL(CreateLevel2Cont):
             del data[self.level2]
         data[self.level2] = h5py.ExternalLink(self.outfilename,'/')
         data.close()
+        
