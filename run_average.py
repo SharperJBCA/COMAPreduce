@@ -60,7 +60,6 @@ def main(parameters,classinfo, start=None, end=None):
         for job in jobobjs:
             if rank == 0:
                 print(job,flush=True)
-            #if True:
             try:
                 dh5 = job(dh5)
             except Exception as e: 
