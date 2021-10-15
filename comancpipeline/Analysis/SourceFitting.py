@@ -811,8 +811,6 @@ class FitSource(BaseClasses.DataStructure):
         units = {'A':'K','x0':'degrees','y0':'degrees','sigx':'degrees','sigy':'degrees','sigy_scale':'none','B':'K','phi':'radians'}
 
         outfile = '{}/{}_{}'.format(self.output_dir,self.prefix,fname)
-        if os.path.exists(outfile):
-            os.remove(outfile)
 
         print ('WRITING: ',outfile)
         output = h5py.File(outfile,'a')

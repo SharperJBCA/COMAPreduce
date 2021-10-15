@@ -128,6 +128,14 @@ class BandAverage(BaseClasses.DataStructure):
 
         return data
 
+class SetLevel1File(BaseClasses.DataStructure):
+    """
+    Returns the pipeline from a level2 file to the level1 file.
+
+    Useful if the next pipeline function expects a level1 file.
+    """
+    pass
+
 class CreateLevel2Cont(BaseClasses.DataStructure):
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
@@ -168,6 +176,8 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.cal_prefix=cal_prefix
 
         self.level2=level2
+        self.set_permissions = set_permissions
+        self.permissions_group = permissions_group
 
     def __str__(self):
         return "Creating level2 file with channel binning of {}".format(self.average_width)
@@ -374,6 +384,8 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """
+        print(data.filename)
+        print(self.outfilename)
         if os.path.exists(self.outfilename):
             self.outfile = h5py.File(self.outfilename,'a')
         else:
@@ -420,7 +432,7 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
     def __init__(self, output_dir='AmbientLoads/',
                  do_plots=False,
                  elLim=5, feeds = 'all',
-                 minSamples=200, tCold=2.74, 
+                 minSamples=200, tCold=2.73, 
                  set_permissions=True,
                  permissions_group='comap',
                  tHotOffset=273.15,prefix='VaneCal',**kwargs):
@@ -719,8 +731,8 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
 
         # Set permissions and group
         if self.set_permissions:
-            os.chmod(self.outfilename,0o664)
-            shutil.chown(self.outfilename, group=self.permissions_group)
+            os.chmod(outfile,0o664)
+            shutil.chown(outfile, group=self.permissions_group)
 
         # Store datasets in root
         dnames = ['Tsys','Gain','VaneEdges','Spikes']
@@ -859,6 +871,13 @@ class CreateLevel2RRL(CreateLevel2Cont):
         Modify baseclass __call__ to change file from the level1 file to the level2 file.
         """
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+
+        # We need to be sure we are being passed a LEVEL 1 object
+        if 'level1' in data: # Level 1 files do not contain a level 1 group
+            level1 = data['level1'].file # pass file reference
+            data.close() # close the old file
+            data = level1 # set data to reference the level1 file
+
         fname = data.filename.split('/')[-1]
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting.')
@@ -869,15 +888,18 @@ class CreateLevel2RRL(CreateLevel2Cont):
 
         data_dir_search = np.where([os.path.exists('{}/{}_Level2Cont.hd5'.format(data_dir,prefix)) for data_dir in self.data_dirs])[0]
         if len(data_dir_search) > 0:
-            self.output_dir = self.data_dirs[data_dir_search[0]]
-        self.level2filename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+            level2_dir = self.data_dirs[data_dir_search[0]]
+            self.level2filename = '{}/{}_Level2Cont.hd5'.format(level2_dir,prefix)
+        else:
+            self.logger(f'{fname}:{self.name}: No level2 continuum file created, run CreateLevel2Cont first.')
+            self.level2filename = None
+            return data
 
         # Skip files that are already calibrated:
         if os.path.exists(self.outfilename) & (not self.overwrite): 
             self.logger(f'{fname}:{self.name}: Level 2 file exists...checking vane version...')
-            self.outfile = h5py.File(self.outfilename,'r')
-            lvl2 = self.outfile[self.level2]
-            if self.okay_level2_version(lvl2):
+            self.outfile = h5py.File(self.level2filename,'r')
+            if self.okay_level2_version(self.outfile):
                 self.logger(f'{fname}:{self.name}: Vane calibration up to date. Skipping.')
                 data.close()
                 return self.outfile
@@ -983,9 +1005,20 @@ class CreateLevel2RRL(CreateLevel2Cont):
             del self.outfile['frequency']
         freq_dset = self.outfile.create_dataset('frequency',data=self.rrl_frequencies, dtype=self.rrl_frequencies.dtype)
 
+
+        self.outfile.attrs['version'] = __level2_version__
+
+        # Add version info
+        self.outfile.attrs['pipeline-version'] = comancpipeline.__version__
+
         # Link the Level1 data
         data_filename = data.filename
         fname = data.filename.split('/')[-1]
+        if 'Vane' in self.outfile:
+            del lvl2['Vane']
+        self.outfile['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
+        self.outfile.attrs['vane-version'] = self.outfile['Vane'].attrs['version']
+
         data.close()
         
         # Link to the level2 continuum file
@@ -994,7 +1027,7 @@ class CreateLevel2RRL(CreateLevel2Cont):
         else:
             data = h5py.File(self.level2filename,'w')
 
-        if 'rrls' in data.keys():
-            del data['rrls']
-        data['rrls'] = h5py.ExternalLink(self.outfilename,'/')
+        if self.level2 in data.keys():
+            del data[self.level2]
+        data[self.level2] = h5py.ExternalLink(self.outfilename,'/')
         data.close()

@@ -29,6 +29,9 @@ def gaunt3(Te,v):
 def line_ratio(Te,v):
     return 6.985e3 * Te**-1.15 * v**1.1 / 1.08 / altenhoff(Te,v)
 
+def line_ratio_updated(Te,v):
+    return 1.0534e4 * v**1 / gaunt(Te,v) * Te**-1
+
 def line_ratio_mdl2(ratio,v):
     """
     From Balser 2011, Quireza 2006 APJ 653
