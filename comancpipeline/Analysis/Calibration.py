@@ -835,7 +835,10 @@ class CreateLevel2RRL(CreateLevel2Cont):
                 xsort = np.argsort(x)
                 x,y = x[xsort],y[xsort]
                 gd = np.isfinite(x) & np.isfinite(y)
-                mdl = interp1d(x[gd],y[gd],kind='nearest', bounds_error=False, fill_value='extrapolate')
+                try:
+                    mdl = interp1d(x[gd],y[gd],kind='nearest', bounds_error=False, fill_value='extrapolate')
+                except ValueError:
+                    continue
                 gain_interp = mdl(self.frequency[ifeed,iqno,:])
                 self.cal_factors[ifeed,iqno,...] = gain_interp
         self.spectra = self.spectra/self.cal_factors[:,:,:,None]
