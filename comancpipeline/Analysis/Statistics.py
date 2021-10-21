@@ -76,21 +76,28 @@ class RepointEdges(BaseClasses.DataStructure):
         selectFeature = self.featureBits(features.astype(float), ifeature)
         index_feature = np.where(selectFeature)[0]
 
-        # make it so that you have a gap, only use data where the telescope is moving
+        if ifeature == 9.0:
+            # Elevation current seems a good proxy for finding repointing times
+            #azcurrent = np.abs(d['level1/hk/antenna0/driveNode/azDacOutput'][:])
+            elutc = d['level1/spectrometer/MJD'][:] #d['level1/hk/antenna0/driveNode/utc'][:]
+            mjd = d['level1/spectrometer/MJD'][:]
+            # these are when the telescope is changing position
+            #cutpoint = np.max([np.max(azcurrent)*self.max_el_current_fraction,3000])
+            #select = np.where((azcurrent > cutpoint))[0]
+            ends = np.array([index_feature[0],index_feature[-1]])
+        else:
+            # Elevation current seems a good proxy for finding repointing times
+            elcurrent = np.abs(d['level1/hk/antenna0/driveNode/elDacOutput'][:])
+            elutc = d['level1/hk/antenna0/driveNode/utc'][:]
+            mjd = d['level1/spectrometer/MJD'][:]
+            
+            # these are when the telescope is changing position
+            select = np.where((elcurrent > np.max(elcurrent)*self.max_el_current_fraction))[0]
 
-        # Elevation current seems a good proxy for finding repointing times
-        elcurrent = np.abs(d['level1/hk/antenna0/driveNode/elDacOutput'][:])
-        elutc = d['level1/hk/antenna0/driveNode/utc'][:]
-        mjd = d['level1/spectrometer/MJD'][:]
+            dselect = select[1:]-select[:-1]
+            large_step_indices = np.where((dselect > self.min_sample_distance))[0]
 
-        # these are when the telescope is changing position
-        select = np.where((elcurrent > np.max(elcurrent)*self.max_el_current_fraction))[0]
-
-        dselect = select[1:]-select[:-1]
-        large_step_indices = np.where((dselect > self.min_sample_distance))[0]
-
-        ends = select[np.append(large_step_indices,len(dselect)-1)]
-
+            ends = select[np.append(large_step_indices,len(dselect)-1)]
         # Now map these indices to the original indices
         scan_edges = []
         for (start,end) in zip(ends[:-1],ends[1:]):
@@ -142,7 +149,7 @@ class ScanEdges(BaseClasses.DataStructure):
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
                           ['GField{:02d}'.format(i) for i in range(40)] +\
                           ['Field{:02d}'.format(i) for i in range(40)] +\
-                          ['Field11b']
+                          ['Field11b'] + ['TauA','CasA','Jupiter','jupiter','CygA']
 
         source  = self.getSource(data)
         comment = self.getComment(data)
@@ -318,7 +325,7 @@ class FnoiseStats(BaseClasses.DataStructure):
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
                           ['GField{:02d}'.format(i) for i in range(40)] +\
                           ['Field{:02d}'.format(i) for i in range(40)] +\
-                          ['Field11b']
+                          ['Field11b']+['TauA','CasA','CygA']
 
         source = self.getSource(data)
         comment = self.getComment(data)

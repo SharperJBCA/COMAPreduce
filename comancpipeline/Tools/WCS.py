@@ -286,14 +286,18 @@ def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering=
             ra,dec = Coordinates.g2e(ra,dec)
 
     # Convert to pixel coordinate of the output wcs
-    pix_target = ang2pixWCS(wcs_target, ra.flatten(), dec.flatten(), ctype=wcs_target.wcs.ctype)
+    #pix_target = ang2pixWCS(wcs_target, ra.flatten(), dec.flatten(), ctype=wcs_target.wcs.ctype)
+
+    nypix,nxpix = shape_target
+    xpix,ypix = np.floor(np.array(wcs_target.wcs_world2pix(ra.flatten(), dec.flatten(), 0))).astype('int64')
+    pix_target = (xpix + ypix*nxpix).astype(np.int64)
+
 
     # Create empty target map
     map_out = np.zeros(shape_target).flatten().astype(np.float64)
     hit_out = np.zeros(shape_target).flatten().astype(np.float64)
 
     # Bin data to target map
-    
     good = np.isfinite(map_in) & np.isfinite(weights)
     binFuncs.binValues(map_out, pix_target.astype(np.int64), 
                        weights=(map_in/weights).astype(np.float64), mask=good.astype(np.int64))

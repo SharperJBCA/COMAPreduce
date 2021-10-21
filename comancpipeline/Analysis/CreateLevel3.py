@@ -159,6 +159,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         xfeed,yfeed = np.meshgrid(feedids,feedids)
         self.correlation_matrix = np.zeros((nscans,20*8,20*8))
         # Read in data from each feed
+
         for index, ifeed in enumerate(range(tod_shape[0])):
             if feeds[ifeed] == 20:
                 continue
@@ -172,18 +173,6 @@ class CreateLevel3(BaseClasses.DataStructure):
             atmos_coefficient = d[f'{self.level2}/Statistics/atmos_coefficients'][ifeed,...]
             wnoise_auto = d[f'{self.level2}/Statistics/wnoise_auto'][ifeed,...]
             fnoise_fits = d[f'{self.level2}/Statistics/fnoise_fits'][ifeed,...]
-
-            # Create gain masks/channel masks/calfactors
-            # if isinstance(self.gainmask, type(None)):
-            #     self.gainmask = np.zeros((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
-            # if isinstance(self.channelmask, type(None)):
-            #     self.channelmask = np.zeros((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
-            # if isinstance(self.calfactors, type(None)):
-            #     self.calfactors = np.ones((tod_shape[0],tod_shape[1],tod_shape[2])).astype(bool)
-
-            # self.channelmask = self.channelmask | self.gainmask
-
-
 
             # then the data for each scan
             last = 0
@@ -259,8 +248,8 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         # Set permissions and group
         if self.set_permissions:
-            os.chmod(self.outfilename,0o664)
-            shutil.chown(self.outfilename, group=self.permissions_group)
+            os.chmod(self.outfile,0o664)
+            shutil.chown(self.outfile, group=self.permissions_group)
 
         # Store datasets in root
         dnames = ['tod','weights','cal_factors','frequency']

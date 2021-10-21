@@ -39,11 +39,10 @@ class ReadDataLevel2:
         self.psds = None
         self.psdfreqs = None
 
-        self.cal_source = parameters['Inputs']['calibration_source']
 
         # READ PARAMETERS
         self.offset_length = parameters['Destriper']['offset']
-
+        self.flag_spikes = parameters['Destriper']['flag_spikes']
         self.Feeds  = parameters['Inputs']['feeds']
 
         try:
@@ -79,6 +78,7 @@ class ReadDataLevel2:
         # Store the Time ordered data as required
         self.pixels = np.zeros(self.Nsamples,dtype=int)
         self.all_weights = np.zeros(self.Nsamples)
+
         if self.keeptod:
             self.all_tod = np.zeros(self.Nsamples)
 
@@ -101,17 +101,17 @@ class ReadDataLevel2:
             except KeyError:
                 print('BAD FILE', filename)
 
-        for i, filename in enumerate(tqdm(filelist)):
-            try:
-                self.readPSDs(i,filename)      
-            except (KeyError,ValueError):
-                print('BAD FILE', filename)
+        #for i, filename in enumerate(tqdm(filelist)):
+        #    try:
+        #        self.readPSDs(i,filename)      
+        #    except (KeyError,ValueError):
+        #        print('BAD FILE', filename)
 
         for i, filename in enumerate(tqdm(filelist)):
-            try:
-                self.readData(i,filename)     
-            except (KeyError,ValueError):
-                print('BAD FILE', filename)
+            #try:
+            self.readData(i,filename)     
+            #except (KeyError,ValueError):
+            #    print('BAD FILE', filename)
 
         #pyplot.subplot(projection=self.naive.wcs)
         #m = self.naive.get_map()
@@ -162,7 +162,10 @@ class ReadDataLevel2:
 
         dset = d['level3/tod']
         wei_dset = d['level3/weights']
-        flags = d['level2/Flags/sigma_clip_flag']
+        if 'level2/Flags/sigma_clip_flag' in d:
+            flags = d['level2/Flags/sigma_clip_flag']
+        else:
+            flags = np.zeros((dset.shape[0],dset.shape[-1]),dtype=bool)
         tod_in = np.zeros(dset.shape[-1],dtype=dset.dtype)
 
         scan_edges = d['level2/Statistics/scan_edges'][...]
@@ -171,26 +174,19 @@ class ReadDataLevel2:
             
         # Read in data from each feed
         for index, ifeed in enumerate(self.FeedIndex[:]):
-            #dset.read_direct(tod_in,np.s_[ifeed:ifeed+1,self.iband,:])
-            #tod_all = dset[ifeed,:,:]
-            #pmdl = np.poly1d(np.polyfit(np.nanmedian(tod_all,axis=0),tod_all[self.iband],1))
-            #pyplot.subplot(211)
-            #pyplot.plot(tod_all[self.iband])
-            #pyplot.plot(np.nanmedian(tod_all,axis=0)*pmdl[1])
             
-            tod_in = dset[ifeed,self.iband,:] #- np.nanmedian(tod_all,axis=0)*pmdl[1]#dset[ifeed,self.iband,:]
-            #pyplot.subplot(212)
-            #pyplot.plot(tod_in)
-            #pyplot.show()
+            tod_in = dset[ifeed,self.iband,:] 
             wei_in = wei_dset[ifeed,self.iband,:]
             flags_in = flags[ifeed,:]
             samples = np.arange(tod_in.size)
 
-            peaks, properties = find_peaks(np.abs(tod_in),prominence=1,width=[0,150])
-            widths = (properties['right_ips']-properties['left_ips'])*2.
 
-            for peak,width in zip(peaks,widths):
-                wei_in[np.abs(samples-peak) < width] = 0
+            if self.flag_spikes:
+                peaks, properties = find_peaks(np.abs(tod_in),prominence=1,width=[0,150])
+                widths = (properties['right_ips']-properties['left_ips'])*2.
+
+                for peak,width in zip(peaks,widths):
+                    wei_in[np.abs(samples-peak) < width] = 0
 
             wei_in[flags_in > 0.5] = 0
 
@@ -312,11 +308,13 @@ class ReadDataLevel2:
             weights[offpix_chunk == bad_offset] = 0
 
         # Store TOD
+        print(self.keeptod)
         if self.keeptod:
             self.all_tod[self.chunks[i][0]:self.chunks[i][1]] = tod*1.
         self.all_weights[self.chunks[i][0]:self.chunks[i][1]] = weights
 
         # Bin data into maps
+
         self.naive.sum_data(tod,self.pixels[self.chunks[i][0]:self.chunks[i][1]],weights)
 
         # And then bin the data into the offsets vector
@@ -343,8 +341,6 @@ class ReadDataLevel2_MADAM:
         self.ifreq = ifreq
 
         self.nside = nside
-
-        self.cal_source = parameters['Inputs']['calibration_source']
 
         # READ PARAMETERS
         self.offset_length = parameters['Destriper']['offset']
@@ -492,8 +488,6 @@ class ReadDataLevel2_MADAM:
         for i in range(x.shape[0]):
             x[i],y[i] = Coordinates.h2e_full(x[i],y[i],mjd,Coordinates.comap_longitude,Coordinates.comap_latitude)
             
-        pyplot.plot((x[0]-x0[0])*60)
-        pyplot.show()
         scan_edges = d['level2/Statistics/scan_edges'][...]
         pixels = np.zeros((x.shape[0], self.datasizes[i]))
         last = 0
