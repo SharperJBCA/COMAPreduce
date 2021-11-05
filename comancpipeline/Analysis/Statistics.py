@@ -70,7 +70,7 @@ class RepointEdges(BaseClasses.DataStructure):
         - We may need to check for vane position too
         - Iteratively finding the best current fraction may also be needed
         """
-        features = d['level1/spectrometer/features'][:]
+        features = self.getFeatures(d) 
         uf, counts = np.unique(features,return_counts=True) # select most common feature
         ifeature = np.floor(np.log10(uf[np.argmax(counts)])/np.log10(2))
         selectFeature = self.featureBits(features.astype(float), ifeature)

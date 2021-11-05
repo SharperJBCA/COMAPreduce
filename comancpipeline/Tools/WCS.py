@@ -291,17 +291,19 @@ def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering=
     nypix,nxpix = shape_target
     xpix,ypix = np.floor(np.array(wcs_target.wcs_world2pix(ra.flatten(), dec.flatten(), 0))).astype('int64')
     pix_target = (xpix + ypix*nxpix).astype(np.int64)
-
+    
+    bad = (xpix >= nxpix) | (xpix < 0) | (ypix >= nypix) | (nypix < 0)
+    pix_target[bad] = -1
 
     # Create empty target map
     map_out = np.zeros(shape_target).flatten().astype(np.float64)
     hit_out = np.zeros(shape_target).flatten().astype(np.float64)
 
     # Bin data to target map
-    good = np.isfinite(map_in) & np.isfinite(weights)
-    binFuncs.binValues(map_out, pix_target.astype(np.int64), 
-                       weights=(map_in/weights).astype(np.float64), mask=good.astype(np.int64))
-    binFuncs.binValues(hit_out, pix_target.astype(np.int64), 
-                       weights=(1./weights).astype(np.float64),mask=good.astype(np.int64))
+    good = np.isfinite(map_in) & np.isfinite(weights) & (weights > 0) & (pix_target != -1)
+    binFuncs.binValues(map_out, pix_target[good].astype(np.int64), 
+                       weights=(map_in[good]/weights[good]).astype(np.float64))#, mask=good.astype(np.int64))
+    binFuncs.binValues(hit_out, pix_target[good].astype(np.int64), 
+                       weights=(1./weights[good]).astype(np.float64))#,mask=good.astype(np.int64))
 
     return np.reshape(map_out/hit_out,shape_target), np.reshape(1./hit_out,shape_target)

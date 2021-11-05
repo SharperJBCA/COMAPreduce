@@ -855,19 +855,28 @@ class CreateLevel2RRL(CreateLevel2Cont):
         # self.feeds : feed horn ID (in array indexing, only chosen feeds)
         # self.feedlist : all feed IDs in data file (in lvl1 indexing)
         # self.feeddict : map between feed ID and feed array index in lvl1
+        fname = data.filename.split('/')[-1]
+
+        self.logger(f'{fname}:{self.name}: About to get feeds')
         self.feeds, self.feed_index, self.feed_dict = self.getFeeds(data,self.feeds_select)
 
 
         # Setup output file here, we will have to write in sections.
+        self.logger(f'{fname}:{self.name}: About to create {self.output_dir}')
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
 
         # Opening file here to write out data bit by bit
+        self.logger(f'{fname}:{self.name}: About to get tod shape')
         self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['spectrometer/tod'].shape
 
         # Average the data and apply the gains
+        self.logger(f'{fname}:{self.name}: About to run average_obs')
         self.average_obs(data.filename,data)
+        self.logger(f'{fname}:{self.name}: average_obs done.')
+        self.logger(f'{fname}:{self.name}: About to run calibrate_data')
         self.calibrate_data(data)
+        self.logger(f'{fname}:{self.name}: calibrate_data done.')
 
     def __call__(self,data):
         """
