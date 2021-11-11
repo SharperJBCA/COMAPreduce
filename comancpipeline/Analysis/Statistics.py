@@ -148,7 +148,7 @@ class ScanEdges(BaseClasses.DataStructure):
 
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
                           ['GField{:02d}'.format(i) for i in range(40)] +\
-                          ['Field{:02d}'.format(i) for i in range(40)] +\
+                          ['Field{:02d}'.format(i) for i in range(100)] +\
                           ['Field11b'] + ['TauA','CasA','Jupiter','jupiter','CygA']
 
         source  = self.getSource(data)
@@ -324,7 +324,7 @@ class FnoiseStats(BaseClasses.DataStructure):
 
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
                           ['GField{:02d}'.format(i) for i in range(40)] +\
-                          ['Field{:02d}'.format(i) for i in range(40)] +\
+                          ['Field{:02d}'.format(i) for i in range(100)] +\
                           ['Field11b']+['TauA','CasA','CygA']
 
         source = self.getSource(data)
@@ -590,7 +590,7 @@ class SkyDipStats(BaseClasses.DataStructure):
 
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
                           ['GField{:02d}'.format(i) for i in range(40)] +\
-                          ['Field{:02d}'.format(i) for i in range(40)] +\
+                          ['Field{:02d}'.format(i) for i in range(100)] +\
                           ['Field11b']
 
         source = self.getSource(data)
