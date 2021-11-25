@@ -127,7 +127,6 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         nfeeds, nchan, ntod = self.all_tod.shape
         self.cal_factors = np.zeros((nfeeds,nchan))
-        print(self.all_tod.shape, self.cal_factors.shape)
         for ifeed,feed_num in enumerate(feeds):
             obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
             gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:,:]

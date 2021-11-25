@@ -24,28 +24,34 @@ class CalibrationGains(BaseClasses.DataStructure):
             setattr(self,k,v)
 
     def __call__(self):
-        
+        filelist = np.loadtxt(self.level2_filelist,dtype=str)
         # Step 1: Get the files 
-        filelist = glob(f'{self.calibration_directory}/{self.calibration_prefix}_*.hd5')
+        #filelist = glob(f'{self.calibration_directory}/{self.calibration_prefix}_*.hd5')
 
         # Convert to level 2 path
-        filelist = [self.level2_directory+'/'+f.split(self.calibration_prefix+'_')[-1] for f in filelist]
+        #filelist = [self.level2_directory+'/'+f.split(self.calibration_prefix+'_')[-1] for f in filelist]
 
         # Step 2: Create output data structure
         output = {}
         nobs   = {}
         for ifile,filename in enumerate(tqdm(filelist)):
-            data = h5py.File(filename,'r')
+            try:
+                data = h5py.File(filename,'r')
+            except OSError:
+                continue
             source  = self.getSource(data)
             if not source in nobs:
                 nobs[source] = 0
             nobs[source] += 1
             data.close()
-
+        
         # Step 3: Loop over files, get source name and obs id
         source_count = {k:0 for k in nobs.keys()}
         for ifile,filename in enumerate(tqdm(filelist)):
-            data = h5py.File(filename,'r')
+            try:
+                data = h5py.File(filename,'r')
+            except OSError:
+                continue
 
             fshape = data['level2']['frequency'].shape
             frequency = np.mean(np.reshape(data['level2']['frequency'],(fshape[0],2,fshape[1]//2)),axis=-1)
@@ -55,6 +61,11 @@ class CalibrationGains(BaseClasses.DataStructure):
             if not source in output:
                 output[source] = {'Values':{},'Errors':{}}
             # Read calibration
+
+            if not self.calibration_prefix in data['level2']:
+                source_count[source] += 1
+                data.close()
+                continue
 
             for mode in ['Values','Errors']:
                 for k,v in data['level2'][self.calibration_prefix][f'Gauss_Narrow_{mode}'].items():
@@ -82,9 +93,6 @@ class CalibrationGains(BaseClasses.DataStructure):
                                                                          output[source][mode]['sigx'][source_count[source]]*\
                                                                          output[source][mode]['sigy'][source_count[source]]*\
                                                                          (np.pi/180.)**2* conv[None,...] 
-                #print(output[source][mode]['A'][source_count[source],0,0,0],output[source][mode]['sigy'][source_count[source],0,0,0]*60)
-                #print(output[source][mode]['flux'][source_count[source],0,0,0])
-                # Read pointing
                 for k in ['x0','y0']:
                     v = data['level2'][self.calibration_prefix][f'Gauss_Average_{mode}'][k]
                     if not k in output[source][mode]:
@@ -102,6 +110,7 @@ class CalibrationGains(BaseClasses.DataStructure):
             data.close()
             source_count[source] += 1
         # Step 4: Save to file
+        print(output['TauA'].keys())
         self.write(output)
 
     def write(self,output):
@@ -118,7 +127,7 @@ class CalibrationGains(BaseClasses.DataStructure):
         """
 
         data = General.load_dict_hdf5(calfile)
-
+        
         models = {'TauA':CaliModels.TauAFluxModel(),
                   'CasA':CaliModels.CasAFluxModel(),
                   'CygA':CaliModels.CygAFlux,
@@ -126,6 +135,7 @@ class CalibrationGains(BaseClasses.DataStructure):
 
         gains = {}
         for k,v in data.items():
+            print(k,v.keys())
             fshape = v['Values']['flux'].shape
             Nobs = v['Values']['flux'].shape[0]
             flux = np.reshape(v['Values']['flux'],(fshape[0],fshape[1],8))
@@ -143,4 +153,4 @@ class CalibrationGains(BaseClasses.DataStructure):
                 gains[k.lower()]['errors'][:,:,ifreq] = eflux[...,ifreq]/model_flux[:,None]
 
 
-        General.save_dict_hdf5(gains,'/scratch/nas_comap1/sharper/COMAP/COMAPreduce/comancpipeline/gains.hd5')
+        General.save_dict_hdf5(gains,'{self.calibration_directory}/gains.hd5')

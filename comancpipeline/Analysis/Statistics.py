@@ -55,11 +55,23 @@ class RepointEdges(BaseClasses.DataStructure):
         for item, value in kwargs.items():
             self.__setattr__(item,value)
 
-    def __call__(self, data):
+    def __call__(self, data, source=''):
         """
         Expects a level 2 data structure
         """
-        return self.getScanPositions(data)
+        if any([source in f for f in ['TauA','CasA','CygA','jupiter','Jupiter']]):
+            return self.getBetweenVane(data)
+        else:
+            return self.getScanPositions(data)
+
+
+    def getBetweenVane(self,d):
+        """
+        Defines data as one large scan defined as the start and end of the vane calibration
+        """
+
+        return [[int(d['level2/Vane/VaneEdges'][0,1]),
+                 int(d['level2/Vane/VaneEdges'][1,0])]]
 
     def getScanPositions(self, d):
         """
@@ -151,15 +163,15 @@ class ScanEdges(BaseClasses.DataStructure):
                           ['Field{:02d}'.format(i) for i in range(100)] +\
                           ['Field11b'] + ['TauA','CasA','Jupiter','jupiter','CygA']
 
-        source  = self.getSource(data)
+        self.source  = self.getSource(data)
         comment = self.getComment(data)
 
         if (f'{self.level2}/Statistics' in data) & (not self.overwrite):
             return data
 
-        self.logger(f'{fname}:{self.name}: {source} - {comment}')
+        self.logger(f'{fname}:{self.name}: {self.source} - {comment}')
 
-        if self.checkAllowedSources(data, source, allowed_sources):
+        if self.checkAllowedSources(data, self.source, allowed_sources):
             return data
 
         if 'Sky nod' in comment:
@@ -182,7 +194,7 @@ class ScanEdges(BaseClasses.DataStructure):
         """
 
         # Pass data to the scan object to calculate the scan edges
-        self.scan_edges = self.scan_edge_object(data)
+        self.scan_edges = self.scan_edge_object(data,source=self.source)
 
     def write(self,data):
         """
@@ -325,7 +337,7 @@ class FnoiseStats(BaseClasses.DataStructure):
         allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
                           ['GField{:02d}'.format(i) for i in range(40)] +\
                           ['Field{:02d}'.format(i) for i in range(100)] +\
-                          ['Field11b']+['TauA','CasA','CygA']
+                          ['Field11b']+['TauA','CasA','CygA','jupiter','Jupiter']
 
         source = self.getSource(data)
         comment = self.getComment(data)

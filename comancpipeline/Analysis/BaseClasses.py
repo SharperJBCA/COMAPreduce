@@ -79,8 +79,13 @@ class DataStructure(object):
             target = 'level1/comap'
         else:
             target = 'comap'
-
-        dt = datetime.strptime(data[target].attrs['utc_start'].decode(),'%Y-%m-%d-%H:%M:%S')
+        
+        try:
+            datestr = data[target].attrs['utc_start'].decode()
+        except AttributeError:
+            datestr = data[target].attrs['utc_start']
+            
+        dt = datetime.strptime(datestr,'%Y-%m-%d-%H:%M:%S')
 
         return Time(dt).mjd
 

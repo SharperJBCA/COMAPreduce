@@ -885,41 +885,24 @@ class CreateLevel2RRL(CreateLevel2Cont):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
         # We need to be sure we are being passed a LEVEL 1 object
-        if 'level1' in data: # Level 1 files do not contain a level 1 group
-            level1 = data['level1'].file # pass file reference
-            data.close() # close the old file
-            data = level1 # set data to reference the level1 file
+        if not 'level1' in data: 
+            self.logger(f"{fname}:{self.name}: Not a level 2 file, perhaps you've not run CreateLevel2Cont?")
+            return data
 
         fname = data.filename.split('/')[-1]
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting.')
 
         self.comment = self.getComment(data)
-        prefix = data.filename.split('/')[-1].split('.hd5')[0]
+        prefix = data['level1'].file.filename.split('/')[-1].split('.hd5')[0]
         self.outfilename = '{}/{}_Level2RRL.hd5'.format(self.output_dir,prefix)
 
-        data_dir_search = np.where([os.path.exists('{}/{}_Level2Cont.hd5'.format(data_dir,prefix)) for data_dir in self.data_dirs])[0]
-        if len(data_dir_search) > 0:
-            level2_dir = self.data_dirs[data_dir_search[0]]
-            self.level2filename = '{}/{}_Level2Cont.hd5'.format(level2_dir,prefix)
-        else:
-            self.logger(f'{fname}:{self.name}: No level2 continuum file created, run CreateLevel2Cont first.')
-            self.level2filename = None
+        # Skip files if we aren't overwriting
+        if not self.overwrite: 
             return data
 
-        # Skip files that are already calibrated:
-        if os.path.exists(self.outfilename) & (not self.overwrite): 
-            self.logger(f'{fname}:{self.name}: Level 2 file exists...checking vane version...')
-            self.outfile = h5py.File(self.level2filename,'r')
-            if self.okay_level2_version(self.outfile):
-                self.logger(f'{fname}:{self.name}: Vane calibration up to date. Skipping.')
-                data.close()
-                return self.outfile
-            else:
-                self.outfile.close()
-
         self.logger(f'{fname}:{self.name}: Applying vane calibration.')
-        self.run(data)
+        self.run(data['level1'])
         self.logger(f'{fname}:{self.name}: Writing level 2 file: {self.outfilename}')
         # Want to ensure the data file is read/write
         self.write(data)
@@ -1026,25 +1009,13 @@ class CreateLevel2RRL(CreateLevel2Cont):
         # Add version info
         self.outfile.attrs['pipeline-version'] = comancpipeline.__version__
 
-        # Link the Level1 data
+        # Link the rrl data to level2
         data_filename = data.filename
         fname = data.filename.split('/')[-1]
-        if 'Vane' in self.outfile:
-            del lvl2['Vane']
-        self.outfile['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
-        self.outfile.attrs['vane-version'] = self.outfile['Vane'].attrs['version']
-
-        data.close()
         
         # Link to the level2 continuum file
-        print(self.level2filename)
-        if os.path.exists(self.level2filename):
-            data = h5py.File(self.level2filename,'a')
-        else:
-            data = h5py.File(self.level2filename,'w')
-
         if self.level2 in data.keys():
             del data[self.level2]
         data[self.level2] = h5py.ExternalLink(self.outfilename,'/')
-        data.close()
+        
         

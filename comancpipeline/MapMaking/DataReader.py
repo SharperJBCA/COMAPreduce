@@ -22,9 +22,18 @@ def GetFeeds(file_feeds, selected_feeds):
 
 class ReadDataLevel2:
 
-    def __init__(self, filelist, parameters, 
-                 ifeature=5,iband=0,ifreq=0,
-                 keeptod=False,subtract_sky=False,**kwargs):
+    def __init__(self,
+                 filelist, 
+                 feeds=1,  
+                 flag_spikes=False,
+                 offset_length=50,
+                 ifeature=5,
+                 iband=0,
+                 ifreq=0,
+                 keeptod=False,
+                 subtract_sky=False,
+                 map_info={},
+                 **kwargs):
         
         
         # -- constants -- a lot of these are COMAP specific
@@ -39,31 +48,33 @@ class ReadDataLevel2:
         self.psds = None
         self.psdfreqs = None
 
+        # SETUP MAPS:
+        crval = map_info['crval']
+        cdelt = map_info['cdelt']
+        crpix = map_info['crpix']
+        ctype = map_info['ctype']
+        nxpix = int(map_info['nxpix'])
+        nypix = int(map_info['nypix'])
+
+
+
 
         # READ PARAMETERS
-        self.offset_length = parameters['Destriper']['offset']
-        self.flag_spikes = parameters['Destriper']['flag_spikes']
-        self.Feeds  = parameters['Inputs']['feeds']
+        self.offset_length = offset_length
+        self.flag_spikes = flag_spikes
+        self.Feeds  = feeds
 
         try:
-            self.Nfeeds = len(parameters['Inputs']['feeds'])
+            self.Nfeeds = len(self.Feeds)
             self.Feeds = [int(f) for f in self.Feeds]
         except TypeError:
             self.Feeds = [int(self.Feeds)]
             self.Nfeeds = 1
 
 
-        title = parameters['Inputs']['title']
-        self.output_map_filename = f'{title}.fits'        
+        #title = parameters['Inputs']['title']
+        #self.output_map_filename = f'{title}.fits'        
         self.filelist = filelist
-
-        # SETUP MAPS:
-        crval = parameters['Destriper']['crval']
-        cdelt = parameters['Destriper']['cdelt']
-        crpix = parameters['Destriper']['crpix']
-        ctype = parameters['Destriper']['ctype']
-        nxpix = int(parameters['Destriper']['nxpix'])
-        nypix = int(parameters['Destriper']['nypix'])
 
         self.naive  = MapTypes.FlatMapType(crval, cdelt, crpix, ctype,nxpix,nypix)
 

@@ -88,18 +88,21 @@ class Axfunc_slow:
 
 
 
-def Destriper(parameters, data,covariance=None,verbose=False,threshold=1e-7):
+def Destriper(data,
+              niter=100,
+              offset=50,
+              covariance=None,verbose=False,threshold=-5):
     """
     Destriping routines
     """
 
-    niter = int(parameters['Destriper']['niter'])
+    niter = int(niter)
 
     # NB : Need to change offsets to ensure that each
     # is temporally continuous in the future, for now ignore this.
-    offsetLen = parameters['Destriper']['offset']
-    threshold = 10**parameters['Destriper']['threshold']
-    verbose   = parameters['Destriper']['verbose']
+    offsetLen = offset
+    threshold = 10**threshold
+    verbose   = verbose
     Noffsets  = data.Nsamples//offsetLen
 
     # Offsets for storing the outputs

@@ -37,36 +37,45 @@ def smooth_gains(obsid, gains):
 
     return allobs, allgain
 
-path = pathlib.Path(comancpipeline.__file__).resolve().parent
-average_beam_widths = np.loadtxt(f'{path}/data/AverageBeamWidths.dat',skiprows=1)
+def read_gains():
 
-average_beam_widths = {int(d[0]):d[1:] for d in average_beam_widths}
+    path = pathlib.Path(comancpipeline.__file__).resolve().parent
+    average_beam_widths = np.loadtxt(f'{path}/data/AverageBeamWidths.dat',skiprows=1)
 
-
-feed_positions = np.loadtxt(f'{path}/data/COMAP_FEEDS.dat')
-
-feed_positions = {int(d[0]):d[1:] for d in feed_positions}
+    average_beam_widths = {int(d[0]):d[1:] for d in average_beam_widths}
 
 
-feed_gains_hd5 = h5py.File(f'{path}/data/gains.hd5','r')
-
-feed_gains = {k:{'obsids':v['obsids'][...],'gains':v['gains'][...]} for k,v in feed_gains_hd5.items()}
-
-for cal_source, data in feed_gains.items():
-    obscount = get_nobs(data['obsids'])
-    nobs, nfeeds, nroach, nchan = data['gains'].shape
-    allgains = np.zeros((obscount, nfeeds, nroach, nchan))
-
-    for ifeed in range(nfeeds):
-        for iroach in range(nroach):
-            for ichan in range(nchan):
-                allobs, allgains[:,ifeed,iroach,ichan] = smooth_gains(data['obsids'],data['gains'][:,ifeed,iroach,ichan])
+    feed_positions = np.loadtxt(f'{path}/data/COMAP_FEEDS.dat')
     
-    feed_gains[cal_source]['obsids'] = np.array(allobs).astype(int)
-    feed_gains[cal_source]['gains'] = allgains
-    feed_gains[cal_source]['frequency'] = np.array([[27.5, 26.5],
-                                                    [28.5, 29.5],
-                                                    [31.5, 30.5],
-                                                    [32.5, 33.5]])
+    feed_positions = {int(d[0]):d[1:] for d in feed_positions}
 
-feed_gains_hd5.close()
+
+    feed_gains_hd5 = h5py.File(f'{path}/data/gains.hd5','r')
+
+    feed_gains = {k:{'obsids':v['obsids'][...],'gains':v['gains'][...]} for k,v in feed_gains_hd5.items()}
+
+    for cal_source, data in feed_gains.items():
+        obscount = get_nobs(data['obsids'])
+        nobs, nfeeds, nroach, nchan = data['gains'].shape
+        allgains = np.zeros((obscount, nfeeds, nroach, nchan))
+
+        for ifeed in range(nfeeds):
+            for iroach in range(nroach):
+                for ichan in range(nchan):
+                    allobs, allgains[:,ifeed,iroach,ichan] = smooth_gains(data['obsids'],data['gains'][:,ifeed,iroach,ichan])
+    
+        feed_gains[cal_source]['obsids'] = np.array(allobs).astype(int)
+        feed_gains[cal_source]['gains'] = allgains
+        feed_gains[cal_source]['frequency'] = np.array([[27.5, 26.5],
+                                                        [28.5, 29.5],
+                                                        [31.5, 30.5],
+                                                        [32.5, 33.5]])
+
+    feed_gains_hd5.close()
+
+    return feed_positions, feed_gains
+
+try:
+    feed_positions, feed_gains =read_gains()
+except KeyError:
+    pass
