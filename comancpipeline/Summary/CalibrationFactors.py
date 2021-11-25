@@ -136,9 +136,22 @@ class CalibrationGains(BaseClasses.DataStructure):
         for k,v in data.items():
             fshape = v['Values']['flux'].shape
             Nobs = v['Values']['flux'].shape[0]
-            flux = np.reshape(v['Values']['flux'],(fshape[0],fshape[1],8))
+            flux = v['Values']['flux'][...] #np.reshape(v['Values']['flux'],(fshape[0],fshape[1],8))
             freq = v['frequency'].flatten()
-            eflux = np.reshape(v['Errors']['flux'],(fshape[0],fshape[1],8))
+            eflux = v['Errors']['flux'][...] #np.reshape(v['Errors']['flux'],(fshape[0],fshape[1],8))
+
+
+            A = v['Values']['A']#[:5,0,0,0]
+            Ae = v['Errors']['A']#[:5,0,0,0]
+
+            sigx = v['Values']['sigx'][...]* (np.pi/180.)
+            sigy = v['Values']['sigy_scale'][...]* (np.pi/180.)
+            sigx_e = v['Errors']['sigx'][...]* (np.pi/180.)
+            sigy_e = v['Errors']['sigy_scale'][...]* (np.pi/180.)
+
+            eflux = flux*np.sqrt(np.abs(Ae/A)**2 + (sigx_e/sigx)**2 + (sigy_e/sigy)**2)
+            flux = np.reshape(flux,(fshape[0],fshape[1],8))
+            eflux = np.reshape(eflux,(fshape[0],fshape[1],8))
 
             if not k.lower() in gains:
                 gains[k.lower()] = {'gains':np.zeros((Nobs,fshape[1],8)),
