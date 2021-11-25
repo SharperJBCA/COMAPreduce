@@ -129,7 +129,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.cal_factors = np.zeros((nfeeds,nchan))
         for ifeed,feed_num in enumerate(feeds):
             obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
-            gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:,:]
+            gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:]
 
             # now find the nearest non-nan obsid to calibrate off
             obs_idx = np.argmin((obsids - this_obsid)**2)

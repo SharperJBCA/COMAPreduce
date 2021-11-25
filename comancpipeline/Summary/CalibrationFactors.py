@@ -110,7 +110,6 @@ class CalibrationGains(BaseClasses.DataStructure):
             data.close()
             source_count[source] += 1
         # Step 4: Save to file
-        print(output['TauA'].keys())
         self.write(output)
 
     def write(self,output):
@@ -135,7 +134,6 @@ class CalibrationGains(BaseClasses.DataStructure):
 
         gains = {}
         for k,v in data.items():
-            print(k,v.keys())
             fshape = v['Values']['flux'].shape
             Nobs = v['Values']['flux'].shape[0]
             flux = np.reshape(v['Values']['flux'],(fshape[0],fshape[1],8))
@@ -152,5 +150,4 @@ class CalibrationGains(BaseClasses.DataStructure):
                 gains[k.lower()]['gains'][:,:,ifreq]  = flux[...,ifreq]/model_flux[:,None]
                 gains[k.lower()]['errors'][:,:,ifreq] = eflux[...,ifreq]/model_flux[:,None]
 
-
-        General.save_dict_hdf5(gains,'{self.calibration_directory}/gains.hd5')
+        General.save_dict_hdf5(gains,f'{self.calibration_directory}/gains.hd5')

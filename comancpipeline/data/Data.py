@@ -56,13 +56,12 @@ def read_gains():
 
     for cal_source, data in feed_gains.items():
         obscount = get_nobs(data['obsids'])
-        nobs, nfeeds, nroach, nchan = data['gains'].shape
-        allgains = np.zeros((obscount, nfeeds, nroach, nchan))
+        nobs, nfeeds, nchan = data['gains'].shape
+        allgains = np.zeros((obscount, nfeeds, nchan))
 
         for ifeed in range(nfeeds):
-            for iroach in range(nroach):
-                for ichan in range(nchan):
-                    allobs, allgains[:,ifeed,iroach,ichan] = smooth_gains(data['obsids'],data['gains'][:,ifeed,iroach,ichan])
+            for ichan in range(nchan):
+                allobs, allgains[:,ifeed,ichan] = smooth_gains(data['obsids'],data['gains'][:,ifeed,ichan])
     
         feed_gains[cal_source]['obsids'] = np.array(allobs).astype(int)
         feed_gains[cal_source]['gains'] = allgains

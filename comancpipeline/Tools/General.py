@@ -52,26 +52,29 @@ class parse_dictionary:
     Make a dictionary flat so it is easily written to an HDF5 file
     """
 
-    flat_d = {}
-    keys = []
-    level = 0
+    def __init__(self):
+        flat_d = {}
+        keys = []
+        level = 0
 
-    def __call__(self):
-        self.print_dict(self.d)
-        return self.flat_d
+    def __call__(self,d):
+        self.flat_d = {}
+        self.keys = []
+        self.level = 0
+        return self.print_dict(d)
 
-    @classmethod
-    def print_dict(parse_dictionary,d):
+    def print_dict(self,d):
         for k,v in d.items():
             if isinstance(v,dict):
-                parse_dictionary.level += 1
-                parse_dictionary.keys += [k]
-                parse_dictionary.print_dict(v)
-                parse_dictionary.keys = parse_dictionary.keys[:-1]
-                parse_dictionary.level -= 1
+                self.level += 1
+                self.keys += [k]
+                self.print_dict(v)
+                self.keys = self.keys[:-1]
+                self.level -= 1
             else:
-                parse_dictionary.flat_d['/'.join(parse_dictionary.keys+[k])] = v
-        return parse_dictionary.flat_d
+                self.flat_d['/'.join(self.keys+[k])] = v
+        return self.flat_d
+
 
 def create_dataset(h,name,data):
     if name in h:
@@ -94,10 +97,13 @@ def save_dict_hdf5(data,output_file):
     """
     Given a python dictionary, save to an HDF5 file with the same format
     """
-    flat_data = parse_dictionary.print_dict(data)
+    pd = parse_dictionary()
+    flat_data = pd(data)
 
     h = h5py.File(output_file,'a')
+    print(output_file)
     for k,v in flat_data.items():
+        print(k)
         if isinstance(v,np.ndarray):
             if v.dtype.type is np.object_:
                 print(f'WARNING: {k} not written, need to define python object write format')
