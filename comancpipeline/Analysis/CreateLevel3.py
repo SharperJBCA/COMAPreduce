@@ -126,14 +126,16 @@ class CreateLevel3(BaseClasses.DataStructure):
         # Get Gain Calibration Factors
 
         nfeeds, nchan, ntod = self.all_tod.shape
-        self.cal_factors = np.zeros((nfeeds,nchan))
-        for ifeed,feed_num in enumerate(feeds):
-            obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
-            gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:]
+        self.cal_factors = np.ones((nfeeds,nchan))
 
-            # now find the nearest non-nan obsid to calibrate off
-            obs_idx = np.argmin((obsids - this_obsid)**2)
-            self.cal_factors[ifeed,...] = gains[obs_idx].flatten()
+        if self.cal_source != 'none':
+            for ifeed,feed_num in enumerate(feeds):
+                obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
+                gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:]
+
+                # now find the nearest non-nan obsid to calibrate off
+                obs_idx = np.argmin((obsids - this_obsid)**2)
+                self.cal_factors[ifeed,...] = gains[obs_idx].flatten()
         self.all_tod = self.all_tod/self.cal_factors[:,:,None]
         self.all_weights = self.all_weights*self.cal_factors[:,:,None]**2
 

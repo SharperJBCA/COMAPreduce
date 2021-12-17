@@ -826,8 +826,8 @@ class CreateLevel2RRL(CreateLevel2Cont):
         for iqno in range(len(self.rrl_qnumbers)):
             for ifeed,feed_num in enumerate(self.feeds):
                 obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
-                gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:,:]
-                frequency = Data.feed_gains[self.cal_source.lower()]['frequency'][...]
+                gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:]
+                frequency = np.arange(8)+0.5 + 26. #Data.feed_gains[self.cal_source.lower()]['frequency'][...]
                 # now find the nearest non-nan obsid to calibrate off
                 obs_idx = np.argmin((obsids - this_obsid)**2)
                 
@@ -900,9 +900,9 @@ class CreateLevel2RRL(CreateLevel2Cont):
         # Skip files if we aren't overwriting
         if not self.overwrite: 
             return data
-
+        data = self.setReadWrite(data)
         self.logger(f'{fname}:{self.name}: Applying vane calibration.')
-        self.run(data['level1'])
+        self.run(data['level1'].file)
         self.logger(f'{fname}:{self.name}: Writing level 2 file: {self.outfilename}')
         # Want to ensure the data file is read/write
         self.write(data)

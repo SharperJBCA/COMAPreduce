@@ -1,4 +1,5 @@
 import numpy as np
+import comancpipeline
 from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs
 from scipy.optimize import fmin, leastsq
@@ -7,14 +8,15 @@ from scipy.ndimage.filters import median_filter
 from scipy.ndimage.filters import gaussian_filter,maximum_filter
 
 from matplotlib import pyplot
+import shutil
 
-from comancpipeline.Tools import WCS
+#from comancpipeline.Tools import WCSa 
 from comancpipeline.Tools.WCS import DefineWCS
 from comancpipeline.Tools.WCS import ang2pix
 from comancpipeline.Tools.WCS import ang2pixWCS
 from statsmodels import robust
 
-from astropy import wcs as wcsModule
+from astropy import wcs 
 import h5py
 
 #from mpi4py import MPI 
@@ -24,8 +26,251 @@ import os
 import healpy as hp
 import scipy.fftpack as sfft
 from scipy import linalg as la
+from astropy.io import fits
 
 from tqdm import tqdm
+
+__vane_version__ = 'v3'
+__level2_version__ = 'v1'
+
+def ang2pixWCS(w, phi, theta, image_shape):
+    """
+    Ang2Pix given a known wcs object
+
+    args:
+    wcs : wcs object
+    ra : arraylike, degrees
+    dec : arraylike, degrees
+
+    returns:
+    pixels : arraylike, int
+    """
+
+    # Generate pixel coordinates
+    pixcrd = np.floor(np.array(w.wcs_world2pix(phi, theta, 0))).astype('int64')
+
+    bd = ((pixcrd[0,:] < 0) | (pixcrd[1,:] < 0)) | ((pixcrd[0,:] >= image_shape[1]) | (pixcrd[1,:] >= image_shape[0])) 
+
+    pix = pixcrd[0,:] + pixcrd[1,:]*int(image_shape[1])
+    pix = pix.astype('int')
+    pix[bd] = -1
+
+    npix = int(image_shape[0]*image_shape[1])
+
+    return pix
+
+class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
+    """
+    Takes level 1 files, bins and calibrates them for continuum analysis.
+    """
+
+    def __init__(self, feeds='all', output_dir='', nworkers= 1,
+                 average_width=512,calvanedir='AncillaryData/CalVanes',
+                 cal_mode = 'Vane', cal_prefix='',level2='level2',
+                 data_dirs=None,
+                 set_permissions=True,
+                 permissions_group='comap',
+                 calvane_prefix='CalVane',
+                 simulate_signal=True,
+                 simulate_white_noise=True,
+                 simulate_atmosphere=True,
+                 signal_map_file='',**kwargs):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
+        super().__init__(**kwargs)
+
+        self.name = 'CreateLevel2Cont'
+        self.feeds_select = feeds
+
+        self.output_dir = output_dir
+        if isinstance(data_dirs,type(None)):
+            self.data_dirs = [self.output_dir]
+        else:
+            if isinstance(data_dirs,list):
+                self.data_dirs = data_dirs
+            else:
+                self.data_dirs = [data_dirs]
+
+        self.nworkers = int(nworkers)
+        self.average_width = int(average_width)
+
+        self.calvanedir = calvanedir
+        self.calvane_prefix = calvane_prefix
+
+        self.cal_mode = cal_mode
+        self.cal_prefix=cal_prefix
+
+        self.level2=level2
+        self.set_permissions = set_permissions
+        self.permissions_group = permissions_group
+
+        # Setup the sky signal information
+        self.signal_map_file = signal_map_file
+        hdu = fits.open(self.signal_map_file)
+        self.signal_map = hdu[0].data
+        self.signal_map[np.isnan(self.signal_map)] = np.nanmin(self.signal_map)
+        self.signal_map_wcs = wcs.WCS(hdu[0].header)
+        self.signal_map_flat = self.signal_map.flatten()
+        hdu.close()
+        self.simulate_signal = simulate_signal
+        self.simulate_white_noise  = simulate_white_noise
+        self.simulate_atmosphere = simulate_atmosphere
+
+    def __str__(self):
+        return "Creating simulated level2 file with channel binning of {}".format(self.average_width)
+
+    def run(self,data):
+        """
+        Sets up feeds that are needed to be called,
+        grabs the pointer to the time ordered data,
+        and calls the averaging routine in SourceFitting.FitSource.average(*args)
+
+        """
+        # Setup feed indexing
+        # self.feeds : feed horn ID (in array indexing, only chosen feeds)
+        # self.feedlist : all feed IDs in data file (in lvl1 indexing)
+        # self.feeddict : map between feed ID and feed array index in lvl1
+        self.feeds, self.feed_index, self.feed_dict = self.getFeeds(data,self.feeds_select)
+
+        # Opening file here to write out data bit by bit
+        self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['spectrometer/tod'].shape
+        avg_tod_shape = (self.i_nFeeds, self.i_nBands, self.i_nChannels//self.average_width, self.i_nSamples)
+        self.i_nChannels = avg_tod_shape[2]
+
+        frequency = data['spectrometer/frequency'][...]
+        self.avg_frequency = np.nanmean(np.reshape(frequency,(self.i_nBands, self.i_nChannels, self.average_width)),axis=2)
+
+        self.avg_tod = np.zeros(avg_tod_shape,dtype=data['spectrometer/tod'].dtype)
+
+        # Average the data and apply the gains
+        self.simulate_obs(data, self.avg_tod)
+
+    def sky_signal(self,data,avg_tod):
+        """
+        1) Read in a sky map
+        2) Sample at observed pixels
+        3) Return time ordered data
+        """
+
+        feeds = np.arange(self.i_nFeeds,dtype=int)
+
+        ra     = data['spectrometer/pixel_pointing/pixel_ra'][...]
+        dec    = data['spectrometer/pixel_pointing/pixel_dec'][...]
+
+        for ifeed in tqdm(feeds.flatten()):
+            gl, gb = Coordinates.e2g(ra[ifeed], dec[ifeed]) 
+            pixels = ang2pixWCS(self.signal_map_wcs, gl, gb,self.signal_map.shape)
+            avg_tod[ifeed] += self.signal_map_flat[None,None,pixels]
+
+    def atmosphere(self, data, avg_tod, tau=0.01, Tatm=280):
+        """
+        """
+        feeds = np.arange(self.i_nFeeds,dtype=int)
+        el     = data['spectrometer/pixel_pointing/pixel_el'][...]
+        for ifeed in tqdm(feeds.flatten()):
+            A      = 1./np.sin(np.abs(el[ifeed])*np.pi/180.)
+            avg_tod[ifeed] += Tatm * ( 1 - np.exp(-tau*A[None,None,:]))
+
+    def white_noise(self, data, avg_tod,Trec=20):
+        """
+        """
+            
+        feeds = np.arange(self.i_nFeeds,dtype=int)
+        for ifeed in tqdm(feeds.flatten()):
+            avg_tod[ifeed] += np.random.normal(scale=(avg_tod[ifeed]+Trec)/np.sqrt(4e9/4096.*16 / 20.))
+
+        
+
+    def simulate_obs(self, data, avg_tod):
+        """
+        Simulate observations wrapper
+        """
+
+        if self.simulate_signal:
+            self.sky_signal(data,avg_tod)
+
+        if self.simulate_atmosphere:
+            self.atmosphere(data,avg_tod)
+
+        if self.simulate_white_noise:
+            self.white_noise(data,avg_tod)
+
+        
+
+    def __call__(self,data):
+        """
+        Modify baseclass __call__ to change file from the level1 file to the level2 file.
+        """
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+        self.comment = self.getComment(data)
+        prefix = os.path.basename(data.filename).split('.hd5')[0]
+        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+
+        if os.path.exists(self.outfilename) & (not self.overwrite):
+            data.close()
+            self.outfile = h5py.File(self.outfilename,'a')
+            return self.outfile
+
+        self.logger(f'{fname}:{self.name}: Starting level 2 simulation creation.')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing level 2 file: {self.outfilename}')
+        self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
+        # Now change to the level2 file for all future analyses.
+        if data:
+            data.close() # just double check we close the level 1 file.
+        return self.outfile
+
+    def write(self,data):
+        """
+        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        """
+        if not os.path.exists(os.path.dirname(self.outfilename)):
+            os.makedirs(os.path.dirname(self.outfilename))
+
+        if os.path.exists(self.outfilename):
+            self.outfile = h5py.File(self.outfilename,'a')
+        else:
+            self.outfile = h5py.File(self.outfilename,'w')
+
+        # Set permissions and group
+        if self.set_permissions:
+            os.chmod(self.outfilename,0o664)
+            shutil.chown(self.outfilename, group=self.permissions_group)
+
+        if self.level2 in self.outfile:
+            del self.outfile[self.level2]
+        lvl2 = self.outfile.create_group(self.level2)
+
+        tod_dset = lvl2.create_dataset('averaged_tod',data=self.avg_tod, dtype=self.avg_tod.dtype)
+        tod_dset.attrs['Unit'] = 'K'
+        tod_dset.attrs['Calibration'] = '{self.cal_mode}:{self.cal_prefix}'
+
+        freq_dset = lvl2.create_dataset('frequency',data=self.avg_frequency, dtype=self.avg_frequency.dtype)
+
+        # Link the Level1 data
+        data_filename = data.filename
+        fname = data.filename.split('/')[-1]
+        data.close()
+        if not 'level1' in self.outfile:
+            self.outfile['level1'] = h5py.ExternalLink(data_filename,'/')
+        lvl2.attrs['version'] = __level2_version__
+
+        # Add version info
+        lvl2.attrs['pipeline-version'] = comancpipeline.__version__
+
+        # Link the Level1 data
+        if 'Vane' in lvl2:
+            del lvl2['Vane']
+        lvl2['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
+        lvl2.attrs['vane-version'] = lvl2['Vane'].attrs['version']
+
 
 # Class for storing source locations
 class Source:

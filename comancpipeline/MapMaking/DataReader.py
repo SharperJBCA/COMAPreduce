@@ -32,6 +32,7 @@ class ReadDataLevel2:
                  ifreq=0,
                  keeptod=False,
                  subtract_sky=False,
+                 feed_weights=None,
                  map_info={},
                  **kwargs):
         
@@ -47,6 +48,7 @@ class ReadDataLevel2:
         self.ifreq = ifreq
         self.psds = None
         self.psdfreqs = None
+        self.feed_weights=feed_weights
 
         # SETUP MAPS:
         crval = map_info['crval']
@@ -76,7 +78,9 @@ class ReadDataLevel2:
         #self.output_map_filename = f'{title}.fits'        
         self.filelist = filelist
 
-        self.naive  = MapTypes.FlatMapType(crval, cdelt, crpix, ctype,nxpix,nypix)
+        self.naive  = MapTypes.FlatMapType(crval, cdelt, 
+                                           crpix, ctype,
+                                           nxpix, nypix)
 
 
         # Will define Nsamples, datasizes[], and chunks[[]]
@@ -104,7 +108,9 @@ class ReadDataLevel2:
         self.Noffsets  = self.Nsamples//self.offset_length
 
         # Contains the difference between the TOD and the map average
-        self.offset_residuals = OffsetTypes.Offsets(self.offset_length, self.Noffsets, self.Nsamples)
+        self.offset_residuals = OffsetTypes.Offsets(self.offset_length, 
+                                                    self.Noffsets, 
+                                                    self.Nsamples)
 
         for i, filename in enumerate(tqdm(filelist)):
             try:
@@ -190,6 +196,9 @@ class ReadDataLevel2:
             wei_in = wei_dset[ifeed,self.iband,:]
             flags_in = flags[ifeed,:]
             samples = np.arange(tod_in.size)
+            if not isinstance(self.feed_weights,type(None)):
+                wei_in /= self.feed_weights[index]**2 # bigger feed weights, mean the weights are... lower?
+                #print(self.Feeds[index],self.feed_weights[index])
 
 
             if self.flag_spikes:
@@ -442,10 +451,10 @@ class ReadDataLevel2_MADAM:
         Want to select each feed and average the data over some frequency range
         """
 
-        dset = d['level3/tod']
+        dset     = d['level3/tod']
         wei_dset = d['level3/weights']
-        flags = d['level2/Flags/sigma_clip_flag']
-        tod_in = np.zeros(dset.shape[-1],dtype=dset.dtype)
+        flags    = d['level2/Flags/sigma_clip_flag']
+        tod_in   = np.zeros(dset.shape[-1],dtype=dset.dtype)
 
         scan_edges = d['level2/Statistics/scan_edges'][...]
         tod = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
@@ -453,9 +462,12 @@ class ReadDataLevel2_MADAM:
             
         # Read in data from each feed
         for index, ifeed in enumerate(self.FeedIndex[:]):
-            #dset.read_direct(tod_in,np.s_[ifeed:ifeed+1,self.iband,:])
             tod_in = dset[ifeed,self.iband,:]
             wei_in = wei_dset[ifeed,self.iband,:]
+            if not isinstance(self.feed_weights,type(None)):
+                wei_in *= self.feed_weights[index]**2 # bigger feed weights, mean the weights are... lower?
+                print(self.feeds[index],self.feed_weights[index])
+
             flags_in = flags[ifeed,:]
             samples = np.arange(tod_in.size)
 
@@ -493,8 +505,8 @@ class ReadDataLevel2_MADAM:
         # We store all the pointing information
         x0  = d['level1/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
         y0  = d['level1/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
-        x  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
-        y  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
+        x   = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
+        y   = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
         mjd  = d['level1/spectrometer/MJD'][:]
         for i in range(x.shape[0]):
             x[i],y[i] = Coordinates.h2e_full(x[i],y[i],mjd,Coordinates.comap_longitude,Coordinates.comap_latitude)

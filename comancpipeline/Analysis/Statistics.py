@@ -277,20 +277,19 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.filter_coefficients = np.zeros((nFeeds, nBands, nChannels, nScans, 1)) # Stores the per channel gradient of the  median filter
         self.atmos_coefficients = np.zeros((nFeeds, nBands, nChannels, nScans, 1)) # Stores the per channel gradient of the  median filter
 
-        pbar = tqdm(total=(nFeeds*nBands*nChannels*nScans),desc=self.name)
-
+        pbar = tqdm(total=(nFeeds*nBands*nScans),desc=self.name)
         for iscan,(start,end) in enumerate(scan_edges):
             local_filter_tods = np.zeros((nFeeds,nBands, end-start))
             for ifeed in range(nFeeds):
                 if feeds[ifeed] == 20:
                     continue
                 for iband in range(nBands):
-
                     band_average = np.nanmean(tod[ifeed,iband,3:-3,start:end],axis=0)
                     atmos_filter,atmos,atmos_errs = self.FitAtmosAndGround(band_average ,
                                                                          az[ifeed,start:end],
                                                                          el[ifeed,start:end])
 
+                    print(np.nansum(band_average-atmos_filter))
                     local_filter_tods[ifeed,iband,:] = self.median_filter(band_average-atmos_filter)[:band_average.size]
 
                     self.atmos[ifeed,iband,iscan,:] = atmos
@@ -323,7 +322,7 @@ class FnoiseStats(BaseClasses.DataStructure):
                         self.fnoise_fits[ifeed,iband,ichan,iscan,1:] = f_fits
 
 
-                        pbar.update(1)
+                    pbar.update(1)
 
             self.filter_tods += [local_filter_tods]
         pbar.close()
@@ -388,7 +387,10 @@ class FnoiseStats(BaseClasses.DataStructure):
         """
         Calculate this AFTER removing the atmosphere.
         """
-        filter_tod = np.array(medfilt.medfilt(tod.astype(np.float64),np.int32(self.medfilt_stepsize)))
+        if tod.size > 2*self.medfilt_stepsize:
+            filter_tod = np.array(medfilt.medfilt(tod.astype(np.float64),np.int32(self.medfilt_stepsize)))
+        else:
+            filter_tod = np.ones(tod.size)*np.nanmedian(tod)
 
         return filter_tod[:tod.size]
 

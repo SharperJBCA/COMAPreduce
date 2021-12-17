@@ -66,7 +66,7 @@ class DataStructure(object):
             target = 'spectrometer'
 
         if 'features' in data[target]:
-            return data[target][features][...]
+            return data[target]['features'][...]
         else:
             return 
 

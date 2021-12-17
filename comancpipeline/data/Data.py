@@ -40,7 +40,7 @@ def smooth_gains(obsid, gains,errs):
         allgain[~gd] = np.interp(allobs[~gd],allobs[gd],allgain[gd])
         allgain_mdl = filters.median(allgain,filters.window('boxcar',51))
     except ValueError:
-        pass
+        return allobs, allgain
     
     rms=  stats.MAD(allgain[gd]-allgain_mdl[gd])
     bd = (allgain < 0.5) | (allgain > 1) | (np.abs(allgain-med) > 2) | (allerrs > 1e-3) | (np.abs(allgain-allgain_mdl) > 3*rms)

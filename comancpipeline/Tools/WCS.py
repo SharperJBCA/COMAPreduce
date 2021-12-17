@@ -229,7 +229,7 @@ def DefineWCS(naxis=[100,100], cdelt=[1./60., 1./60.],
     xr[xr > 180] -= 360
     return wcs, xr, yr
 
-def ang2pixWCS(wcs, ra, dec, ctype=['RA---TAN', 'DEC--TAN']):
+def ang2pixWCS(w, phi, theta, image_shape):
     """
     Ang2Pix given a known wcs object
 
@@ -242,10 +242,16 @@ def ang2pixWCS(wcs, ra, dec, ctype=['RA---TAN', 'DEC--TAN']):
     pixels : arraylike, int
     """
 
-    naxis = [int((wcs.wcs.crpix[0]-1.)*2.), int((wcs.wcs.crpix[1]-1.)*2.)]
+    # Generate pixel coordinates
+    pixcrd = np.floor(np.array(w.wcs_world2pix(phi, theta, 0))).astype('int64')
 
+    bd = ((pixcrd[0,:] < 0) | (pixcrd[1,:] < 0)) | ((pixcrd[0,:] >= image_shape[1]) | (pixcrd[1,:] >= image_shape[0])) 
 
-    pix = ang2pix(naxis, wcs.wcs.cdelt, wcs.wcs.crval, dec, ra, ctype=ctype).astype('int')
+    pix = pixcrd[0,:] + pixcrd[1,:]*int(image_shape[1])
+    pix = pix.astype('int')
+    pix[bd] = -1
+
+    npix = int(image_shape[0]*image_shape[1])
 
     return pix
 
@@ -264,12 +270,14 @@ def query_disc(x0,y0,r, wcs, shape):
 
 
 
-def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering='C',weights=None):
+def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering='C',weights=None,mask=None,mask_wcs=None):
     """
     """
 
     if isinstance(weights,type(None)):
         weights = np.ones(map_in.size)
+    if isinstance(mask,type(None)):
+        mask = np.zeros(map_in.size,dtype=bool)
 
     # Get pixel coordinates of the input wcs
     nypix,nxpix = shape_in
@@ -284,6 +292,27 @@ def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering=
     if c0 != c1:
         if c0 == 'GLON':
             ra,dec = Coordinates.g2e(ra,dec)
+        else:
+            ra,dec = Coordinates.e2g(ra,dec)
+
+    if not isinstance(mask_wcs, type(None)):
+        #nypix,nxpix = mask.shape
+        #ypix,xpix = np.meshgrid(np.arange(nypix),np.arange(nxpix))
+        #ra_mask, dec_mask = wcs_in.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
+
+        ra_mask, dec_mask = wcs_in.wcs_pix2world(xpix.T.flatten(), ypix.T.flatten(),0)
+        c0 = wcs_in.wcs.ctype[0].split('-')[0]
+        c1 = mask_wcs.wcs.ctype[0].split('-')[0]
+        if c0 != c1:
+           if c0 == 'GLON':
+               ra_mask,dec_mask = Coordinates.g2e(ra_mask,dec_mask)
+           else:
+               ra_mask,dec_mask = Coordinates.e2g(ra_mask,dec_mask)
+        #xp_mask, yp_mask = mask_wcs.wcs_world2pix(ra_mask, dec_mask, 0)
+        
+        pix_mask = ang2pixWCS(mask_wcs, ra_mask, dec_mask, mask.shape)
+        mask_flat = mask.flatten()
+        weights[~mask_flat[pix_mask]] = 0
 
     # Convert to pixel coordinate of the output wcs
     #pix_target = ang2pixWCS(wcs_target, ra.flatten(), dec.flatten(), ctype=wcs_target.wcs.ctype)

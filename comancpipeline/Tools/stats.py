@@ -8,6 +8,52 @@ from comancpipeline.Tools import Coordinates
 from matplotlib.transforms import ScaledTranslation
 from scipy.signal import fftconvolve
 
+c = 299792458.
+k = 1.3806488e-23
+h = 6.62606957e-34
+T_cmb = 2.725
+Jy = 1e26
+
+def toJy(_nu,beam):
+    '''
+    toJy(nu,beam)
+
+    nu: frequency in GHz
+    beam: beam in steradians.
+    
+    '''
+
+    nu =_nu* 1e9
+    return 2.*k*nu**2/c**2 * beam * Jy
+
+def planckcorr(nu_in):
+
+    nu = nu_in * 1e9
+
+    x = h*nu/k/T_cmb
+
+    return x**2*np.exp(x)/(np.exp(x) - 1.)**2
+
+def Units(unit,nu,pixbeam=1):
+    """
+    Converts units to K
+    """
+    if isinstance(nu,type(None)):
+        return 1
+
+    conversions = {'K':1.,
+                   'mK_RJ':1e-3,
+                   'mK':1e-3,
+                   'mKCMB':planckcorr(nu)*1e-3,
+                   'KCMB':planckcorr(nu),
+                   'Wm2sr':1,
+                   'MJysr':1e6/toJy(nu,1.)}
+
+    if unit in conversions:
+        return conversions[unit]
+    else:
+        return 1
+
 
 def MAD(d,axis=0):
     """
