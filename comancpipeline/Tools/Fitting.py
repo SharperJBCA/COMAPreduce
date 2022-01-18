@@ -436,7 +436,6 @@ class Gauss2dRot_General:
             flat_samples = np.zeros(1)
             min_chi2 = self.emcee_errfunc(result,xy,z,covariance)
             ddof = len(z)
-
         else:
             # Perform the least-sqaures fit
             result = minimize(self.minimize_errfunc,P0,args=(xy,z,covariance),method='Nelder-Mead')
@@ -500,7 +499,6 @@ class Gauss2dRot_General:
         if self.limfunc(P):
             return -1e32
         else:
-            #print(np.sum(self.Priors(P)))
             chi2 = -np.sum( (self.func(P,xy) - z)**2/cov ) #- self.Priors(P)
             if np.isfinite(chi2):
                 return chi2

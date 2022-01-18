@@ -89,6 +89,81 @@ subroutine planet(jd, np, dist, len_bn)
   
 end subroutine planet
 
+subroutine test_oap_aop(mjd,lon,lat)
+  implicit none
+  real*8, intent(in) :: lon
+  real*8, intent(in) :: lat
+  real*8, intent(in) :: mjd
+  interface
+     real*8 FUNCTION sla_gmst(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_gmst
+  end interface
+
+  interface
+     real*8 FUNCTION sla_dranrm(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dranrm
+  end interface
+
+  interface
+     real*8 FUNCTION sla_dtt(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_dtt
+  end interface
+
+  interface
+     real*8 FUNCTION sla_sep(A1, B1, A2, B2)
+     real*8 :: A1, B1, A2, B2
+     END FUNCTION sla_sep
+  end interface
+  interface
+     real*8 FUNCTION sla_ranorm(mjddummy)
+     real*8 :: mjddummy
+     END FUNCTION sla_ranorm
+  end interface
+
+  !f2py integer len_bn
+  !f2py real*8 lon, lat
+  !f2py real*8 residual,mjd
+
+  integer :: i, iaz, iel
+
+  real*8 :: ra, dec, ra_temp, dec_temp,az_temp,el_temp,ha,dut
+  real*8 :: pi = 3.14159265359
+  real*8 :: zob
+  real*8 :: SECPERDAY = 86400.
+  real*8 :: djtt
+
+  real*8 :: az, el
+  dut = 0D0
+  i = 1
+  open(unit=20,file='results.txt', action='write', status='replace')
+  do iaz=1, 360
+     do iel=1, 90
+        az = sla_ranorm(iaz* pi/180D0)
+        el = iel* pi/180D0
+
+        zob = pi / 2D0 - el 
+        djtt = mjd + sla_dtt(mjd)/SECPERDAY
+
+        call sla_oap('A',az , zob, mjd, dut, lon, lat, 0D0, 0D0,0D0,0D0,0D0,0D0,0.55,0D0,ra,dec) ! observed to apparent coordinate
+        call sla_amp(ra,dec, djtt, 2000D0,ra_temp,dec_temp) ! convert to mean coordinate
+        call sla_map(ra_temp,dec_temp, 0D0, 0D0, 0D0, 0D0, 2000D0, djtt,ra,dec) ! convert back to apparent
+        call sla_aop(ra,dec, mjd, dut, lon, lat, 0D0, 0D0, 0D0, 0D0, 0D0, 0D0, 0.55D0, 0D0, & 
+             az_temp, el_temp, ha, dec_temp, ra_temp) ! apparent to observed
+        el_temp = pi / 2D0 - el_temp
+        az_temp = sla_ranorm(az_temp)
+        print *, az,el,az_temp,el_temp
+        write(20,*) (az_temp-az)*(az_temp-az) + (el_temp-el)*(el_temp-el)
+        
+        i = i + 1
+     enddo
+  enddo    
+  close(20)
+
+end subroutine test_oap_aop
+
 subroutine h2e_full(az, el, mjd, lon, lat,dut, ra, dec, len_bn)
   implicit none
   
@@ -455,12 +530,13 @@ end subroutine precess_year
 
 
 
-subroutine pa(ra, dec,mjd, lon,lat,pang, len_bn)
+subroutine pa(ra, dec,mjd, lon,lat,dut,pang, len_bn)
   implicit none
   
   integer, intent(in) :: len_bn
   real*8, intent(in) :: lon
   real*8, intent(in) :: lat
+  real*8, intent(in) :: dut
   real*8, intent(in) :: mjd(len_bn)
   real*8, intent(in) :: ra(len_bn)
   real*8, intent(in) :: dec(len_bn)
@@ -492,22 +568,21 @@ subroutine pa(ra, dec,mjd, lon,lat,pang, len_bn)
 
 
   real*8 :: SECPERDAY = 86400.
-  real*8 :: mjd_tt
-  real*8 :: eq
 
   !f2py integer len_bn
   !f2py real*8 mjd, lon, lat
   !f2py real*8 ra,dec, pang
 
   integer :: i
-  real*8 :: ha, gmst
+  real*8 :: ha, gmst,ra_temp,dec_temp,az,el,djtt
 
   do i=1, len_bn
-     gmst = sla_gmst(mjd(i))
-     mjd_tt = mjd(i) + sla_dtt(mjd(i))/SECPERDAY
-     eq = sla_eqeqx(mjd_tt)
-     ha = gmst + lon - ra(i) + eq
-     pang(i) = sla_pa(ha, dec(i), lat)
+     djtt = mjd(i) + sla_dtt(mjd(i))/SECPERDAY
+     ! Convert from Mean to Apparent position
+     call sla_map(ra(i),dec(i), 0D0, 0D0, 0D0, 0D0, 2000D0, djtt,ra_temp,dec_temp)
+     call sla_aop(ra_temp,dec_temp, mjd(i), dut, lon, lat, 0D0, 0D0, 0D0, 0D0, 0D0, 0D0, 0.55D0, 0D0, & 
+          az, el, ha, dec_temp, ra_temp) 
+     pang(i) = sla_pa(ha, dec_temp, lat)
   enddo    
 
   

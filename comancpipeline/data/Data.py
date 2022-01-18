@@ -90,9 +90,9 @@ def read_gains():
 
     feed_gains_hd5.close()
 
-    return feed_positions, feed_gains
+    return feed_positions, feed_gains, average_beam_widths
 
 try:
-    feed_positions, feed_gains =read_gains()
+    feed_positions, feed_gains, average_beam_widths =read_gains()
 except KeyError:
     pass

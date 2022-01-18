@@ -295,7 +295,7 @@ def h2e_full(az, el, mjd, lon, lat, degrees=True):
         iers_b = iers.IERS_B.open()
         dut = iers_b.ut1_utc(Time(mjd[0],format='mjd')).value
     except iers.iers.IERSRangeError:
-        dut = 0
+        dut = 0.0
 
     ra, dec = pysla.h2e_full(az*c, el*c, mjd, lon*c, lat*c,dut)
     return ra/c, dec/c
@@ -324,7 +324,12 @@ def e2h_full(ra, dec, mjd, lon, lat, degrees=True, return_lha=False):
     if not isinstance(mjd, np.ndarray):
         mjd = np.array([mjd])
 
-    dut = 0. # UT1-UTC, get from the IERS database, not implemented. 
+    try:
+        iers_b = iers.IERS_B.open()
+        dut = iers_b.ut1_utc(Time(mjd[0],format='mjd')).value
+    except iers.iers.IERSRangeError:
+        dut = 0.0
+
     az, el = pysla.e2h_full(ra*c, dec*c, mjd, lon*c, lat*c, dut)
     az = np.mod(az,2*np.pi)
     if return_lha:
@@ -459,8 +464,13 @@ def pa(ra, dec, mjd, lon ,lat, degrees=True):
         c = np.pi/180.
     else:
         c = 1.
+    try:
+        iers_b = iers.IERS_B.open()
+        dut = iers_b.ut1_utc(Time(mjd[0],format='mjd')).value
+    except iers.iers.IERSRangeError:
+        dut = 0.0
 
-    p = pysla.pa(ra*c, dec*c, mjd, lon*c, lat*c)
+    p = pysla.pa(ra*c, dec*c, mjd, lon*c, lat*c,dut)
     return p/c
 
 def e2g(ra, dec, degrees=True):

@@ -92,64 +92,35 @@ def level1_destripe(filename,options):
 
     """
     # Get the inputs:
-    parameters = ParserClass.Parser(filename)
-    title = parameters['Inputs']['title'] 
+    p = ParserClass.Parser(filename)
+    title = p['Inputs']['title'] 
     for k1,v1 in options.items():
         if len(options.keys()) == 0:
             break
         for k2, v2 in v1.items():
-            parameters[k1][k2] = v2
-    title = parameters['Inputs']['title']
+            p[k1][k2] = v2
+    title = p['Inputs']['title']
     # Read in all the data
-    if not isinstance(parameters['Inputs']['feeds'], list):
-        parameters['Inputs']['feeds'] = [parameters['Inputs']['feeds']]
-    filelist = np.loadtxt(parameters['Inputs']['filelist'],dtype=str,ndmin=1)
+    if not isinstance(p['Inputs']['feeds'], list):
+        p['Inputs']['feeds'] = [p['Inputs']['feeds']]
+    filelist = np.loadtxt(p['Inputs']['filelist'],dtype=str,ndmin=1)
 
     
     np.random.seed(1)
-    data = DataReader.ReadDataLevel2(filelist,parameters,**parameters['ReadData'])
-    offsetMap, offsets = Destriper.Destriper(parameters, data)
+    data = DataReader.ReadDataLevel2(filelist,
+                                     feeds = p['Inputs']['feeds'],
+                                     flag_spikes  =p['ReadData']['flag_spikes'],
+                                     offset_length=p['Destriper']['offset'],
+                                     ifeature     =p['ReadData']['ifeature'],
+                                     feed_weights =p['Inputs']['feed_weights'],
+                                     iband        =p['ReadData']['iband'],
+                                     keeptod      =p['ReadData']['keeptod'],
+                                     subtract_sky =p['ReadData']['subtract_sky'],
+                                     map_info     =p['Destriper'])
 
-    np.save('test_data.npy',[data.all_tod,offsets.offsets,offsets.offsetpixels])
+    offsetMap, offsets = Destriper.Destriper(p, data)
 
-    write_map(parameters,data,offsetMap,postfix='')
-    # parameters['Destriper']['offset'] = 10.
-    # np.random.seed(1)
-    # data = DataReader.ReadDataLevel2(filelist,parameters,**parameters['ReadData'])
-
-    # time_out = np.arange(data.Noffsets)*parameters['Destriper']['offset']/50.
-    # cov = build_covariance(offsets.offsets)
-    # time_in  = np.arange(cov.size)*50./50.
-    # C = np.interp(time_out,time_in, cov)
-    # t = time_out-np.max(time_in)
-    # sel = (time_out > np.max(time_in))
-    # C[sel] *= np.exp(-t[sel])
-    # C[sel] *= data.Noffsets/offsets.offsets.size
-
-    # offsetMap, offsets_wprior = Destriper.Destriper(parameters, data,covariance=C, verbose=True)
-    # write_map(parameters,data,offsetMap,postfix='_wprior')
-    # cov_wprior = build_covariance(offsets_wprior.offsets)
-    # pyplot.plot(time_out,cov_wprior/offsets_wprior.offsets.size,',')
-    # pyplot.plot(time_in,cov/offsets.offsets.size,',')
-    # pyplot.show()
-
-    # ps_wprior = np.abs(np.fft.fft(offsets_wprior.offsets))**2
-    # nu_wprior = np.fft.fftfreq(offsets_wprior.offsets.size,d=parameters['Destriper']['offset']/50.)
-    # ps_noprior= np.abs(np.fft.fft(offsets.offsets))**2
-    # nu_noprior = np.fft.fftfreq(offsets.offsets.size,d=1.)
-
-    # pyplot.plot(nu_wprior[1:nu_wprior.size//2], ps_wprior[1:nu_wprior.size//2]/nu_wprior.size**2,',')
-    # pyplot.plot(nu_noprior[1:nu_noprior.size//2], ps_noprior[1:nu_noprior.size//2]/nu_noprior.size**2,',')
-    # pyplot.yscale('log')
-    # pyplot.xscale('log')
-    # pyplot.grid()
-    # pyplot.show()
-
-    # pyplot.plot(data.all_tod)
-    # pyplot.plot(np.repeat(offsets_wprior.offsets,parameters['Destriper']['offset']))
-    # pyplot.plot(np.repeat(offsets.offsets,50))
-    # pyplot.show()
-
+    write_map(p,data,offsetMap,postfix='')
 
     ### 
     # Write out the offsets
