@@ -393,7 +393,7 @@ class Gauss2dRot_General:
                 'y0':lambda P: False,
                 'phi':lambda P: (P['phi'] < -np.pi/2.) | (P['phi'] > np.pi/2.),
                 'sigx': lambda P: (P['sigx'] < 0),
-                'sigy_scale': lambda P: (P['sigy_scale'] < 1) | (P['sigy_scale'] > 10)}
+                'sigy_scale': lambda P: (P['sigy_scale'] < 0.1) | (P['sigy_scale'] > 10)}
 
         params = self.get_param_names()
 
