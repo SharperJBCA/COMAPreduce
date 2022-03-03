@@ -11,8 +11,8 @@ from comancpipeline.Tools import  binFuncs, stats, Coordinates
 
 class FlatMapType:
 
-    def __init__(self,*args):
-        self.setWCS(*args)
+    def __init__(self,*args,**kwargs):
+        self.setWCS(*args,**kwargs)
 
         self.sig = np.zeros(self.nypix*self.nxpix)
         self.wei = np.zeros(self.nypix*self.nxpix)
@@ -57,12 +57,20 @@ class FlatMapType:
         self.average()
         return np.reshape(self.hit_map,(self.nypix,self.nxpix))
 
-    def setWCS(self, *args):
+    def setWCS(self, *args, nxpix=0, nypix=0):
         """
         Declare world coordinate system for plots
         """
-        
-        crval, cdelt, crpix, ctype,nxpix,nypix = args
+        if isinstance(args[0],wcs.WCS):
+            self.wcs = args[0]
+            self.nxpix = nxpix
+            self.nypix = nypix
+            self.crval = self.wcs.wcs.crval
+            self.cdelt = self.wcs.wcs.cdelt
+            self.crpix = self.wcs.wcs.crpix
+            self.ctype = self.wcs.wcs.ctype
+            return 
+        crval, cdelt, crpix, ctype = args
         if isinstance(crval[0],str):
             crval[0] = Coordinates.sex2deg(crval[0],hours=True)
             crval[1] = Coordinates.sex2deg(crval[1],hours=False)

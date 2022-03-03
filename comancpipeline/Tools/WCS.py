@@ -6,7 +6,7 @@ from astropy import wcs
 from astropy.io import fits
 from comancpipeline.Tools import Coordinates, binFuncs
 from astropy.coordinates import SkyCoord
-
+print('WCS CODE IS IMPORTED')
 
 def xlim_proj(w,x0,x1):
     pyplot.xlim(w.world_to_pixel(SkyCoord(x0,0,frame='galactic',unit='deg'))[0],\
@@ -38,8 +38,9 @@ def query_disc(x0,y0,r, wcs, shape):
     nypix,nxpix = shape
     xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
     xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
+    x,y = Coordinates.Rotate(xpix_world,ypix_world, x0, y0, 0)
 
-    rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
+    rpix_world = np.sqrt(x**2 + y**2)
     select = (rpix_world < r)
 
     return select,xpix_world[select],ypix_world[select]
@@ -51,7 +52,8 @@ def query_annullus(x0,y0,r0, r1, wcs, shape):
     xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
     xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
 
-    rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
+    x,y = Coordinates.Rotate(xpix_world,ypix_world, x0, y0, 0)
+    rpix_world = np.sqrt(x**2+y**2)
     select = np.where((rpix_world >= r0) & (rpix_world < r1))[0]
     
     return select,xpix_world[select],ypix_world[select]
@@ -255,17 +257,17 @@ def ang2pixWCS(w, phi, theta, image_shape):
 
     return pix
 
-def query_disc(x0,y0,r, wcs, shape):
-    """
-    """
-    nypix,nxpix = shape
-    xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
-    xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
+# def query_disc(x0,y0,r, wcs, shape):
+#     """
+#     """
+#     nypix,nxpix = shape
+#     xpix,ypix = np.meshgrid(np.arange(nxpix),np.arange(nypix))
+#     xpix_world,ypix_world = wcs.wcs_pix2world(xpix.flatten(), ypix.flatten(),0)
 
-    rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
-    select = (rpix_world < r)
+#     rpix_world = np.sqrt((xpix_world-x0)**2*np.cos(ypix_world*np.pi/180.)**2 + (ypix_world-y0)**2)
+#     select = (rpix_world < r)
 
-    return select,xpix_world[select],ypix_world[select]
+#     return select,xpix_world[select],ypix_world[select]
 
 
 
@@ -318,7 +320,9 @@ def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering=
     #pix_target = ang2pixWCS(wcs_target, ra.flatten(), dec.flatten(), ctype=wcs_target.wcs.ctype)
 
     nypix,nxpix = shape_target
-    xpix,ypix = np.floor(np.array(wcs_target.wcs_world2pix(ra.flatten(), dec.flatten(), 0))).astype('int64')
+    xpix,ypix = np.array(wcs_target.wcs_world2pix(ra.flatten(), dec.flatten(), 1))
+    xpix = (xpix-0.5).astype(int)
+    ypix = (ypix-0.5).astype(int)
     pix_target = (xpix + ypix*nxpix).astype(np.int64)
     
     bad = (xpix >= nxpix) | (xpix < 0) | (ypix >= nypix) | (nypix < 0)
@@ -334,5 +338,14 @@ def udgrade_map_wcs(map_in, wcs_in, wcs_target, shape_in, shape_target,ordering=
                        weights=(map_in[good]/weights[good]).astype(np.float64))#, mask=good.astype(np.int64))
     binFuncs.binValues(hit_out, pix_target[good].astype(np.int64), 
                        weights=(1./weights[good]).astype(np.float64))#,mask=good.astype(np.int64))
+
+    # pyplot.subplot(121,projection=wcs_in)
+    # pyplot.imshow(np.reshape(map_in,shape_in))
+    # pyplot.contour( np.reshape(map_out/hit_out,shape_target),
+    #                 colors='w',
+    #                 transform=pyplot.gca().get_transform(wcs_target))
+    # pyplot.subplot(122,projection=wcs_target)
+    # pyplot.imshow(np.reshape(map_out/hit_out,shape_target))
+    # pyplot.show()
 
     return np.reshape(map_out/hit_out,shape_target), np.reshape(1./hit_out,shape_target)

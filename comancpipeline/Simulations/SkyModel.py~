@@ -1,0 +1,33 @@
+# Sky Model for COMAP pipeline simulations
+#
+
+class SkyModel:
+
+    def __init__(self, model_params):
+        """
+
+        All models in model info will be summed together when
+        return the TOD
+
+        model_params = {'model_name':
+                      {'mapfile':'/path/to/map.fits',
+                       'frequency_model':'func_in_frequency_models.py',
+                       'fmodel_param1':...}
+                      'model_name2':...
+                      }
+        """
+
+        for model_name, model_info in model_params.items():
+            self.models += [Models.__dict__[model_name](**model_info)]
+
+
+    def __call__(self, gl, gb, frequency):
+        """
+        Always work in galactic frame for now, allow for 
+        rotations in future
+        """
+
+        tod = np.zeros(gl.size)
+        for model in self.models:
+            tod += model(gl,gb,frequency)
+        return tod

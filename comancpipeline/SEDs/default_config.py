@@ -44,25 +44,16 @@ settings = {'name': 'MCMC',  # name with which your results and figures will sta
             # as "param", "param1", "param2"... for your first, second, third... models
             # Defaults are [-np.inf, np.inf] '''
 
-            'priors': {'T_d': [10, 100],
-                       'tau': [-5, -2],
-                       'beta': [1.2, 2.2],
-                       'nu_AME': [5, 60],
-                       'W_AME': [0.2, 1],
-                       'nu_AME1': [5, 60],
-                       'W_AME1': [0.2, 1],
-                       'T_d1': [10, 100],
-                       'tau1': [-5, -2],
-                       'beta1': [1.2, 2.2]},
-
+            'priors': {},
+            'gauss_priors': {},
 
             # Initial Guesses - variable names must match the names in your emission functions
             # Note: case sensitive; if you have more than one model of each, refer to your parameters
             # as "param", "param1", "param2"... for your first, second, third... models
             # Defaults are 1, or results of the least squares pre-fit if activated '''
 
-            'guesses': {'A_sync': 10,
-                        'alpha': -3,
+            'guesses': {'A_sync': 100,
+                        'alpha': -0.5,
                         'EM': 200,
                         'A_AME': 10,
                         'nu_AME': 30,

@@ -80,7 +80,7 @@ class ReadDataLevel2:
 
         self.naive  = MapTypes.FlatMapType(crval, cdelt, 
                                            crpix, ctype,
-                                           nxpix, nypix)
+                                           nxpix=nxpix, nypix=nypix)
 
 
         # Will define Nsamples, datasizes[], and chunks[[]]

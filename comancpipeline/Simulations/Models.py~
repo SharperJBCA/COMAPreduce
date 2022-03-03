@@ -1,0 +1,44 @@
+# Classes describing individual sky model components 
+#
+import numpy as np
+from comancpipeline.Simulations import FrequencyModels
+from astropy.io import fits
+from astropy.wcs import WCS
+
+class BasicSkyComponent:
+
+    def __init__(self, mapfile, frequency_model, **kwargs):
+        """
+        """
+
+        self.mapfile = mapfile
+        self.frequency_model = FrequencyModels.__dict__[frequency_model]
+        self.frequency_model_kwargs = kwargs
+
+        self.skymap, self.wcs = self.read_skymap(mapfile)
+
+
+    def __call__(self, gl, gb, frequency):
+        """
+        
+        """
+
+        pixels = cWCS.ang2pixWCS(self.wcs, gl, gb, self.skymap.shape)
+        tod = self.skymap.flatten()[pixels]
+
+        tod *= self.frequency_model(**self.frequency_model_kwargs)
+
+    def read_skymap(self,mapfile):
+        """
+        Reads in the sky map, assumes it is a fits file
+        --- replace this function for other sky component classes
+        """
+
+        hdu = fits.open(mapfile)
+        m = hdu[0].data[...]
+        wcs = WCS(hdu[0].header)
+        hdu.close()
+
+        return m, wcs
+
+        

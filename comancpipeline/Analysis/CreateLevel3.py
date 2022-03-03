@@ -33,6 +33,7 @@ class CreateLevel3(BaseClasses.DataStructure):
     def __init__(self,level2='level2',level3='level3',output_dir = None,cal_source='taua',
                  set_permissions=True,
                  permissions_group='comap',
+                 simulation_mode=False,
                  channel_mask=None, gain_mask=None, calibration_factors=None, **kwargs):
         """
         """
@@ -62,6 +63,8 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
+
+        self.simulation_mode=simulation_mode
 
     def __str__(self):
         return "Creating Level 3"
@@ -105,8 +108,11 @@ class CreateLevel3(BaseClasses.DataStructure):
         
 
         self.logger(f'{fname}:{self.name}: Creating {self.level3} data.')
-        self.run(data)
-        self.calibrate_data(data)
+        if self.simulation_mode:
+            self.create_simulation(data)
+        else:
+            self.run(data)
+            self.calibrate_data(data)
 
         # Want to ensure the data file is read/write
         data = self.setReadWrite(data)
@@ -116,6 +122,21 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
+
+    def create_simulation(self,data):
+        """
+        """
+
+        self.all_tod = data['level2/averaged_tod'][...]
+        self.all_tod = np.reshape(self.all_tod, (self.all_tod.shape[0],
+                                                 self.all_tod.shape[1]*self.all_tod.shape[2],
+                                                 self.all_tod.shape[3]))
+        N = int(self.all_tod.shape[-1]//2*2)
+        rms = np.nanstd(self.all_tod[:,:,:N:2] - self.all_tod[:,:,1:N:2],axis=-1)/np.sqrt(2)
+        rms = rms[...,None]*np.ones(self.all_tod.shape[-1])[None,None,:]
+        self.all_weights = 1./rms**2
+        self.cal_factors = self.all_tod*0.+1
+        self.all_frequency = data['level2/frequency'][...].flatten()
 
     def calibrate_data(self,data):
         """
@@ -273,6 +294,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         stats = data['level2/Statistics']
         if 'correlation_matrix' in stats:
             del stats['correlation_matrix']
-        dset = stats.create_dataset('correlation_matrix',  data= self.correlation_matrix)
-        dset.attrs['level3'] = f'{self.level3}'
-        dset.attrs['BW'] = 1
+        if hasattr(self,'correlation_matrix'):
+            dset = stats.create_dataset('correlation_matrix',  data= self.correlation_matrix)
+            dset.attrs['level3'] = f'{self.level3}'
+            dset.attrs['BW'] = 1

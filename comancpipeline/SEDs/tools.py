@@ -399,7 +399,7 @@ class SED():
             # Attempt to pre-fit using lmfit
 
 
-            try:
+            if True:
 
                 # Add parameters one my one
 
@@ -427,21 +427,20 @@ class SED():
                     return ((model-flux)*(1./flux_err))**2
 
                 def Residual(r):
-                    return np.sum(r.dot(r.T))
+                    chi2= np.sum(r.dot(r.T))
+                    return chi2
 
 
                 # Fit the function
-
                 fitter = Minimizer(Error,lm_param, reduce_fcn=Residual,fcn_args=(self.data['nu_fitted'],
                     self.data['flux_fitted'], self.data['flux_err_fitted']))
 
-                lmfit_results = fitter.minimize(method='leastsq')#
-
+                lmfit_results = fitter.minimize(method='nelder')#
 
                 # Extract resulting parameters
 
                 lmfit_params = [x for x in lmfit_results.params.valuesdict().values()]
-
+                
 
                 # Copy Results to Current Parameter Values
 
@@ -472,12 +471,12 @@ class SED():
                         print('Succesfully initialised guesses in {0:.1f} seconds!\n'.format(self.model['timing']['ls_sq_time']))
 
 
-            except:  # If lmfit fails
-                if self.settings['verbose']:
-                    print('*************** LEAST-SQUARES INFO **************')
-                    print('Could not initialise using least squares since a')
-                    print('general lmfit error occurred (e.g. poor data/models).')
-                    print('The original guesses will be passed to MCMC instead.\n')
+            # except:  # If lmfit fails
+            #     if self.settings['verbose']:
+            #         print('*************** LEAST-SQUARES INFO **************')
+            #         print('Could not initialise using least squares since a')
+            #         print('general lmfit error occurred (e.g. poor data/models).')
+            #         print('The original guesses will be passed to MCMC instead.\n')
 
 
             return

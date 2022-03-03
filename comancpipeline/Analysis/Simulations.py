@@ -1,7 +1,8 @@
 import numpy as np
 import comancpipeline
 from comancpipeline.Analysis import BaseClasses
-from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs
+from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, ParserClass
+from comancpipeline.Simulations import SkyModel
 from scipy.optimize import fmin, leastsq
 from scipy.interpolate import interp1d
 from scipy.ndimage.filters import median_filter
@@ -67,13 +68,16 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
     def __init__(self, feeds='all', output_dir='', nworkers= 1,
                  average_width=512,calvanedir='AncillaryData/CalVanes',
                  cal_mode = 'Vane', cal_prefix='',level2='level2',
+                 samplerate=50,
                  data_dirs=None,
                  set_permissions=True,
                  permissions_group='comap',
                  calvane_prefix='CalVane',
                  simulate_signal=True,
-                 simulate_white_noise=True,
-                 simulate_atmosphere=True,
+                 signal_parameter_file='',
+                 signal_models=[],
+                 simulate_white_noise=False,
+                 simulate_atmosphere=False,
                  signal_map_file='',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
@@ -107,16 +111,14 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
         self.permissions_group = permissions_group
 
         # Setup the sky signal information
-        self.signal_map_file = signal_map_file
-        hdu = fits.open(self.signal_map_file)
-        self.signal_map = hdu[0].data
-        self.signal_map[np.isnan(self.signal_map)] = np.nanmin(self.signal_map)
-        self.signal_map_wcs = wcs.WCS(hdu[0].header)
-        self.signal_map_flat = self.signal_map.flatten()
-        hdu.close()
         self.simulate_signal = simulate_signal
-        self.simulate_white_noise  = simulate_white_noise
-        self.simulate_atmosphere = simulate_atmosphere
+        self.simulate_white_noise = simulate_white_noise
+        self.simulate_atmosphere  = simulate_atmosphere
+        self.samplerate = samplerate # Hz
+        if simulate_signal:
+            self.signal_parameters = ParserClass.Parser(signal_parameter_file)
+            model_info = {k:self.signal_parameters[k] for k in signal_models}
+            self.skymodel = SkyModel.SkyModel(model_info)
 
     def __str__(self):
         return "Creating simulated level2 file with channel binning of {}".format(self.average_width)
@@ -135,14 +137,14 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
         self.feeds, self.feed_index, self.feed_dict = self.getFeeds(data,self.feeds_select)
 
         # Opening file here to write out data bit by bit
-        self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['spectrometer/tod'].shape
+        self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['level1/spectrometer/tod'].shape
         avg_tod_shape = (self.i_nFeeds, self.i_nBands, self.i_nChannels//self.average_width, self.i_nSamples)
         self.i_nChannels = avg_tod_shape[2]
 
-        frequency = data['spectrometer/frequency'][...]
+        frequency = data['level1/spectrometer/frequency'][...]
         self.avg_frequency = np.nanmean(np.reshape(frequency,(self.i_nBands, self.i_nChannels, self.average_width)),axis=2)
 
-        self.avg_tod = np.zeros(avg_tod_shape,dtype=data['spectrometer/tod'].dtype)
+        self.avg_tod = np.zeros(avg_tod_shape,dtype=data['level1/spectrometer/tod'].dtype)
 
         # Average the data and apply the gains
         self.simulate_obs(data, self.avg_tod)
@@ -156,31 +158,53 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
 
         feeds = np.arange(self.i_nFeeds,dtype=int)
 
-        ra     = data['spectrometer/pixel_pointing/pixel_ra'][...]
-        dec    = data['spectrometer/pixel_pointing/pixel_dec'][...]
+        ra     = data['level1/spectrometer/pixel_pointing/pixel_ra'][...]
+        dec    = data['level1/spectrometer/pixel_pointing/pixel_dec'][...]
 
         for ifeed in tqdm(feeds.flatten()):
             gl, gb = Coordinates.e2g(ra[ifeed], dec[ifeed]) 
-            pixels = ang2pixWCS(self.signal_map_wcs, gl, gb,self.signal_map.shape)
-            avg_tod[ifeed] += self.signal_map_flat[None,None,pixels]
+            for iband in range(self.i_nBands):
+                for ichan in range(self.i_nChannels):
+                    avg_tod[ifeed,iband,ichan] += self.skymodel(gl,gb,self.avg_frequency[iband,ichan])
 
     def atmosphere(self, data, avg_tod, tau=0.01, Tatm=280):
         """
         """
         feeds = np.arange(self.i_nFeeds,dtype=int)
-        el     = data['spectrometer/pixel_pointing/pixel_el'][...]
+        tauTb = np.nanmedian(data['level2/Statistics/atmos'][0,0,:,:])
+        
+        el = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
         for ifeed in tqdm(feeds.flatten()):
-            A      = 1./np.sin(np.abs(el[ifeed])*np.pi/180.)
-            avg_tod[ifeed] += Tatm * ( 1 - np.exp(-tau*A[None,None,:]))
+            A      = tauTb/np.sin(np.abs(el[ifeed])*np.pi/180.)
+            avg_tod[ifeed] += A #Tatm * ( 1 - np.exp(-tau*A[None,None,:]))
 
     def white_noise(self, data, avg_tod,Trec=20):
         """
         """
-            
+        print(data['level2/Statistics'].keys())
+        print(data['level2/Statistics/wnoise_auto'].shape)
+        fnoise_fits = data['level2/Statistics/fnoise_fits'][...]
+        fnoise_fits = np.nanmedian(fnoise_fits,axis=(2,3))
+        med_fnoise  = np.nanmedian(fnoise_fits,axis=(0,1))
+        for i in range(len(med_fnoise)):
+            good = np.isfinite(fnoise_fits[...,i])
+            fnoise_fits[~good,i] = med_fnoise[i]
+
+        wnoise_rms = data['level2/Statistics/wnoise_auto'][...]
+        med_wnoise = np.nanmedian(wnoise_rms)
+        bad = (wnoise_rms < 1e-2) | (wnoise_rms > 1.5e-1)
+        wnoise_rms[bad] = med_wnoise
+        wnoise_rms = np.nanmedian(wnoise_rms,axis=(2,3))
+        nu = np.fft.fftfreq(avg_tod.shape[-1],d=1./self.samplerate)
+
         feeds = np.arange(self.i_nFeeds,dtype=int)
         for ifeed in tqdm(feeds.flatten()):
-            avg_tod[ifeed] += np.random.normal(scale=(avg_tod[ifeed]+Trec)/np.sqrt(4e9/4096.*16 / 20.))
-
+            P = np.sqrt(1 + (np.abs(nu[None,:])/10**fnoise_fits[ifeed,...,1:2])**fnoise_fits[ifeed,...,2:3])
+            P[:,0]=0.
+            noise_model = wnoise_rms[ifeed]*P
+            test_noise = np.random.normal(scale=1,size=avg_tod[ifeed].shape)
+            test_noise = np.real(np.fft.ifft(np.fft.fft(test_noise,axis=-1)*noise_model[:,None,:],axis=-1))
+            avg_tod[ifeed] += test_noise
         
 
     def simulate_obs(self, data, avg_tod):
@@ -210,7 +234,7 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
 
         self.comment = self.getComment(data)
         prefix = os.path.basename(data.filename).split('.hd5')[0]
-        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
+        self.outfilename = '{}/{}_Level2Sim.hd5'.format(self.output_dir,prefix)
 
         if os.path.exists(self.outfilename) & (not self.overwrite):
             data.close()
@@ -255,11 +279,27 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
         freq_dset = lvl2.create_dataset('frequency',data=self.avg_frequency, dtype=self.avg_frequency.dtype)
 
         # Link the Level1 data
-        data_filename = data.filename
-        fname = data.filename.split('/')[-1]
+        data_filename = data['level1'].file.filename
+        fname = data['level1'].file.filename.split('/')[-1]
+        vane_file = data['level2/Vane'].file.filename
+
+        # Copy over the statistics
+        if 'Statistics' in lvl2:
+            del lvl2['Statistics']
+        grp = lvl2.create_group('Statistics')
+        for k,v in data['level2/Statistics'].items():
+            if isinstance(v,h5py.Group):
+                grp2 = grp.create_group(k)
+                for k1,v1 in v.items():
+                    grp2.create_dataset(k1,data=v1,dtype=v1.dtype)
+            else:
+                grp.create_dataset(k,data=v,dtype=v.dtype)
+
+
         data.close()
-        if not 'level1' in self.outfile:
-            self.outfile['level1'] = h5py.ExternalLink(data_filename,'/')
+        if 'level1' in self.outfile:
+            del self.outfile['level1']
+        self.outfile['level1'] = h5py.ExternalLink(data_filename,'/')
         lvl2.attrs['version'] = __level2_version__
 
         # Add version info
@@ -268,8 +308,8 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
         # Link the Level1 data
         if 'Vane' in lvl2:
             del lvl2['Vane']
-        lvl2['Vane'] = h5py.ExternalLink('{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname),'/')
-        lvl2.attrs['vane-version'] = lvl2['Vane'].attrs['version']
+        lvl2['Vane'] = h5py.ExternalLink('{}'.format(vane_file),'/')
+
 
 
 # Class for storing source locations
