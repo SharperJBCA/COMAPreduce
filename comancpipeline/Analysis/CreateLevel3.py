@@ -108,10 +108,8 @@ class CreateLevel3(BaseClasses.DataStructure):
         
 
         self.logger(f'{fname}:{self.name}: Creating {self.level3} data.')
-        if self.simulation_mode:
-            self.create_simulation(data)
-        else:
-            self.run(data)
+        self.run(data)
+        if not self.simulation_mode:
             self.calibrate_data(data)
 
         # Want to ensure the data file is read/write
@@ -171,6 +169,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         scan_edges = d[f'{self.level2}/Statistics/scan_edges'][...]
         nscans = scan_edges.shape[0]
         nchannels = 8
+        
         self.all_tod       = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
         self.all_weights   = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
         self.all_frequency = np.zeros((nchannels)) 
@@ -270,8 +269,11 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         # Set permissions and group
         if self.set_permissions:
-            os.chmod(self.outfile,0o664)
-            shutil.chown(self.outfile, group=self.permissions_group)
+            try:
+                os.chmod(self.outfile,0o664)
+                shutil.chown(self.outfile, group=self.permissions_group)
+            except PermissionError:
+                self.logger(f'{fname}:{self.name}: Warning, couldnt set the file permissions.')
 
         # Store datasets in root
         dnames = ['tod','weights','cal_factors','frequency']

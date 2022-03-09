@@ -849,6 +849,8 @@ class FitSource(BaseClasses.DataStructure):
         ##
 
         for valerr in ['Values','Errors','Chi2']:
+            if f'Gauss_Narrow_{valerr}' in output:
+                del output[f'Gauss_Narrow_{valerr}']
             gauss_fits = output.create_group(f'Gauss_Narrow_{valerr}')
             gauss_fits.attrs['FitFunc'] = self.model.__name__
             gauss_fits.attrs['source_el'] = self.src_el
@@ -870,6 +872,8 @@ class FitSource(BaseClasses.DataStructure):
         ##
 
         for valerr in ['Values','Errors','Chi2']:
+            if f'Gauss_Average_{valerr}' in output:
+                del output[f'Gauss_Average_{valerr}']
             gauss_fits = output.create_group(f'Gauss_Average_{valerr}')
             gauss_fits.attrs['FitFunc'] = self.model.__name__
             gauss_fits.attrs['source_el'] = self.src_el

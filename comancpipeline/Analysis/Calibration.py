@@ -384,8 +384,6 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """
-        print(data.filename)
-        print(self.outfilename)
         if os.path.exists(self.outfilename):
             self.outfile = h5py.File(self.outfilename,'a')
         else:
@@ -393,8 +391,12 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
 
         # Set permissions and group
         if self.set_permissions:
-            os.chmod(self.outfilename,0o664)
-            shutil.chown(self.outfilename, group=self.permissions_group)
+            try:
+                os.chmod(self.outfilename,0o664)
+                shutil.chown(self.outfilename, group=self.permissions_group)
+            except PermissionError:
+                self.logger(f'{self.name}: Warning, couldnt set the file permissions.')
+
 
         if self.level2 in self.outfile:
             del self.outfile[self.level2]
@@ -731,8 +733,11 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
 
         # Set permissions and group
         if self.set_permissions:
-            os.chmod(outfile,0o664)
-            shutil.chown(outfile, group=self.permissions_group)
+            try:
+                os.chmod(outfile,0o664)
+                shutil.chown(outfile, group=self.permissions_group)
+            except PermissionError:
+                self.logger(f'{self.name}: Warning, couldnt set the file permissions.')
 
         # Store datasets in root
         dnames = ['Tsys','Gain','VaneEdges','Spikes']
@@ -981,8 +986,11 @@ class CreateLevel2RRL(CreateLevel2Cont):
 
         # Set permissions and group
         if self.set_permissions:
-            os.chmod(self.outfilename,0o664)
-            shutil.chown(self.outfilename, group=self.permissions_group)
+            try:
+                os.chmod(self.outfilename,0o664)
+                shutil.chown(self.outfilename, group=self.permissions_group)
+            except PermissionError:
+                self.logger(f'{self.name}: Warning, couldnt set the file permissions.')
 
         if 'tod' in self.outfile:
             del self.outfile['tod']

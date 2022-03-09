@@ -113,8 +113,8 @@ def Destriper(data,
                                       data.naive.cdelt, 
                                       data.naive.crpix, 
                                       data.naive.ctype,
-                                      data.naive.nxpix,
-                                      data.naive.nypix)
+                                      nxpix=data.naive.nxpix,
+                                      nypix=data.naive.nypix)
 
     #CGM(data, offsets, offsetMap, niter=niter)
 

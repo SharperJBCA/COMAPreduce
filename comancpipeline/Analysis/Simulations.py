@@ -181,8 +181,6 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
     def white_noise(self, data, avg_tod,Trec=20):
         """
         """
-        print(data['level2/Statistics'].keys())
-        print(data['level2/Statistics/wnoise_auto'].shape)
         fnoise_fits = data['level2/Statistics/fnoise_fits'][...]
         fnoise_fits = np.nanmedian(fnoise_fits,axis=(2,3))
         med_fnoise  = np.nanmedian(fnoise_fits,axis=(0,1))
@@ -199,13 +197,16 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
 
         feeds = np.arange(self.i_nFeeds,dtype=int)
         for ifeed in tqdm(feeds.flatten()):
-            P = np.sqrt(1 + (np.abs(nu[None,:])/10**fnoise_fits[ifeed,...,1:2])**fnoise_fits[ifeed,...,2:3])
+            P = np.sqrt((np.abs(nu[None,:])/10**fnoise_fits[ifeed,...,1:2])**fnoise_fits[ifeed,...,2:3])
             P[:,0]=0.
             noise_model = wnoise_rms[ifeed]*P
             test_noise = np.random.normal(scale=1,size=avg_tod[ifeed].shape)
             test_noise = np.real(np.fft.ifft(np.fft.fft(test_noise,axis=-1)*noise_model[:,None,:],axis=-1))
-            avg_tod[ifeed] += test_noise
-        
+
+            scale = wnoise_rms[ifeed,...,None] * np.ones(avg_tod[ifeed].shape)
+            avg_tod[ifeed] += test_noise + \
+                              np.random.normal(scale=scale)
+
 
     def simulate_obs(self, data, avg_tod):
         """
