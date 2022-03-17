@@ -266,10 +266,6 @@ class ReadDataLevel2:
         #                                     Coordinates.comap_longitude,
         #                                     Coordinates.comap_latitude)
 
-        #pyplot.plot((x0[0]-x[0])*60)
-        #pyplot.plot((y0[0]-y[0])*60)
-        #pyplot.show()
-
         scan_edges = d['level2/Statistics/scan_edges'][...]
         pixels = np.zeros((x.shape[0], self.datasizes[i]))
         last = 0

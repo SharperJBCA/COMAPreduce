@@ -108,6 +108,7 @@ def level1_destripe(filename,options):
     
     np.random.seed(1)
     data = DataReader.ReadDataLevel2(filelist,
+                                     all_tod=True,
                                      feeds = p['Inputs']['feeds'],
                                      flag_spikes  =p['ReadData']['flag_spikes'],
                                      offset_length=p['Destriper']['offset'],
@@ -117,8 +118,14 @@ def level1_destripe(filename,options):
                                      keeptod      =p['ReadData']['keeptod'],
                                      subtract_sky =p['ReadData']['subtract_sky'],
                                      map_info     =p['Destriper'])
-
-    offsetMap, offsets = Destriper.Destriper(p, data)
+    offsetMap, offsets = Destriper.Destriper(data,
+                                             offset=p['Destriper']['offset'],
+                                             niter=p['Destriper']['niter'],
+                                             threshold=p['Destriper']['threshold'])
+    pyplot.plot(data.all_tod)
+    pyplot.plot(offsets.offsets[offsets.offsetpixels])
+    pyplot.title('All Data')
+    pyplot.show()
 
     write_map(p,data,offsetMap,postfix='')
 
