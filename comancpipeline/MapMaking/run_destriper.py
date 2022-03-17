@@ -122,10 +122,6 @@ def level1_destripe(filename,options):
                                              offset=p['Destriper']['offset'],
                                              niter=p['Destriper']['niter'],
                                              threshold=p['Destriper']['threshold'])
-    pyplot.plot(data.all_tod)
-    pyplot.plot(offsets.offsets[offsets.offsetpixels])
-    pyplot.title('All Data')
-    pyplot.show()
 
     write_map(p,data,offsetMap,postfix='')
 
