@@ -139,7 +139,6 @@ def Destriper(data,
     offsetMap.average()
 
 
-
     return offsetMap, offsets
 
 def DestriperHPX(parameters, data,covariance=None):
@@ -378,11 +377,6 @@ def CGM_old(data, offsets, offsetMap, niter=400,verbose=False):
         dold = dnew*1.0
         dnew = np.sum(residual**2)
         newVals[i] = dnew
-        print(dnew,dold,alpha)
-        pyplot.plot(residual)
-        pyplot.subplot(2,1,2)
-        pyplot.plot(alpha*Ax.sigwei )
-        pyplot.show()
 
         # --
         beta = dnew/dold

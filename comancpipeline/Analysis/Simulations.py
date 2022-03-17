@@ -171,7 +171,7 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
         """
         """
         feeds = np.arange(self.i_nFeeds,dtype=int)
-        tauTb = np.nanmedian(data['level2/Statistics/atmos'][0,0,:,:])
+        tauTb = np.nanmedian(data['level2/Statistics/atmos'][0,0,:,1])
         
         el = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
         for ifeed in tqdm(feeds.flatten()):
@@ -193,6 +193,7 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
         bad = (wnoise_rms < 1e-2) | (wnoise_rms > 1.5e-1)
         wnoise_rms[bad] = med_wnoise
         wnoise_rms = np.nanmedian(wnoise_rms,axis=(2,3))
+        wnoise_rms[(wnoise_rms == 0)] = np.nanmean(wnoise_rms[wnoise_rms != 0])
         nu = np.fft.fftfreq(avg_tod.shape[-1],d=1./self.samplerate)
 
         feeds = np.arange(self.i_nFeeds,dtype=int)
@@ -200,11 +201,12 @@ class CreateSimulateLevel2Cont(BaseClasses.DataStructure):
             P = np.sqrt((np.abs(nu[None,:])/10**fnoise_fits[ifeed,...,1:2])**fnoise_fits[ifeed,...,2:3])
             P[:,0]=0.
             noise_model = wnoise_rms[ifeed]*P
-            test_noise = np.random.normal(scale=1,size=avg_tod[ifeed].shape)
-            test_noise = np.real(np.fft.ifft(np.fft.fft(test_noise,axis=-1)*noise_model[:,None,:],axis=-1))
+            test_noise = np.random.normal(scale=1,size=(avg_tod[ifeed].shape[0],
+                                                        avg_tod[ifeed].shape[-1])) # Nbands x Ntod
+            test_noise = np.real(np.fft.ifft(np.fft.fft(test_noise,axis=-1)*noise_model[:,:],axis=-1))
 
-            scale = wnoise_rms[ifeed,...,None] * np.ones(avg_tod[ifeed].shape)
-            avg_tod[ifeed] += test_noise + \
+            scale = wnoise_rms[ifeed,...,None] * np.ones(avg_tod[ifeed].shape) # Nbands x Nchan X Ntod
+            avg_tod[ifeed] += test_noise[:,None,:] + \
                               np.random.normal(scale=scale)
 
 

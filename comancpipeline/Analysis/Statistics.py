@@ -18,7 +18,7 @@ import pandas as pd
 import os
 #comm = MPI.COMM_WORLD
 from scipy.optimize import minimize
-
+from scipy import linalg
 from tqdm import tqdm
 
 __version__='v1'
@@ -87,9 +87,8 @@ class RepointEdges(BaseClasses.DataStructure):
         ifeature = np.floor(np.log10(uf[np.argmax(counts)])/np.log10(2))
         selectFeature = self.featureBits(features.astype(float), ifeature)
         index_feature = np.where(selectFeature)[0]
-
+        from matplotlib import pyplot
         if ifeature == 9.0:
-            # Elevation current seems a good proxy for finding repointing times
             #azcurrent = np.abs(d['level1/hk/antenna0/driveNode/azDacOutput'][:])
             elutc = d['level1/spectrometer/MJD'][:] #d['level1/hk/antenna0/driveNode/utc'][:]
             mjd = d['level1/spectrometer/MJD'][:]
@@ -97,6 +96,21 @@ class RepointEdges(BaseClasses.DataStructure):
             #cutpoint = np.max([np.max(azcurrent)*self.max_el_current_fraction,3000])
             #select = np.where((azcurrent > cutpoint))[0]
             ends = np.array([index_feature[0],index_feature[-1]])
+        elif ifeature == 5.0:
+            # Elevation current seems a good proxy for finding repointing times
+            elcurrent = np.abs(d['level1/hk/antenna0/driveNode/elDacOutput'][:])
+            elutc = d['level1/hk/antenna0/driveNode/utc'][:]
+            mjd = d['level1/spectrometer/MJD'][:]
+            cutoff = np.max(elcurrent)*self.max_el_current_fraction
+            
+            # these are when the telescope is changing position
+            select = np.where((elcurrent > cutoff))[0]
+
+            dselect = select[1:]-select[:-1]
+            large_step_indices = np.where((dselect > self.min_sample_distance))[0]
+
+            ends = select[np.append(large_step_indices,len(dselect)-1)]
+
         else:
             # Elevation current seems a good proxy for finding repointing times
             elcurrent = np.abs(d['level1/hk/antenna0/driveNode/elDacOutput'][:])
@@ -134,7 +148,9 @@ class ScanEdges(BaseClasses.DataStructure):
     Splits up observations into "scans" based on parameter inputs
     """
 
-    def __init__(self, level2='level2',scan_edge_type='RepointEdges',**kwargs):
+    def __init__(self, allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
+                 level2='level2',
+                 scan_edge_type='RepointEdges',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
@@ -144,7 +160,7 @@ class ScanEdges(BaseClasses.DataStructure):
         self.scan_edges = None
 
         self.scan_edge_type = scan_edge_type
-
+        self.allowed_sources = allowed_sources
         # Create a scan edge object
         self.scan_edge_object = globals()[self.scan_edge_type](**kwargs)
         self.level2 = level2
@@ -158,10 +174,6 @@ class ScanEdges(BaseClasses.DataStructure):
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
-        allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
-                          ['GField{:02d}'.format(i) for i in range(40)] +\
-                          ['Field{:02d}'.format(i) for i in range(100)] +\
-                          ['Field11b'] + ['TauA','CasA','Jupiter','jupiter','CygA']
 
         self.source  = self.getSource(data)
         comment = self.getComment(data)
@@ -171,7 +183,7 @@ class ScanEdges(BaseClasses.DataStructure):
 
         self.logger(f'{fname}:{self.name}: {self.source} - {comment}')
 
-        if self.checkAllowedSources(data, self.source, allowed_sources):
+        if self.checkAllowedSources(data, self.source, self.allowed_sources):
             return data
 
         if 'Sky nod' in comment:
@@ -227,7 +239,8 @@ class FnoiseStats(BaseClasses.DataStructure):
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self, nbins=50, samplerate=50, medfilt_stepsize=5000,level2='level2',**kwargs):
+    def __init__(self, allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
+                 nbins=50, samplerate=50, medfilt_stepsize=5000,level2='level2',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
@@ -238,6 +251,7 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.samplerate = samplerate
         self.medfilt_stepsize = int(medfilt_stepsize)
         self.level2=level2
+        self.allowed_sources = allowed_sources
     def __str__(self):
         return "Calculating noise statistics."
 
@@ -282,6 +296,7 @@ class FnoiseStats(BaseClasses.DataStructure):
             local_filter_tods = np.zeros((nFeeds,nBands, end-start))
             for ifeed in range(nFeeds):
                 if feeds[ifeed] == 20:
+                    pbar.update(1)
                     continue
                 for iband in range(nBands):
                     band_average = np.nanmean(tod[ifeed,iband,3:-3,start:end],axis=0)
@@ -289,7 +304,6 @@ class FnoiseStats(BaseClasses.DataStructure):
                                                                          az[ifeed,start:end],
                                                                          el[ifeed,start:end])
 
-                    print(np.nansum(band_average-atmos_filter))
                     local_filter_tods[ifeed,iband,:] = self.median_filter(band_average-atmos_filter)[:band_average.size]
 
                     self.atmos[ifeed,iband,iscan,:] = atmos
@@ -305,6 +319,7 @@ class FnoiseStats(BaseClasses.DataStructure):
                         if np.nansum(tod[ifeed, iband, ichan,start:end]) == 0:
                             continue
                         # Check atmosphere coefficients
+                        #try:
                         atmos_coeff,med_coeff,offset = self.coefficient_jointfit(tod[ifeed,iband,ichan,start:end], 
                                                                                  atmos_filter,
                                                                                  local_filter_tods[ifeed,iband,:])
@@ -321,7 +336,6 @@ class FnoiseStats(BaseClasses.DataStructure):
                         self.fnoise_fits[ifeed,iband,ichan,iscan,0]  = w_auto
                         self.fnoise_fits[ifeed,iband,ichan,iscan,1:] = f_fits
 
-
                     pbar.update(1)
 
             self.filter_tods += [local_filter_tods]
@@ -333,17 +347,13 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
-        allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
-                          ['GField{:02d}'.format(i) for i in range(40)] +\
-                          ['Field{:02d}'.format(i) for i in range(100)] +\
-                          ['Field11b']+['TauA','CasA','CygA','jupiter','Jupiter']
 
         source = self.getSource(data)
         comment = self.getComment(data)
 
         self.logger(f'{fname}:{self.name}: {source} - {comment}')
 
-        if self.checkAllowedSources(data, source, allowed_sources):
+        if self.checkAllowedSources(data, source, self.allowed_sources):
             return data
 
         if 'Sky nod' in comment:
@@ -379,7 +389,10 @@ class FnoiseStats(BaseClasses.DataStructure):
         C = templates.dot(templates.T)
         z = templates.dot(tod[:,None])
 
-        a = np.linalg.solve(C,z)
+        try:
+            a = np.linalg.solve(C,z)
+        except np.linalg.LinAlgError:
+            a = np.zeros(templates.shape[0])
         return a.flatten()
 
 
@@ -388,7 +401,8 @@ class FnoiseStats(BaseClasses.DataStructure):
         Calculate this AFTER removing the atmosphere.
         """
         if tod.size > 2*self.medfilt_stepsize:
-            filter_tod = np.array(medfilt.medfilt(tod.astype(np.float64),np.int32(self.medfilt_stepsize)))
+            z = np.concatenate((tod[::-1],tod,tod[::-1]))
+            filter_tod = np.array(medfilt.medfilt(z.astype(np.float64),np.int32(self.medfilt_stepsize)))[tod.size:2*tod.size]
         else:
             filter_tod = np.ones(tod.size)*np.nanmedian(tod)
 
@@ -512,7 +526,8 @@ class SkyDipStats(BaseClasses.DataStructure):
     Does not require scan_edges to run
     """
 
-    def __init__(self, nbins=50, samplerate=50, medfilt_stepsize=5000, poly_iter=100, dipLo=42, dipHi=58):
+    def __init__(self,allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
+                 nbins=50, samplerate=50, medfilt_stepsize=5000, poly_iter=100, dipLo=42, dipHi=58):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
@@ -524,7 +539,7 @@ class SkyDipStats(BaseClasses.DataStructure):
         self.poly_iter = int(poly_iter)
         self.dipLo = int(dipLo)
         self.dipHi = int(dipHi)
-
+        self.allowed_sources = allowed_sources
     def __str__(self):
         return "Calculating noise statistics (skydip class)."
 
@@ -593,23 +608,14 @@ class SkyDipStats(BaseClasses.DataStructure):
 
                     pbar.update(1)
 
-        #for ifeed in range(nFeeds):
-        #    pyplot.errorbar(np.arange(nScans),self.atmos[ifeed,0,:,1],fmt='.',yerr=self.atmos_errs[ifeed,0,:,1])
-        #pyplot.show()
-
         pbar.close()
 
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
 
-        allowed_sources = ['fg{}'.format(i) for i in range(10)] +\
-                          ['GField{:02d}'.format(i) for i in range(40)] +\
-                          ['Field{:02d}'.format(i) for i in range(100)] +\
-                          ['Field11b']
-
         source = self.getSource(data)
         comment = self.getComment(data)
-        if self.checkAllowedSources(data, source, allowed_sources):
+        if self.checkAllowedSources(data, source, self.allowed_sources):
             return data
 
         if not 'Sky nod' in comment:

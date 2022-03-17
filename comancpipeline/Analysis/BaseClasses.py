@@ -9,12 +9,16 @@ from datetime import datetime
 
 class DataStructure(object):
 
-    def __init__(self,logger=print,overwrite=False,
-                 bad_keywords = ['halt','current','zenith','AlpBoo'],**kwargs):
+    def __init__(self,
+                 logger=print,
+                 overwrite=False,
+                 ancillary_directory = None,
+                 bad_keywords = ['halt','current','zenith','AlpBoo'],
+                 **kwargs):
         self.logger = logger
         self.overwrite = overwrite
-
         self.bad_keywords = bad_keywords
+        self.ancillary_directory = ancillary_directory
 
     def __call__(self,data):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
@@ -197,7 +201,8 @@ class DataStructure(object):
         """
         """
         fname = data.filename.split('/')[-1]
-        if not source in allowed_sources:
+        check_flags = [stype in source for stype in allowed_sources]
+        if not any(check_flags):
             allowed_source_str = ' '.join(allowed_sources)
             self.logger(f'{fname}:{self.name}:Error: {source} not in allowed source ({allowed_source_str})')
             return True

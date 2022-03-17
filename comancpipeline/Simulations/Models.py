@@ -32,8 +32,9 @@ class BasicSkyComponent:
         """
         
         tod = self.get_map_values(gl, gb)
-
+        
         tod *= self.frequency_model(frequency,**self.frequency_model_kwargs)
+
         return tod
 
     def get_map_values(self,gl,gb):
@@ -41,7 +42,7 @@ class BasicSkyComponent:
         """
         pixels = cWCS.ang2pixWCS(self.wcs, gl, gb, self.skymap.shape)
         tod = self.skymap.flatten()[pixels]
-        tod[(pixels == -1) | (tod < self.mapbadvalues)] = 0
+        tod[(pixels == -1) | (tod == self.mapbadvalues) | ~np.isfinite(tod)] = 0
 
         return tod
         

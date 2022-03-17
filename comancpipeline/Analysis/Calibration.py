@@ -437,7 +437,8 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
                  minSamples=200, tCold=2.73, 
                  set_permissions=True,
                  permissions_group='comap',
-                 tHotOffset=273.15,prefix='VaneCal',**kwargs):
+                 tHotOffset=273.15,
+                 prefix='VaneCal',**kwargs):
         super().__init__(**kwargs)
 
         self.name = 'CalculateVaneMeasurement'

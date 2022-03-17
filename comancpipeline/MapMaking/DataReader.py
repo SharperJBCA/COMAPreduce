@@ -129,15 +129,8 @@ class ReadDataLevel2:
             self.readData(i,filename)     
             #except (KeyError,ValueError):
             #    print('BAD FILE', filename)
-
-        #pyplot.subplot(projection=self.naive.wcs)
-        #m = self.naive.get_map()
-        #m[m==0]=np.nan
-        #pyplot.imshow(m,aspect='auto')
-        #pyplot.show()
         
         self.naive.average()
-
         self.offset_residuals.accumulate(-self.naive.sky_map[self.pixels],self.all_weights,[0,self.pixels.size])
         self.offset_residuals.average()
 
@@ -263,13 +256,15 @@ class ReadDataLevel2:
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
 
         # We store all the pointing information
-        #x0  = d['level1/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
-        #y0  = d['level1/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
-        x  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
-        y  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
-        mjd  = d['level1/spectrometer/MJD'][:]
-        for j in range(x.shape[0]):
-            x[j],y[j] = Coordinates.h2e_full(x[j],y[j],mjd,Coordinates.comap_longitude,Coordinates.comap_latitude)
+        x  = d['level1/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
+        y  = d['level1/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
+        #x  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
+        #y  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
+        #mjd  = d['level1/spectrometer/MJD'][:]
+        #for j in range(x.shape[0]):
+        #    x[j],y[j] = Coordinates.h2e_full(x[j],y[j],mjd,
+        #                                     Coordinates.comap_longitude,
+        #                                     Coordinates.comap_latitude)
 
         #pyplot.plot((x0[0]-x[0])*60)
         #pyplot.plot((y0[0]-y[0])*60)
@@ -310,7 +305,6 @@ class ReadDataLevel2:
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)
         nFeeds, nSamples = tod.shape
-
 
         this_obsid = int(filename.split('/')[-1].split('-')[1])
 

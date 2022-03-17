@@ -111,6 +111,8 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.run(data)
         if not self.simulation_mode:
             self.calibrate_data(data)
+        else:
+            self.cal_factors = np.array([1]) # For simulations we just save a dummy variable for this
 
         # Want to ensure the data file is read/write
         data = self.setReadWrite(data)
@@ -215,7 +217,6 @@ class CreateLevel3(BaseClasses.DataStructure):
                         tod[iband,ichannel,:] -= amdl
                         tod[iband,ichannel,:] -= np.nanmedian(tod[iband,ichannel,:])
                 
-                #tod /= self.calfactors[ifeed,:,:,None] # Calibrate to Jupiter temperature scale
                 # Then average together the channels
                 wnoise = wnoise_auto[:,:,iscan,0]
                 fnoise = fnoise_fits[:,:,iscan,:]
@@ -250,8 +251,7 @@ class CreateLevel3(BaseClasses.DataStructure):
                     self.all_frequency[ichan] = (fhigh+flow)/2.
                 self.correlation_matrix[iscan,xfeed.flatten(),yfeed.flatten()]  = stats.correlation(self.all_tod[...,scan_samples]).flatten()
 
-
-
+                
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
