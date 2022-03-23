@@ -29,6 +29,16 @@ from comancpipeline.data import Data
 
 __level3_version__='v2'
 
+
+def subtract_filters(tod,az,el,filter_tod, filter_coefficients, atmos, atmos_coefficient):
+    """
+    Return the TOD with median filter and atmosphere model subtracted
+    """
+    tod_out = tod - filter_tod*filter_coefficients -\
+              Statistics.AtmosGroundModel(atmos,az,el)*atmos_coefficient
+    tod_out -= np.nanmedian(tod_out)
+    return tod_out 
+
 class CreateLevel3(BaseClasses.DataStructure):
     def __init__(self,level2='level2',level3='level3',output_dir = None,cal_source='taua',
                  set_permissions=True,

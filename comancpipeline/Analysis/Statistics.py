@@ -148,7 +148,8 @@ class ScanEdges(BaseClasses.DataStructure):
     Splits up observations into "scans" based on parameter inputs
     """
 
-    def __init__(self, allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
+    def __init__(self, 
+                 allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
                  level2='level2',
                  scan_edge_type='RepointEdges',**kwargs):
         """
@@ -240,7 +241,11 @@ class FnoiseStats(BaseClasses.DataStructure):
     """
 
     def __init__(self, allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
-                 nbins=50, samplerate=50, medfilt_stepsize=5000,level2='level2',**kwargs):
+                 nbins=50, 
+                 samplerate=50, 
+                 medfilt_stepsize=5000,
+                 database = None,
+                 level2='level2',**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
@@ -252,8 +257,22 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.medfilt_stepsize = int(medfilt_stepsize)
         self.level2=level2
         self.allowed_sources = allowed_sources
+        self.database = database
     def __str__(self):
         return "Calculating noise statistics."
+
+    def getSourceMask(self,ra,dec,mjd):
+        
+        if not self.isCalibrator:
+            return np.ones(mjd.size,dtype=bool)
+        if self.source.lower() == 'jupiter':
+            az,el,ra0,dec0=Coordinates.sourcePosition(self.source,mjd, Coordinates.comap_longitude, Coordinates.comap_latitude)
+        else:
+            ra0, dec0 = Coordinates.CalibratorList[self.source]
+
+        distance = Coordinates.AngularSeperation(ra0,dec0,ra,dec)
+
+        return (distance > 10./60.)
 
     def run(self, data):
         """
@@ -265,8 +284,11 @@ class FnoiseStats(BaseClasses.DataStructure):
         # 2) The feature bits to select just the observing period
         # 3) Elevation to remove the atmospheric component
         tod = data[f'{self.level2}/averaged_tod'][...]
+        mjd = data['level1/spectrometer/MJD'][...]
         az  = data['level1/spectrometer/pixel_pointing/pixel_az'][...]
         el  = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
+        ra  = data['level1/spectrometer/pixel_pointing/pixel_ra'][...]
+        dec = data['level1/spectrometer/pixel_pointing/pixel_dec'][...]
         feeds = data['level1/spectrometer/feeds'][:]
         bands = [b.decode('ascii') for b in data['level1/spectrometer/bands'][:]]
 
@@ -300,20 +322,21 @@ class FnoiseStats(BaseClasses.DataStructure):
                     continue
                 for iband in range(nBands):
                     band_average = np.nanmean(tod[ifeed,iband,3:-3,start:end],axis=0)
-                    atmos_filter,atmos,atmos_errs = self.FitAtmosAndGround(band_average ,
-                                                                         az[ifeed,start:end],
-                                                                         el[ifeed,start:end])
 
+                    select = self.getSourceMask(ra[ifeed,start:end],dec[ifeed,start:end],mjd[start:end])
+                    _az = az[ifeed,start:end]
+                    _el = el[ifeed,start:end]
+                    atmos_filter,atmos,atmos_errs = self.FitAtmosAndGround(band_average,
+                                                                           _az,
+                                                                           _el,
+                                                                           mask=select)
                     local_filter_tods[ifeed,iband,:] = self.median_filter(band_average-atmos_filter)[:band_average.size]
 
+                    
                     self.atmos[ifeed,iband,iscan,:] = atmos
                     self.atmos_errs[ifeed,iband,iscan,:] = atmos_errs
 
                     #ps, nu, f_fits, w_auto = self.FitPowerSpectrum(band_average-atmos_filter-local_filter_tods[ifeed,iband,:])
-
-                    #self.logger(f'{fname}:{self.name}: Feed {feeds[ifeed]} Band {bands[iband]} RMS  - {w_auto:.3f}K')
-                    #self.logger(f'{fname}:{self.name}: Feed {feeds[ifeed]} Band {bands[iband]} Knee - {f_fits[0]:.3f}')
-                    #self.logger(f'{fname}:{self.name}: Feed {feeds[ifeed]} Band {bands[iband]} Spec - {f_fits[1]:.3f}')
 
                     for ichan in range(nChannels):
                         if np.nansum(tod[ifeed, iband, ichan,start:end]) == 0:
@@ -322,13 +345,19 @@ class FnoiseStats(BaseClasses.DataStructure):
                         #try:
                         atmos_coeff,med_coeff,offset = self.coefficient_jointfit(tod[ifeed,iband,ichan,start:end], 
                                                                                  atmos_filter,
-                                                                                 local_filter_tods[ifeed,iband,:])
+                                                                                 local_filter_tods[ifeed,iband,:], 
+                                                                                 mask=select)
 
                         w_auto = stats.AutoRMS(tod[ifeed,iband,ichan,start:end])
                         self.wnoise_auto[ifeed,iband,ichan,iscan,:]  = w_auto
                         self.filter_coefficients[ifeed,iband,ichan,iscan,:] = med_coeff
                         self.atmos_coefficients[ifeed,iband,ichan,iscan,:]  = atmos_coeff
                         resid = tod[ifeed,iband,ichan,start:end]-atmos_filter*atmos_coeff-local_filter_tods[ifeed,iband,:]*med_coeff - offset
+
+                        if self.isCalibrator: # Fill in data that is on source
+                            Nfill = int(np.sum(~select))
+                            resid[~select] = np.random.normal(size=Nfill,scale=w_auto)
+                            
                         ps, nu, f_fits, w_auto = self.FitPowerSpectrum(resid)
 
                         self.powerspectra[ifeed,iband,ichan,iscan,:] = ps
@@ -339,6 +368,7 @@ class FnoiseStats(BaseClasses.DataStructure):
                     pbar.update(1)
 
             self.filter_tods += [local_filter_tods]
+
         pbar.close()
 
     def __call__(self,data):
@@ -348,15 +378,20 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
 
-        source = self.getSource(data)
+        self.source = self.getSource(data)
         comment = self.getComment(data)
 
-        self.logger(f'{fname}:{self.name}: {source} - {comment}')
+        self.logger(f'{fname}:{self.name}: {self.source} - {comment}')
 
-        if self.checkAllowedSources(data, source, self.allowed_sources):
+        if self.checkAllowedSources(data, self.source, self.allowed_sources):
             return data
 
-        if 'Sky nod' in comment:
+        if any([s in self.source for s in ['jupiter','CygA','Jupiter','TauA','CasA']]):
+            self.isCalibrator = True
+        else:
+            self.isCalibrator = False 
+
+        if ('Sky nod' in comment) | ('Engineering Test' in comment):
             return data
 
         if ('level2/Statistics/fnoise_fits' in data) & (not self.overwrite):
@@ -369,6 +404,8 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing noise stats to level 2 file ({fname})')
         self.write(data)
+        if not isinstance(self.database,type(None)):
+            self.write_database(data)
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
@@ -380,9 +417,16 @@ class FnoiseStats(BaseClasses.DataStructure):
         #print('TOD {}, FILTER {}'.format(tod.shape,median_filter.shape))
         return np.sum(tod*median_filter)/np.sum(median_filter**2)
 
-    def coefficient_jointfit(self, tod, atmos, med_filt):
+    def coefficient_jointfit(self, _tod, _atmos, _med_filt,mask=None):
         """
         """
+        if isinstance(mask,type(None)):
+            mask = np.ones(_tod.size,dtype=bool)
+
+        tod = _tod[mask]
+        atmos=_atmos[mask]
+        med_filt=_med_filt[mask]
+
         templates = np.ones((3,tod.size))
         templates[0,:] = atmos
         templates[1,:] = med_filt
@@ -451,7 +495,13 @@ class FnoiseStats(BaseClasses.DataStructure):
 
 
 
-    def FitAtmosAndGround(self,tod,az,el,niter=100):
+    def FitAtmosAndGround(self,_tod,_az,_el,mask=None,niter=100):
+        if isinstance(mask,type(None)):
+            mask = np.ones(_tod.size,dtype=bool)
+
+        tod =_tod[mask]
+        az  =_az[mask]
+        el  =_el[mask]
         # Fit gradients
         dlength = tod.size
 
@@ -477,7 +527,14 @@ class FnoiseStats(BaseClasses.DataStructure):
 
         fits,errs =  np.nanmedian(a_all,axis=0),stats.MAD(a_all,axis=0)
         tod_filter = np.sum(templates[:,:]*fits[:,None],axis=0)
-        return tod_filter, fits, errs
+
+        # interpolate to mask
+        tod_filter_all = np.zeros(_tod.size)
+        tod_filter_all[mask] = tod_filter
+        t = np.arange(_tod.size)
+        tod_filter_all[~mask] = np.interp(t[~mask],t[mask],tod_filter)
+        
+        return tod_filter_all, fits, errs
 
 
     def RemoveAtmosphere(self, tod, el):
@@ -488,9 +545,41 @@ class FnoiseStats(BaseClasses.DataStructure):
         pmdl = np.poly1d(np.polyfit(A, tod,1))
         return tod- pmdl(A), pmdl
 
+    def write_database(self,data):
+        """
+        Write out the statistics to a common statistics database for easy access
+        """
+        
+        if not os.path.exists(self.database):
+            output = h5py.File(self.database,'w')
+        else:
+            output = h5py.File(self.database,'a')
+
+        obsid = self.getObsID(data)
+        feeds, feed_idx, feed_dict =self.getFeeds(data,'all')
+        if obsid in output:
+            grp = output[obsid]
+        else:
+            grp = output.create_group(obsid)
+
+
+        if 'FnoiseStats' in grp:
+            del grp['FnoiseStats']
+        stats = grp.create_group('FnoiseStats')
+
+        dnames = ['feeds','fnoise_fits','wnoise_auto', 'powerspectra','freqspectra',
+                  'atmos','atmos_errors','filter_coefficients','atmos_coefficients']
+        dsets = [feeds,self.fnoise_fits,self.wnoise_auto,self.powerspectra,self.freqspectra,
+                 self.atmos,self.atmos_errs,self.filter_coefficients,self.atmos_coefficients]
+        for (dname, dset) in zip(dnames, dsets):
+            if dname in stats:
+                del stats[dname]
+            stats.create_dataset(dname,  data=dset)
+        output.close()
+            
     def write(self,data):
         """
-        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        Write out fitted statistics to the level 2 file
         """
         fname = data.filename.split('/')[-1]
 
@@ -656,7 +745,7 @@ class SunDistance(BaseClasses.DataStructure):
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self,level2='level2',**kwargs):
+    def __init__(self,level2='level2',database=None,**kwargs):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
@@ -664,6 +753,7 @@ class SunDistance(BaseClasses.DataStructure):
         super().__init__(**kwargs)
         self.name = 'SunDistance'
         self.level2=level2
+        self.database=database
 
     def __str__(self):
         return "Calculating sun distance."
@@ -710,6 +800,10 @@ class SunDistance(BaseClasses.DataStructure):
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing Sun distance to level 2 file ({fname})')
         self.write(data)
+        print(self.database)
+        if not isinstance(self.database,type(None)):
+            print('hello')
+            self.write_database(data)
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
@@ -731,13 +825,42 @@ class SunDistance(BaseClasses.DataStructure):
         if not 'Distances' in statistics:
             distance_grp = statistics.create_group('Distances')
         else:
-            distance_grp = lvl2['distance_grp']
+            distance_grp = statistics['Distances']
 
         
         for dname, dset in self.distances.items():
             if dname in distance_grp:
                 del distance_grp[dname]
             distance_grp.create_dataset(dname,data=dset)
+    def write_database(self,data):
+        """
+        Write out the statistics to a common statistics database for easy access
+        """
+        
+        if not os.path.exists(self.database):
+            output = h5py.File(self.database,'w')
+        else:
+            output = h5py.File(self.database,'a')
+
+        obsid = self.getObsID(data)
+        if obsid in output:
+            grp = output[obsid]
+        else:
+            grp = output.create_group(obsid)
+
+
+        if  self.name in grp:
+            del grp[self.name]
+        stats = grp.create_group(self.name)
+
+
+        for dname, dset in self.distances.items():
+            if not 'mean' in dname:
+                continue
+            if dname in stats:
+                del stats[dname]
+            stats.create_dataset(dname,  data=dset)
+        output.close()
 
 
 class WindSpeed(BaseClasses.DataStructure):
