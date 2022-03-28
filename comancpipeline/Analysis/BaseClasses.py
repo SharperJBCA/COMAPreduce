@@ -59,6 +59,23 @@ class DataStructure(object):
         return select
 
     @staticmethod
+    def getSpikeMask(data,level2='level2'):
+        """
+        If a spike mask exists in the Statistics group, return it
+        """
+        
+        if 'Statistics' in data[f'{level2}']:
+            stats = data[f'{level2}/Statistics']
+        else:
+            return True
+
+        if not 'Spikes' in stats:
+            return True
+
+        spike_mask = stats['Spikes']['mask'][...]
+        return spike_mask
+
+    @staticmethod
     def getFeatures(data):
         """
         Get the feature bits, will check to see if it exists in level 1 first,

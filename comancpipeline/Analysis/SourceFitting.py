@@ -3,7 +3,7 @@ import concurrent.futures
 import numpy as np
 from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis import Calibration, Statistics
-from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, binFuncs, stats,CaliModels
+from comancpipeline.Tools import WCS, Coordinates, Filtering, Fitting, Types, ffuncs, binFuncs, stats,CaliModels, FileTools
 from comancpipeline.data import Data
 from scipy.optimize import fmin, leastsq, minimize
 from scipy.interpolate import interp1d
@@ -371,7 +371,7 @@ class FitSource(BaseClasses.DataStructure):
         self.yfwhm = np.poly1d([ 6.07782238e-03, -4.26787057e-01,  1.18196903e+01])
 
         # Fitted fwhm's
-        self.fitted_fwhm = {feed:np.poly1d(fit) for feed,fit in Data.average_beam_widths.items()}
+        self.fitted_fwhm = {} #{feed:np.poly1d(fit) for feed,fit in Data.average_beam_widths.items()}
 
 
     def __str__(self):
@@ -434,7 +434,8 @@ class FitSource(BaseClasses.DataStructure):
         freq = data[f'{self.level2}/frequency'][...]
         freqwidth = np.abs(freq[0,0]-freq[0,1])*self.binwidth * 1e3
 
-        sky_data_flag = ~Calibration.get_vane_flag(data['level1']) 
+        spike_mask = self.getSpikeMask(data)
+        sky_data_flag = ~Calibration.get_vane_flag(data['level1']) & spike_mask
         assert np.sum(sky_data_flag) > 0, 'Error: The calibration vane is closed for all of this observation?'
 
         # Make sure we are actually using a calibrator scan
@@ -461,7 +462,10 @@ class FitSource(BaseClasses.DataStructure):
             for i,(ifeed,feed) in enumerate(zip(self.feedlist, self.feeds)):
                 feedtod = data[f'{self.level2}/averaged_tod'][ifeed,...]
                 feedtod,mask = filter_tod(data,feedtod,ifeed)
-                coords = self.get_coords(data,ifeed,mask)
+                coords = self.get_coords(data,ifeed,mask & spike_mask)
+
+                pyplot.plot(coords['sky_data_flag'])
+                pyplot.show()
                 for iband in range(nSBs):
                     for ichan in range(nChans):
                         cel_maps, az_maps = self.create_maps(data,
@@ -979,9 +983,9 @@ class FitSource(BaseClasses.DataStructure):
         """
 
         if not os.path.exists(self.database):
-            output = h5py.File(self.database,'w')
+            output = FileTools.safe_hdf5_open(self.database,'w')
         else:
-            output = h5py.File(self.database,'a')
+            output = FileTools.safe_hdf5_open(self.database,'a')
 
         obsid = self.getObsID(data)
         frequency = data[f'{self.level2}/frequency'][...]

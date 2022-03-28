@@ -142,6 +142,7 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
     """
 
     def __init__(self, feeds='all', output_dir='', nworkers= 1,
+                 database=None,
                  average_width=512,calvanedir='AncillaryData/CalVanes',
                  cal_mode = 'Vane', cal_prefix='',level2='level2',
                  data_dirs=None,
@@ -178,6 +179,8 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.level2=level2
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
+
+        self.database   = database
 
     def __str__(self):
         return "Creating level2 file with channel binning of {}".format(self.average_width)
@@ -264,6 +267,10 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing level 2 file: {self.outfilename}')
         self.write(data)
+
+        if not isinstance(self.database,type(None)):
+            self.write_database(self.outfile) # pass it the new level 2 file
+
         self.logger(f'{fname}:{self.name}: Done.')
         # Now change to the level2 file for all future analyses.
         if data:
@@ -379,6 +386,36 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         
         return True
 
+    def write_database(self,data):
+        """
+        Write the fits to the general database
+        """
+
+        if not os.path.exists(self.database):
+            output = FileTools.safe_hdf5_open(self.database,'w')
+        else:
+            output = FileTools.safe_hdf5_open(self.database,'a')
+
+        obsid = self.getObsID(data)
+        if obsid in output:
+            grp = output[obsid]
+        else:
+            grp = output.create_group(obsid)
+
+        if 'level2' in grp:
+            lvl2 = grp['level2']
+        else:
+            lvl2 = grp.create_group('level2')
+        
+        lvl2.attrs['level1_filename'] = data['level1'].file.filename
+        lvl2.attrs['level2_filename'] = data.filename
+
+
+        for (dname, dset) in data['level1/comap'].attrs.items():
+            if dname in stats:
+                del lvl2.attrs[dname]
+            lvl2.attrs[dname] = dset
+        output.close()
 
     def write(self,data):
         """

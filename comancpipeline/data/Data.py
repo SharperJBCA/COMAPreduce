@@ -81,8 +81,8 @@ def read_gains():
                                                                data['gains'][:,ifeed,ichan],
                                                                data['errors'][:,ifeed,ichan])
     
-        feed_gains[cal_source]['obsids'] = np.array(allobs).astype(int)
-        feed_gains[cal_source]['gains'] = allgains
+        feed_gains[cal_source]['obsids']    = np.array(allobs).astype(int)
+        feed_gains[cal_source]['gains']     = allgains
         feed_gains[cal_source]['frequency'] = np.array([[27.5, 26.5],
                                                         [28.5, 29.5],
                                                         [31.5, 30.5],
@@ -93,6 +93,6 @@ def read_gains():
     return feed_positions, feed_gains, average_beam_widths
 
 try:
-    feed_positions, feed_gains, average_beam_widths =read_gains()
+    feed_positions, feed_gains, average_beam_widths = None, None, None #read_gains()
 except KeyError:
     pass

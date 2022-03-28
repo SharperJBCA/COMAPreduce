@@ -5,7 +5,7 @@ from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
 
-from comancpipeline.Tools import Coordinates, Types, stats
+from comancpipeline.Tools import Coordinates, Types, stats, FileTools
 from comancpipeline.Tools.median_filter import medfilt
 
 from os import listdir, getcwd
@@ -20,6 +20,8 @@ import os
 from scipy.optimize import minimize
 from scipy import linalg
 from tqdm import tqdm
+
+from scipy.signal import find_peaks
 
 __version__='v1'
 
@@ -551,9 +553,9 @@ class FnoiseStats(BaseClasses.DataStructure):
         """
         
         if not os.path.exists(self.database):
-            output = h5py.File(self.database,'w')
+            output = FileTools.safe_hdf5_open(self.database,'w')
         else:
-            output = h5py.File(self.database,'a')
+            output = FileTools.safe_hdf5_open(self.database,'a')
 
         obsid = self.getObsID(data)
         feeds, feed_idx, feed_dict =self.getFeeds(data,'all')
@@ -660,7 +662,6 @@ class SkyDipStats(BaseClasses.DataStructure):
                                 tod_skydip<self.dipHi,
                                 feat==256],
                                axis=0)
-        import time
 
         for ifeed in range(nFeeds):
             if feeds[ifeed] == 20:
@@ -739,6 +740,135 @@ class SkyDipStats(BaseClasses.DataStructure):
                 del SkyDipStats[dname]
             SkyDipStats.create_dataset(dname,  data=dset)
 
+class FeedFeedCorrelations(BaseClasses.DataStructure):
+    """
+    Takes level 1 files, bins and calibrates them for continuum analysis.
+    """
+
+    def __init__(self,level2='level2',database=None,**kwargs):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
+        super().__init__(**kwargs)
+        self.name = 'FeedFeedCorrelations'
+        self.level2=level2
+        self.database=database
+
+    def __str__(self):
+        return "Calculating feed feed correlations."
+
+    def run(self, data):
+        """
+        Expects a level2 file structure to be passed.
+        """
+        fname = data.filename.split('/')[-1]
+
+
+        stats = data['level2/Statistics'] 
+        medfilts = stats['FilterTod_Scan00'][...]
+        stepsize = stats['FilterTod_Scan00'].attrs['medfilt_stepsize']
+        N = int(medfilts.shape[-1]//stepsize * stepsize)
+        medfilts = np.nanmean(np.reshape(medfilts[:,:,:N],(medfilts.shape[0],
+                                                           medfilts.shape[1],
+                                                           N//stepsize,
+                                                           stepsize)),axis=-1)
+        
+        z = (medfilts[:,0,:] - np.nanmean(medfilts[:,0,:],axis=-1)[:,None])#/\
+            # np.nanstd(medfilts[:,0,:],axis=-1)[:,None]
+        C = z.dot(z.T)/medfilts.shape[-1]
+
+        feeds,feedsidx,_ = self.getFeeds(data,'all')
+        i = np.where((feeds == 8))[0][0]
+        feedsidx = feedsidx[:i+1]
+        C[feedsidx,feedsidx] = np.nan
+        
+        
+
+        self.data_out = {'feed_feed_correlation':np.nanmean(C)}
+        
+
+    def __call__(self,data):
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+        source  = self.getSource(data)
+        comment = self.getComment(data)
+
+        self.logger(f'{fname}:{self.name}: {source} - {comment}')
+
+        if (f'level2/Statistics/{self.name}' in data) & (not self.overwrite):
+            return data
+
+        # Want to ensure the data file is read/write
+        data = self.setReadWrite(data)
+
+        self.logger(f'{fname}:{self.name}: Calculating Sun distance.')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing Sun distance to level 2 file ({fname})')
+        self.write(data)
+        print(self.database)
+        if not isinstance(self.database,type(None)):
+            print('hello')
+            self.write_database(data)
+        self.logger(f'{fname}:{self.name}: Done.')
+
+        return data
+
+    def write(self,data):
+        """
+        Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
+        """
+        fname = data.filename.split('/')[-1]
+
+        if not self.level2 in data:
+            return
+        lvl2 = data[self.level2]
+        if not 'Statistics' in lvl2:
+            statistics = lvl2.create_group('Statistics')
+        else:
+            statistics = lvl2['Statistics']
+
+        if not self.name in statistics:
+            grp = statistics.create_group(self.name)
+        else:
+            grp = statistics[self.name]
+
+        
+        for dname, dset in self.data_out.items():
+            if dname in grp:
+                del grp[dname]
+            grp.create_dataset(dname,data=dset)
+
+    def write_database(self,data):
+        """
+        Write out the statistics to a common statistics database for easy access
+        """
+        
+        if not os.path.exists(self.database):
+            output = h5py.File(self.database,'w')
+        else:
+            output = h5py.File(self.database,'a')
+
+        obsid = self.getObsID(data)
+        if obsid in output:
+            grp = output[obsid]
+        else:
+            grp = output.create_group(obsid)
+
+
+        if  self.name in grp:
+            del grp[self.name]
+        stats = grp.create_group(self.name)
+
+
+        for dname, dset in self.data_out.items():
+           if dname in stats:
+               del stats[dname]
+           stats.create_dataset(dname,  data=dset)
+        output.close()
 
 class SunDistance(BaseClasses.DataStructure):
     """
@@ -800,9 +930,7 @@ class SunDistance(BaseClasses.DataStructure):
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing Sun distance to level 2 file ({fname})')
         self.write(data)
-        print(self.database)
         if not isinstance(self.database,type(None)):
-            print('hello')
             self.write_database(data)
         self.logger(f'{fname}:{self.name}: Done.')
 
@@ -838,9 +966,9 @@ class SunDistance(BaseClasses.DataStructure):
         """
         
         if not os.path.exists(self.database):
-            output = h5py.File(self.database,'w')
+            output = FileTools.safe_hdf5_open(self.database,'w')
         else:
-            output = h5py.File(self.database,'a')
+            output = FileTools.safe_hdf5_open(self.database,'a')
 
         obsid = self.getObsID(data)
         if obsid in output:
@@ -950,3 +1078,165 @@ class WindSpeed(BaseClasses.DataStructure):
             if dname in distance_grp:
                 del distance_grp[dname]
             distance_grp.create_dataset(dname,data=dset)
+
+
+class SpikeFlags(BaseClasses.DataStructure):
+    """
+    Search TODs for transient spikes
+    """
+
+    def __init__(self,level2='level2',database=None,**kwargs):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
+        super().__init__(**kwargs)
+        self.name = 'Spikes'
+        self.level2=level2
+        self.database=database
+
+    def __str__(self):
+        return "Calculating spike mask"
+
+    def remove_filter(self,data,feedtod,ifeed,level2='level2'):
+
+        nBands, nChans,nSamples = feedtod.shape
+
+        mask = np.zeros(nSamples,dtype=bool)
+        
+        medfilt_coefficient = data[f'{level2}/Statistics/filter_coefficients'][ifeed,...]
+        atmos               = data[f'{level2}/Statistics/atmos'][ifeed,...]
+        atmos_coefficient   = data[f'{level2}/Statistics/atmos_coefficients'][ifeed,...]
+        scan_edges          = data[f'{level2}/Statistics/scan_edges'][...]
+        
+        az = data['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,:]
+        el = data['level1/spectrometer/pixel_pointing/pixel_el'][ifeed,:]
+
+        for iscan,(start,end) in enumerate(scan_edges):
+            median_filter   = data[f'{level2}/Statistics/FilterTod_Scan{iscan:02d}'][ifeed,...]
+            mask[start:end] = True
+            N = int((end-start))
+            for iband in range(nBands):
+                for ichan in range(nChans):
+
+                    mdl = AtmosGroundModel(atmos[iband,iscan],az[start:end],el[start:end]) *\
+                          atmos_coefficient[iband,ichan,iscan,0]
+                    mdl += median_filter[iband,:N] * medfilt_coefficient[iband,ichan,iscan,0]
+                    feedtod[iband,ichan,start:end] -= mdl
+                    feedtod[iband,ichan,start:end] -= np.nanmedian(feedtod[iband,ichan,start:end])
+        return np.nanmean(feedtod,axis=(0,1)), mask
+
+    def run(self, data):
+        """
+        Expects a level2 file structure to be passed.
+        """
+        fname = data.filename.split('/')[-1]
+
+        self.feeds, self.feedidx,_ = self.getFeeds(data,'all')
+        print(data.keys())
+        tod = data['level2/averaged_tod']
+        todall = np.zeros((tod.shape[0],tod.shape[-1]))
+        for ifeed,feed in enumerate(self.feeds):
+            if feed > 8:
+                continue
+            if feed == 20:
+                continue
+            todall[ifeed], mask = self.remove_filter(data,tod[ifeed],ifeed,level2='level2')
+
+        idx = np.argmin(np.abs(self.feeds-8))
+        z = np.nanmedian(todall[:idx,mask],axis=0)
+        peaks, properties = find_peaks(z, prominence=0.5,width=[1,200])
+
+        N = len(properties['left_ips'])
+        self.output={'mask':np.ones(tod.shape[-1],dtype=bool),
+                     'left':np.zeros(N,dtype=int),
+                     'right':np.zeros(N,dtype=int),
+                     'width':np.zeros(N,dtype=int)}
+
+        mask_idx = np.where(mask)[0]
+        for i,(left,right,w) in enumerate(zip(properties['left_ips'],properties['right_ips'],properties['widths'])):
+            lo = mask_idx[int(left-w)]
+            hi = mask_idx[int(right+w)]
+            self.output['mask'][lo:hi] = False
+            self.output['left'][i] = lo
+            self.output['right'][i]= hi
+            self.output['width'][i]= int(w*3)
+
+    def __call__(self,data):
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+        source  = self.getSource(data)
+        comment = self.getComment(data)
+
+        self.logger(f'{fname}:{self.name}: {source} - {comment}')
+
+        if ('level2/Statistics/{self.name}' in data) & (not self.overwrite):
+            return data
+
+        # Want to ensure the data file is read/write
+        data = self.setReadWrite(data)
+
+        self.logger(f'{fname}:{self.name}: Calculating Spike Mask.')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing Spike Mask to level 2 file ({fname})')
+        self.write(data)
+        if not isinstance(self.database,type(None)):
+            self.write_database(data)
+        self.logger(f'{fname}:{self.name}: Done.')
+
+        return data
+
+    def write(self,data):
+        """
+        """
+        fname = data.filename.split('/')[-1]
+
+        if not self.level2 in data:
+            return
+        lvl2 = data[self.level2]
+        if not 'Statistics' in lvl2:
+            statistics = lvl2.create_group('Statistics')
+        else:
+            statistics = lvl2['Statistics']
+
+        if not self.name in statistics:
+            grp = statistics.create_group(self.name)
+        else:
+            grp = statistics[self.name]
+
+        
+        for dname, dset in self.output.items():
+            if dname in grp:
+                del grp[dname]
+            grp.create_dataset(dname,data=dset)
+
+    def write_database(self,data):
+        """
+        """
+        
+        if not os.path.exists(self.database):
+            db = FileTools.safe_hdf5_open(self.database,'w')
+        else:
+            db = FileTools.safe_hdf5_open(self.database,'a')
+
+        obsid = self.getObsID(data)
+        if obsid in db:
+            grp = db[obsid]
+        else:
+            grp = db.create_group(obsid)
+
+
+        if  self.name in grp:
+            del grp[self.name]
+        stats = grp.create_group(self.name)
+
+
+        for dname in ['left','right','width']:
+            dset = self.output[dname]
+            if dname in stats:
+                del stats[dname]
+            stats.create_dataset(dname,  data=dset)
+        db.close()

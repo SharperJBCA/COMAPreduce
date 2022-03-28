@@ -2,7 +2,7 @@ import numpy as np
 from matplotlib import pyplot
 import subprocess
 from datetime import datetime
-
+import time
 def query_sql(server, script_location,suffix='_Level2Cont'):
     """
     query the sql database at OVRO
@@ -36,3 +36,18 @@ class h5py_visitor_func_class:
         if isinstance(node, h5py.Dataset) and not name in self.data:
             self.data[names] = node[...]
         
+
+def safe_hdf5_open(filename,mode,maxtries=10):
+    """
+    Will attempt to open an hdf5 file for read/write.
+    If the file is locked, then we will wait until our turn.
+    """
+
+    for i in range(maxtries):
+        try:
+            h = h5py.File(filename,mode)
+        except OSError:
+            h = None
+            time.sleep(5)
+
+    return h
