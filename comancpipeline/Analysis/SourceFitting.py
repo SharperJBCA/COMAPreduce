@@ -464,8 +464,6 @@ class FitSource(BaseClasses.DataStructure):
                 feedtod,mask = filter_tod(data,feedtod,ifeed)
                 coords = self.get_coords(data,ifeed,mask & spike_mask)
 
-                pyplot.plot(coords['sky_data_flag'])
-                pyplot.show()
                 for iband in range(nSBs):
                     for ichan in range(nChans):
                         cel_maps, az_maps = self.create_maps(data,
