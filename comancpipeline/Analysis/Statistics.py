@@ -618,7 +618,13 @@ class SkyDipStats(BaseClasses.DataStructure):
     """
 
     def __init__(self,allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
-                 nbins=50, samplerate=50, medfilt_stepsize=5000, poly_iter=100, dipLo=42, dipHi=58):
+                 nbins=50, 
+                 samplerate=50,
+                 medfilt_stepsize=5000, 
+                 poly_iter=100, 
+                 database=None,
+                 dipLo=42, 
+                 dipHi=58):
         """
         nworkers - how many threads to use to parallise the fitting loop
         average_width - how many channels to average over
@@ -630,6 +636,7 @@ class SkyDipStats(BaseClasses.DataStructure):
         self.poly_iter = int(poly_iter)
         self.dipLo = int(dipLo)
         self.dipHi = int(dipHi)
+        self.database=database
         self.allowed_sources = allowed_sources
     def __str__(self):
         return "Calculating noise statistics (skydip class)."
@@ -646,7 +653,8 @@ class SkyDipStats(BaseClasses.DataStructure):
         az = data['level1/spectrometer/pixel_pointing/pixel_az'][...]
         el = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
         feeds = data['level1/spectrometer/feeds'][:]
-        feat = data['level1/spectrometer/features'][...]
+        feat = np.log(data['level1/spectrometer/features'][...])/np.log(2)
+
 
 
         # Looping over Feed - Band - Channel, perform 1/f noise fit
@@ -658,19 +666,19 @@ class SkyDipStats(BaseClasses.DataStructure):
 
         pbar = tqdm(total=((nFeeds-1)*nBands*nChannels))
 
-        skydip_select = np.all([tod_skydip>self.dipLo,
-                                tod_skydip<self.dipHi,
-                                feat==256],
-                               axis=0)
 
         for ifeed in range(nFeeds):
             if feeds[ifeed] == 20:
                 continue
+
+            skydip_select = (el[ifeed]>self.dipLo) & (el[ifeed]<self.dipHi) & (feat == 8)
+            pyplot.imshow(tod[0,0,:,:],aspect='auto')
+            pyplot.show()
             for iband in range(nBands):
 
                 for ichan in range(nChannels):
                     x = 1/(np.cos(el[ifeed,skydip_select[ifeed]]*(np.pi/180)))
-                    y = tod_skydip[ifeed,iband,ichan,skydip_select[ifeed]]
+                    y = tod[ifeed,iband,ichan,skydip_select[ifeed]]
 
                     total = np.shape(x)[0]
                     boot_no = int(np.rint(total*0.9))
@@ -690,6 +698,9 @@ class SkyDipStats(BaseClasses.DataStructure):
                         avg = np.asarray((np.nan,np.nan))
                         std = np.asarray((np.nan,np.nan))
 
+                    pyplot.plot(x,y,',')
+                    pyplot.plot(x,np.poly1d(avg)(x))
+                    pyplot.show()
                     #assume Tatm=300K
                     self.opacity[ifeed,iband,ichan] = avg[1]/300#K
                     self.opacity_err[ifeed,iband,ichan] = std[1]/300#K
@@ -718,6 +729,9 @@ class SkyDipStats(BaseClasses.DataStructure):
 
         self.write(data)
 
+        if not isinstance(self.database,type(None)):
+            self.write_database(data)
+
         return data
 
     def write(self,data):
@@ -739,6 +753,35 @@ class SkyDipStats(BaseClasses.DataStructure):
             if dname in SkyDipStats:
                 del SkyDipStats[dname]
             SkyDipStats.create_dataset(dname,  data=dset)
+    def write_database(self,data):
+        """
+        Write the skydip data to the database too 
+        """
+        if not os.path.exists(self.database):
+            output = FileTools.safe_hdf5_open(self.database,'w')
+        else:
+            output = FileTools.safe_hdf5_open(self.database,'a')
+
+        obsid = self.getObsID(data)
+        if obsid in output:
+            grp = output[obsid]
+        else:
+            grp = output.create_group(obsid)
+
+        if self.name in grp:
+            lvl2 = grp[self.name]
+        else:
+            lvl2 = grp.create_group(self.name)
+
+        lvl2.attrs['dipLo'] = self.dipLo
+        lvl2.attrs['dipHi'] = self.dipHi
+
+        dnames = ['opacity', 'opacity_err', 'Tzenith', 'Tzenith_err']
+        dsets = [self.opacity, self.opacity_err, self.Tzen_err, self.Tzen_err]
+        for (dname, dset) in zip(dnames, dsets):
+            if dname in lvl2:
+                del lvl2[dname]
+            lvl2.create_dataset(dname,  data=dset)
 
 class FeedFeedCorrelations(BaseClasses.DataStructure):
     """
@@ -809,9 +852,7 @@ class FeedFeedCorrelations(BaseClasses.DataStructure):
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing Sun distance to level 2 file ({fname})')
         self.write(data)
-        print(self.database)
         if not isinstance(self.database,type(None)):
-            print('hello')
             self.write_database(data)
         self.logger(f'{fname}:{self.name}: Done.')
 
@@ -848,9 +889,9 @@ class FeedFeedCorrelations(BaseClasses.DataStructure):
         """
         
         if not os.path.exists(self.database):
-            output = h5py.File(self.database,'w')
+            output = FileTools.safe_hdf5_open(self.database,'w')
         else:
-            output = h5py.File(self.database,'a')
+            output = FileTools.safe_hdf5_open(self.database,'a')
 
         obsid = self.getObsID(data)
         if obsid in output:
@@ -865,9 +906,10 @@ class FeedFeedCorrelations(BaseClasses.DataStructure):
 
 
         for dname, dset in self.data_out.items():
-           if dname in stats:
-               del stats[dname]
-           stats.create_dataset(dname,  data=dset)
+            if dname in stats:
+                del stats[dname]
+            print(dname,dset)
+            stats.create_dataset(dname,  data=dset)
         output.close()
 
 class SunDistance(BaseClasses.DataStructure):

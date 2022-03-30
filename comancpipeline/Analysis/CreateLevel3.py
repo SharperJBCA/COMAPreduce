@@ -11,7 +11,7 @@ from tqdm import tqdm
 from scipy import linalg as la
 import healpy as hp
 from comancpipeline.Tools.median_filter import medfilt
-from comancpipeline.Tools import  binFuncs, stats
+from comancpipeline.Tools import  binFuncs, stats, FileTools
 
 from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis.FocalPlane import FocalPlane
@@ -25,7 +25,6 @@ import os
 import shutil
 
 from tqdm import tqdm
-from comancpipeline.data import Data
 
 __level3_version__='v2'
 
@@ -40,32 +39,23 @@ def subtract_filters(tod,az,el,filter_tod, filter_coefficients, atmos, atmos_coe
     return tod_out 
 
 class CreateLevel3(BaseClasses.DataStructure):
-    def __init__(self,level2='level2',level3='level3',output_dir = None,cal_source='taua',
+    def __init__(self,
+                 level2='level2',
+                 level3='level3',
+                 database=None,
+                 output_dir = None,
+                 cal_source='taua',
                  set_permissions=True,
                  permissions_group='comap',
-                 simulation_mode=False,
-                 channel_mask=None, gain_mask=None, calibration_factors=None, **kwargs):
+                 median_filter=True,
+                 atmosphere=True,
+                 astro_cal=True, **kwargs):
         """
         """
         super().__init__(**kwargs)
         self.name = 'CreateLevel3'
-        # READ ANY ANCILLARY DATA: MASKS/CALIBRATION FACTORS
-        if not isinstance(channel_mask,type(None)):
-            self.channelmask = np.load(channel_mask,allow_pickle=True).astype(bool)
-        else:
-            self.channelmask = None
-
-        if not isinstance(gain_mask,type(None)):
-            self.gainmask = np.load(gain_mask,allow_pickle=True).astype(bool)
-        else:
-            self.gainmask = None
-
-        if not isinstance(calibration_factors, type(None)):
-            self.calfactors =  np.load(calibration_factors)
-        else:
-            self.calfactors = None
-
         self.output_dir = output_dir
+        self.database = database
 
         self.level2=level2
         self.level3=level3
@@ -74,8 +64,9 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
 
-        self.simulation_mode=simulation_mode
-
+        self.astro_cal=astro_cal
+        self.median_filter = median_filter
+        self.atmosphere = atmosphere
     def __str__(self):
         return "Creating Level 3"
 
@@ -119,16 +110,13 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         self.logger(f'{fname}:{self.name}: Creating {self.level3} data.')
         self.run(data)
-        if not self.simulation_mode:
-            self.calibrate_data(data)
-        else:
-            self.cal_factors = np.array([1]) # For simulations we just save a dummy variable for this
 
         # Want to ensure the data file is read/write
         data = self.setReadWrite(data)
 
         self.logger(f'{fname}:{self.name}: Writing to {self.outfile}')
         self.write(data)
+        self.write_database(data)
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
@@ -148,120 +136,168 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.cal_factors = self.all_tod*0.+1
         self.all_frequency = data['level2/frequency'][...].flatten()
 
-    def calibrate_data(self,data):
+
+    def get_cal_gains(self,this_obsid):
+        """
+        Get all of the gain factors associated with this calibration source
+        """
+
+        db = h5py.File(self.database,'r')
+        obsids = []
+        for obsid, grp in db.items():
+            if not 'FitSource' in grp:
+                continue
+            if grp.attrs['Flagged']:
+                continue
+            if grp['FitSource'].attrs['source'].lower() == self.cal_source.lower():
+                obsids += [int(obsid)]
+
+        obsids = np.array(obsids)
+        idx = np.argmin(np.abs(obsids-this_obsid))
+        self.nearest_calibrator = str(obsids[idx])
+        gains = {'Gains':db[self.nearest_calibrator]['FitSource/Gains'][...],
+                 'Feeds':db[self.nearest_calibrator]['FitSource/feeds'][...]}
+
+        db.close()
+
+        return gains
+    def calibrate_tod(self,data, tod, weights, ifeed, feed):
         """
         Calibrates data using a given calibration source
         """
-        feeds, feed_indices, feed_dict = self.getFeeds(data,'all')
         this_obsid = int(self.getObsID(data))
         # Get Gain Calibration Factors
+        gains = self.get_cal_gains(this_obsid)
 
-        nfeeds, nchan, ntod = self.all_tod.shape
-        self.cal_factors = np.ones((nfeeds,nchan))
-
+        nbands, nchan, ntod = tod.shape
         if self.cal_source != 'none':
-            for ifeed,feed_num in enumerate(feeds):
-                obsids = Data.feed_gains[self.cal_source.lower()]['obsids']*1
-                gains  = Data.feed_gains[self.cal_source.lower()]['gains'][:,feed_num-1,:]
+            idx = np.where((gains['Feeds'] == feed))[0]
+            if not len(idx) == 0:
+                cal_factors = gains['Gains'][idx,...]
+            else:
+                cal_factors = np.ones((1,tod.shape[0],tod.shape[1]))
+        tod = tod/cal_factors[0,...,None]
+        weights = weights*cal_factors[0,...,None]**2
+        bad = ~np.isfinite(tod) | ~np.isfinite(weights)
+        tod[bad] = 0
+        weights[bad] = 0
+        return tod, weights, cal_factors[0]
 
-                # now find the nearest non-nan obsid to calibrate off
-                obs_idx = np.argmin((obsids - this_obsid)**2)
-                self.cal_factors[ifeed,...] = gains[obs_idx].flatten()
-        self.all_tod = self.all_tod/self.cal_factors[:,:,None]
-        self.all_weights = self.all_weights*self.cal_factors[:,:,None]**2
+    def clean_tod(self,d,ifeed,feed):
+        """
+        Subtracts the median filter and atmosphere from each channel per scan
+        """
+        scan_edges = d[f'{self.level2}/Statistics/scan_edges'][...]
+        nscans = scan_edges.shape[0]
+
+        feed_tod = d[f'{self.level2}/averaged_tod'][ifeed,:,:,:]
+        weights  = np.zeros(feed_tod.shape)
+        mask     = np.zeros(feed_tod.shape[-1],dtype=bool)
+        az = d['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,:]
+        el = d['level1/spectrometer/pixel_pointing/pixel_el'][ifeed,:]
+
+        # Statistics for this feed                        
+        medfilt_coefficient = d[f'{self.level2}/Statistics/filter_coefficients'][ifeed,...]
+        atmos = d[f'{self.level2}/Statistics/atmos'][ifeed,...]
+        atmos_coefficient = d[f'{self.level2}/Statistics/atmos_coefficients'][ifeed,...]
+        wnoise_auto = d[f'{self.level2}/Statistics/wnoise_auto'][ifeed,...]
+        fnoise_fits = d[f'{self.level2}/Statistics/fnoise_fits'][ifeed,...]
+
+        # then the data for each scan
+        last = 0
+        scan_samples = []
+        for iscan,(start,end) in enumerate(scan_edges):
+            scan_samples = np.arange(start,end,dtype=int)
+            median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{iscan:02d}'][ifeed,...]
+            N = int((end-start))
+            end = start+N
+            tod = feed_tod[...,start:end]
+            mask[start:end] = True
+            # Subtract atmospheric fluctuations per channel
+            for iband in range(4):
+                for ichannel in range(64):
+                    #if self.channelmask[ifeed,iband,ichannel] == False:
+                    amdl = Statistics.AtmosGroundModel(atmos[iband,iscan],az[start:end],el[start:end]) *\
+                           atmos_coefficient[iband,ichannel,iscan,0]
+                    if self.median_filter:
+                        tod[iband,ichannel,:] -= median_filter[iband,:N] * medfilt_coefficient[iband,ichannel,iscan,0]
+                    if self.atmosphere:
+                        tod[iband,ichannel,:] -= amdl
+                    tod[iband,ichannel,:] -= np.nanmedian(tod[iband,ichannel,:])
 
 
+            wnoise = wnoise_auto[:,:,iscan,0]
+            weights[...,start:end] = 1./wnoise[...,None]**2
+            bad = np.isnan(weights) | np.isinf(weights) | ~np.isfinite(feed_tod)
+            feed_tod[bad] = 0
+            weights[bad] = 0
 
+        return feed_tod, weights, mask
+
+    def average_tod(self,d,feed_tod,feed_weights,mask):
+        """
+        Average together to TOD 
+        """        
+
+        frequency = d['level1/spectrometer/frequency'][...]
+        # This becomes (nBands, 64)        
+        self.frequency = np.mean(np.reshape(frequency,(frequency.shape[0],frequency.shape[1]//16,16)) ,axis=-1)
+        all_tod = np.zeros((8, feed_tod.shape[-1]))
+        all_weights=np.zeros((8, feed_tod.shape[-1]))
+        all_frequency=np.zeros((8))
+        for ichan, (flow,fhigh) in enumerate(zip(np.arange(8)+26,np.arange(8)+27)):
+            sel = ((self.frequency >= flow) & (self.frequency < fhigh))
+            top = np.sum(feed_tod[sel,:]*feed_weights[sel,:],axis=0)
+            bot = np.sum(feed_weights[sel,:],axis=0)
+            all_tod[ichan,:] = top/bot
+            all_weights[ichan,:] = bot
+            all_frequency[ichan] = (fhigh+flow)/2.
+            
+        diff = all_tod[:,mask]
+        N = int(diff.shape[1]//2*2)
+        diff = (diff[:,:N:2]-diff[:,1:N:2])
+        auto = stats.MAD(diff.T)
+
+        amean_rms = np.sqrt(1./np.nanmedian(all_weights[:,mask],axis=1))
+
+        # Add the weighted average uncertainties to the auto-rms uncertainties
+        all_weights = 1./(1./all_weights + auto[:,None]**2)
+
+        return all_tod, all_weights, auto, all_frequency
+        
     def run(self, d):
         """
         Expects a level2 file structure to be passed.
         """
-        tod_shape = d[f'{self.level2}/averaged_tod'].shape
 
-        scan_edges = d[f'{self.level2}/Statistics/scan_edges'][...]
-        nscans = scan_edges.shape[0]
+        feeds,feedidx,_ = self.getFeeds(d,'all')
+
+        tod_shape = d[f'{self.level2}/averaged_tod'].shape
+        nfeeds = 20
         nchannels = 8
         
-        self.all_tod       = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
-        self.all_weights   = np.zeros((tod_shape[0], nchannels, tod_shape[-1])) 
+        self.all_tod       = np.zeros((20, nchannels, tod_shape[-1])) 
+        self.all_weights   = np.zeros((20, nchannels, tod_shape[-1])) 
         self.all_frequency = np.zeros((nchannels)) 
-        frequency = d['level1/spectrometer/frequency'][...]
-        self.frequency = np.mean(np.reshape(frequency,(frequency.shape[0],frequency.shape[1]//16,16)) ,axis=-1).flatten()
-        feeds = d['level1/spectrometer/feeds'][...]
-        feedids = np.concatenate([np.arange(8).astype(int)+i*8 for i in range(20) if i+1 in feeds])
-        xfeed,yfeed = np.meshgrid(feedids,feedids)
-        self.correlation_matrix = np.zeros((nscans,20*8,20*8))
+        self.all_auto = np.zeros((20,nchannels)) 
+        self.all_mask = np.zeros((20,tod_shape[-1]))
+        self.all_cal_factors = np.zeros((20,4,64))
         # Read in data from each feed
-
-        for index, ifeed in enumerate(range(tod_shape[0])):
+        for ifeed,feed in enumerate(feeds):
             if feeds[ifeed] == 20:
                 continue
-            todin = d[f'{self.level2}/averaged_tod'][ifeed,:,:,:]
-            az = d['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,:]
-            el = d['level1/spectrometer/pixel_pointing/pixel_el'][ifeed,:]
+            feed_tod,feed_weights,mask = self.clean_tod(d,ifeed,feed)
 
-            # Statistics for this feed                        
-            medfilt_coefficient = d[f'{self.level2}/Statistics/filter_coefficients'][ifeed,...]
-            atmos = d[f'{self.level2}/Statistics/atmos'][ifeed,...]
-            atmos_coefficient = d[f'{self.level2}/Statistics/atmos_coefficients'][ifeed,...]
-            wnoise_auto = d[f'{self.level2}/Statistics/wnoise_auto'][ifeed,...]
-            fnoise_fits = d[f'{self.level2}/Statistics/fnoise_fits'][ifeed,...]
+            if self.astro_cal:
+                feed_tod,feed_weights,cal_factors  = self.calibrate_tod(d,feed_tod,feed_weights,ifeed,feed)
+            else:
+                cal_factors = 1
 
-            # then the data for each scan
-            last = 0
-            scan_samples = []
-            for iscan,(start,end) in enumerate(scan_edges):
-                scan_samples = np.arange(start,end,dtype=int)
-                median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{iscan:02d}'][ifeed,...]
-                N = int((end-start))
-                end = start+N
-                tod = todin[...,start:end]
+            self.all_tod[feed-1],self.all_weights[feed-1], self.all_auto[feed-1], self.all_frequency = self.average_tod(d,feed_tod,feed_weights,mask) 
+            self.all_mask[feed-1] = mask
+            self.all_cal_factors[feed-1] = cal_factors
 
-                # Subtract atmospheric fluctuations per channel
-                for iband in range(4):
-                    for ichannel in range(64):
-                        #if self.channelmask[ifeed,iband,ichannel] == False:
-                        amdl = Statistics.AtmosGroundModel(atmos[iband,iscan],az[start:end],el[start:end]) *\
-                               atmos_coefficient[iband,ichannel,iscan,0]
-                        tod[iband,ichannel,:] -= median_filter[iband,:N] * medfilt_coefficient[iband,ichannel,iscan,0]
-                        tod[iband,ichannel,:] -= amdl
-                        tod[iband,ichannel,:] -= np.nanmedian(tod[iband,ichannel,:])
-                
-                # Then average together the channels
-                wnoise = wnoise_auto[:,:,iscan,0]
-                fnoise = fnoise_fits[:,:,iscan,:]
-                fnoise_power = fnoise[:,:,0] * np.sqrt(fnoise[:,:,1]**fnoise[:,:,2])
-
-                simple_weights = 1./wnoise**2
-                noise_weights = 1./(wnoise**2 + fnoise_power**2)
-                noise_weights[(wnoise == 0) | np.isnan(noise_weights) | np.isinf(noise_weights)] = 0
-                simple_weights[(wnoise == 0) | np.isnan(simple_weights) | np.isinf(simple_weights)] = 0
-
-                #channels = (self.channelmask[ifeed].flatten() == False)
-                #channels = np.where((channels))[0]
-
-                tod    = np.reshape(tod,(tod.shape[0]*tod.shape[1], tod.shape[2]))
-                noise_weights = np.reshape(noise_weights,(noise_weights.shape[0]*noise_weights.shape[1]))
-                simple_weights = np.reshape(simple_weights,(simple_weights.shape[0]*simple_weights.shape[1]))
-                blanks = np.ones(tod.shape)
-                noise_weights  = blanks*noise_weights[:,None]
-                simple_weights = blanks*simple_weights[:,None]
-
-                simple_weights[np.isnan(tod)] = 0
-                noise_weights[np.isnan(tod)] = 0
-                tod[np.isnan(tod)] = 0
-
-                
-                for ichan, (flow,fhigh) in enumerate(zip(np.arange(8)+26,np.arange(8)+27)):
-                    sel = np.where(((self.frequency >= flow) & (self.frequency < fhigh)))[0]
-                    top = np.sum(tod[sel,:]*noise_weights[sel,:],axis=0)
-                    bot = np.sum(blanks[sel,:]*noise_weights[sel,:],axis=0)
-                    self.all_tod[index,ichan,start:end] = top/bot
-                    self.all_weights[index,ichan,start:end] = bot
-                    self.all_frequency[ichan] = (fhigh+flow)/2.
-                self.correlation_matrix[iscan,xfeed.flatten(),yfeed.flatten()]  = stats.correlation(self.all_tod[...,scan_samples]).flatten()
-
-                
+        
     def write(self,data):
         """
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
@@ -286,10 +322,14 @@ class CreateLevel3(BaseClasses.DataStructure):
                 self.logger(f'{fname}:{self.name}: Warning, couldnt set the file permissions.')
 
         # Store datasets in root
-        dnames = ['tod','weights','cal_factors','frequency']
-        dsets = [self.all_tod, self.all_weights,self.cal_factors, self.all_frequency]
+        data_out = {'tod':self.all_tod,
+                    'weights':self.all_weights,
+                    'mask':self.all_mask,
+                    'cal_factors':self.all_cal_factors,
+                    'frequency':self.all_frequency,
+                    'auto_rms':self.all_auto}
 
-        for (dname, dset) in zip(dnames, dsets):
+        for dname, dset in data_out.items():
             if dname in output:
                 del output[dname]
             output.create_dataset(dname,  data=dset)
@@ -303,10 +343,28 @@ class CreateLevel3(BaseClasses.DataStructure):
             del data[self.level3]
         data[self.level3] = h5py.ExternalLink(self.outfile,'/')
 
-        stats = data['level2/Statistics']
-        if 'correlation_matrix' in stats:
-            del stats['correlation_matrix']
-        if hasattr(self,'correlation_matrix'):
-            dset = stats.create_dataset('correlation_matrix',  data= self.correlation_matrix)
-            dset.attrs['level3'] = f'{self.level3}'
-            dset.attrs['BW'] = 1
+    def write_database(self,data):
+        """
+        Write out the statistics to a common statistics database for easy access
+        """
+        
+        if not os.path.exists(self.database):
+            output = FileTools.safe_hdf5_open(self.database,'w')
+        else:
+            output = FileTools.safe_hdf5_open(self.database,'a')
+
+        obsid = self.getObsID(data)
+        if obsid in output:
+            grp = output[obsid]
+        else:
+            grp = output.create_group(obsid)
+
+        grp.attrs['level3_filename'] = self.outfile
+
+        if self.name in grp:
+            del grp[self.name]
+        lvl3 = grp.create_group(self.name)
+
+        lvl3.attrs['calibrator_obsid'] = self.nearest_calibrator
+        lvl3.attrs['calibrator_source'] = self.cal_source
+        output.close()

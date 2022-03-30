@@ -45,6 +45,23 @@ class DataStructure(object):
     def __str__(self):
         return "Unknown COMAP Reduce Module"
 
+    @staticmethod
+    def getOutputDir(obsid,directories,starts,ends):
+        """
+        Check which output directory to use
+        """
+
+        for i,(start,end) in enumerate(zip(starts, ends)):
+            if isinstance(end,type(None)):
+                end = np.inf
+            if (int(obsid) >= start) & (int(obsid) < end):
+                output_dir = directories[i]
+
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        return output_dir
+
     def featureBits(self,features, target, trim=1000):
         """
         Return list of features encoded into feature bit

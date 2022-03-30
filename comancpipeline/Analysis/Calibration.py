@@ -5,8 +5,7 @@ import comancpipeline
 from comancpipeline.Analysis import BaseClasses
 from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
-from comancpipeline.data import Data
-from comancpipeline.Tools import Coordinates, Types, stats
+from comancpipeline.Tools import Coordinates, Types, stats, FileTools
 from os import listdir, getcwd
 from os.path import isfile, join
 import grp
@@ -59,92 +58,22 @@ def get_vane_flag(data):
 
     return justVanes
 
-class BandAverage(BaseClasses.DataStructure):
-    """
-    Average data in the level 2 structure in to bands. Calculate channel masks.
-    """
-    def __init__(self,*args,**kwargs):
-        """
-        """
-        self.feeds_select = 'all'
-        self.level2 = 'level2'
-
-    def run(self, data):
-        """
-        Expects a level2 file structure to be passed.
-        """
-        if self.feeds_select == 'all':
-            feeds = data['level1/spectrometer/feeds'][:]
-        else:
-            if (not isinstance(self.feeds_select,list)) & (not isinstance(self.feeds_select,np.ndarray)) :
-                self.feeds = [int(self.feeds_select)]
-                feeds = self.feeds
-            else:
-                feeds = [int(f) for f in self.feeds_select]
-        self.feeds = feeds
-
-        vane = data[f'{self.level2}/Vane']
-        statistics = data[f'{self.level2}/Statistics']
-        frequency  = data[f'{self.level2}/frequency'][...]
-        scan_edges = data[f'{self.level2}/Statistics/scan_edges'][...]
-        nBands,nChans = frequency.shape
-        for iscan,(start,end) in enumerate(scan_edges):
-            for ifeed, feed in enumerate(self.feeds):
-                if feed == 20:
-                    continue
-                for iband in range(nBands):
-
-                    coeffs = statistics['filter_coefficients'][ifeed,iband,:,iscan,0]
-                    fnoise = statistics['fnoise_fits'][ifeed,iband,:,iscan,:]
-                    rms = statistics['wnoise_auto'][ifeed,iband,:,iscan,0]
-                    tsys= self.average_vane(vane['Tsys'][0,ifeed,iband,...])
-                    rms_red = rms*np.sqrt((1./fnoise[:,0])**fnoise[:,1])
-
-                    #pyplot.plot(coeffs,rms_red,'.')
-                    p=pyplot.plot(frequency[iband],rms*np.sqrt(0.05*16./1024.*1e9)-tsys)
-                    #pyplot.plot(frequency[iband],tsys,color=p[0].get_color(),ls='-.')
-                pyplot.show()
-
-    def average_vane(self,tsys,nbins=64):
-
-        return np.mean(np.reshape(tsys,(64,tsys.size//64)),axis=1)
-
-    def __call__(self,data):
-        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
-
-
-        # Need to check that there are noise stats:
-        if not 'level2/Statistics' in data:
-            return data
-
-        # Want to ensure the data file is read/write
-        #if not data.mode == 'r+':
-        #    filename = data.filename
-        #    data.close()
-        #    data = h5py.File(filename,'r+')
-
-        self.run(data)
-        #self.write(data)
-
-        return data
-
-class SetLevel1File(BaseClasses.DataStructure):
-    """
-    Returns the pipeline from a level2 file to the level1 file.
-
-    Useful if the next pipeline function expects a level1 file.
-    """
-    pass
 
 class CreateLevel2Cont(BaseClasses.DataStructure):
     """
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self, feeds='all', output_dir='', nworkers= 1,
+    def __init__(self, feeds='all', 
+                 output_obsid_starts = [0],
+                 output_obsid_ends   = [None],
+                 output_dirs = ['.'],
+                 nworkers= 1,
                  database=None,
-                 average_width=512,calvanedir='AncillaryData/CalVanes',
-                 cal_mode = 'Vane', cal_prefix='',level2='level2',
+                 average_width=512,
+                 calvanedir='AncillaryData/CalVanes',
+                 cal_mode = 'Vane', 
+                 cal_prefix='',level2='level2',
                  data_dirs=None,
                  set_permissions=True,
                  permissions_group='comap',
@@ -158,14 +87,16 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.name = 'CreateLevel2Cont'
         self.feeds_select = feeds
 
-        self.output_dir = output_dir
-        if isinstance(data_dirs,type(None)):
-            self.data_dirs = [self.output_dir]
+        # We will be writing level 2 data to multiple drives,
+        #  drive to write to will be set by the obsid of the data
+        self.output_dirs = output_dirs
+        self.output_obsid_starts = output_obsid_starts
+        self.output_obsid_ends   = output_obsid_ends
+
+        if isinstance(data_dirs,list):
+            self.data_dirs = data_dirs
         else:
-            if isinstance(data_dirs,list):
-                self.data_dirs = data_dirs
-            else:
-                self.data_dirs = [data_dirs]
+            self.data_dirs = [data_dirs]
 
         self.nworkers = int(nworkers)
         self.average_width = int(average_width)
@@ -198,12 +129,6 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         # self.feeddict : map between feed ID and feed array index in lvl1
         self.feeds, self.feed_index, self.feed_dict = self.getFeeds(data,self.feeds_select)
 
-
-        # Setup output file here, we will have to write in sections.
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
-
-
         # Opening file here to write out data bit by bit
         self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['spectrometer/tod'].shape
         avg_tod_shape = (self.i_nFeeds, self.i_nBands, self.i_nChannels//self.average_width, self.i_nSamples)
@@ -230,6 +155,7 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
 
         return True
 
+
     def __call__(self,data):
         """
         Modify baseclass __call__ to change file from the level1 file to the level2 file.
@@ -239,8 +165,15 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
 
+        self.obsid = self.getObsID(data)
         self.comment = self.getComment(data)
         prefix = data.filename.split('/')[-1].split('.hd5')[0]
+
+        self.output_dir = self.getOutputDir(self.obsid,
+                                            self.output_dirs,
+                                            self.output_obsid_starts,
+                                            self.output_obsid_ends)
+
 
         data_dir_search = np.where([os.path.exists('{}/{}_Level2Cont.hd5'.format(data_dir,prefix)) for data_dir in self.data_dirs])[0]
         if len(data_dir_search) > 0:
@@ -303,10 +236,6 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
             gain = np.ones((2, nHorns, nSBs, nChans*width))
             tsys = np.ones((2, nHorns, nSBs, nChans*width))
 
-
-        # Future: Astro Calibration
-        # if self.cal_mode.upper() == 'ASTRO':
-        # gain = self.getcalibration_astro(data)
         for ifeed, feed in enumerate(tqdm(self.feeds,desc=self.name)):
             feed_array_index = self.feed_dict[feed]
             d = data['spectrometer/tod'][feed_array_index,...] 
@@ -407,12 +336,11 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         else:
             lvl2 = grp.create_group('level2')
         
-        lvl2.attrs['level1_filename'] = data['level1'].file.filename
-        lvl2.attrs['level2_filename'] = data.filename
+        grp.attrs['level1_filename'] = data['level1'].file.filename
+        grp.attrs['level2_filename'] = data.filename
 
-
-        for (dname, dset) in data['level1/comap'].attrs.items():
-            if dname in stats:
+        for dname, dset in data['level1/comap'].attrs.items():
+            if dname in lvl2:
                 del lvl2.attrs[dname]
             lvl2.attrs[dname] = dset
         output.close()
@@ -470,8 +398,13 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
     """
     def __init__(self, output_dir='AmbientLoads/',
                  do_plots=False,
+                 output_obsid_starts = [0],
+                 output_obsid_ends   = [None],
+                 output_dirs = ['.'],
+                 database   = None,
                  elLim=5, feeds = 'all',
-                 minSamples=200, tCold=2.73, 
+                 minSamples=200, 
+                 tCold=2.73, 
                  set_permissions=True,
                  permissions_group='comap',
                  tHotOffset=273.15,
@@ -494,6 +427,11 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
 
+        self.database = database
+        self.output_obsid_starts = output_obsid_starts
+        self.output_obsid_ends   = output_obsid_ends
+        self.output_dirs = output_dirs
+
     def __str__(self):
         return "Calculating Tsys and Gain from Ambient Load observation."
 
@@ -515,7 +453,13 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
                 return data
             vane.close()
 
-        comment = self.getComment(data)
+        self.obsid = self.getObsID(data)
+        comment    = self.getComment(data)
+
+        self.output_dir = self.getOutputDir(self.obsid,
+                                            self.output_dirs,
+                                            self.output_obsid_starts,
+                                            self.output_obsid_ends)
 
         # Ignore Sky dips
         if 'Sky nod' in comment:
@@ -526,6 +470,8 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing vane calibration file: {outfile}')
         self.write(data)
+        if not isinstance(self.database,type(None)):
+            self.write_database(data)
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
@@ -656,6 +602,7 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
 
         # Keep TOD as a file object to avoid reading it all in
         tod   = data['spectrometer/tod']
+        el    = data['spectrometer/pixel_pointing/pixel_el'][0,:]
         btod  = data['spectrometer/band_average']
         nHorns, nSBs, nChan, nSamps = tod.shape
 
@@ -680,6 +627,10 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         self.Gain = np.zeros((nVanes, nHorns, nSBs, nChan))
         self.RMS  = np.zeros((nVanes, nHorns, nSBs, nChan))
         self.Spikes = np.zeros((nVanes, nHorns, nSBs, nChan),dtype=bool)
+
+        self.elevations = np.zeros((nVanes))
+        for vane_event, (start,end) in enumerate(vanePositions):
+            self.elevations[vane_event] = np.nanmean(el[start:end])
 
         # Now loop over each event:
         for horn, feedid in enumerate(tqdm(self.feeds,desc=self.name)):
@@ -793,6 +744,35 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
                         
         output.close()
 
+    def write_database(self,data):
+        """
+        Write the fits to the general database
+        """
+
+        if not os.path.exists(self.database):
+            output = FileTools.safe_hdf5_open(self.database,'w')
+        else:
+            output = FileTools.safe_hdf5_open(self.database,'a')
+
+        obsid = self.getObsID(data)
+        if obsid in output:
+            grp = output[obsid]
+        else:
+            grp = output.create_group(obsid)
+
+        if 'Vane' in grp:
+            vane = grp['Vane']
+        else:
+            vane = grp.create_group('Vane')
+
+        dnames = ['Tsys','Gain','VaneEdges','Spikes','Elevation']
+        dsets  = [self.Tsys, self.Gain, self.vane_samples,self.Spikes,self.elevations]
+        for (dname, dset) in zip(dnames, dsets):
+            if dname in vane:
+                del vane[dname]
+            vane.create_dataset(dname,  data=dset)
+
+        output.close()
 
 
 class CreateLevel2RRL(CreateLevel2Cont):
@@ -801,8 +781,13 @@ class CreateLevel2RRL(CreateLevel2Cont):
     """
 
     def __init__(self, feeds='all', output_dir='', nworkers= 1,
-                 average_width=512,calvanedir='AncillaryData/CalVanes',
-                 cal_mode = 'Vane', cal_prefix='',level2='level2rrl',cal_source='taua',
+                 database   = None,
+                 average_width=512,
+                 calvanedir='AncillaryData/CalVanes',
+                 cal_mode = 'Vane', 
+                 cal_prefix='',
+                 level2='level2rrl',
+                 cal_source='taua',
                  data_dirs = None,
                  set_permissions=True,
                  permissions_group='comap',
