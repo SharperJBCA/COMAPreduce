@@ -1,11 +1,12 @@
 import h5py
-#from mpi4py import MPI
+from mpi4py import MPI
 import numpy as np
 import configparser
 import time
 from astropy.time import Time
 from datetime import datetime
-#comm = MPI.COMM_WORLD
+comm = MPI.COMM_WORLD
+import os
 
 class DataStructure(object):
 
@@ -58,8 +59,10 @@ class DataStructure(object):
                 output_dir = directories[i]
 
         if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
+            try:
+                os.makedirs(output_dir)
+            except FileExistsError: # To catch race conditions
+                pass
         return output_dir
 
     def featureBits(self,features, target, trim=1000):

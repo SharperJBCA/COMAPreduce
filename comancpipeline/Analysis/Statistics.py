@@ -286,6 +286,7 @@ class FnoiseStats(BaseClasses.DataStructure):
         # 2) The feature bits to select just the observing period
         # 3) Elevation to remove the atmospheric component
         tod = data[f'{self.level2}/averaged_tod'][...]
+        tod_rms = data[f'{self.level2}/averaged_rms'][...]
         mjd = data['level1/spectrometer/MJD'][...]
         az  = data['level1/spectrometer/pixel_pointing/pixel_az'][...]
         el  = data['level1/spectrometer/pixel_pointing/pixel_el'][...]
@@ -320,9 +321,10 @@ class FnoiseStats(BaseClasses.DataStructure):
             local_filter_tods = np.zeros((nFeeds,nBands, end-start))
             for ifeed in range(nFeeds):
                 if feeds[ifeed] == 20:
-                    pbar.update(1)
+                    pbar.update(nBands)
                     continue
                 for iband in range(nBands):
+
                     band_average = np.nanmean(tod[ifeed,iband,3:-3,start:end],axis=0)
 
                     select = self.getSourceMask(ra[ifeed,start:end],dec[ifeed,start:end],mjd[start:end])
@@ -337,8 +339,6 @@ class FnoiseStats(BaseClasses.DataStructure):
                     
                     self.atmos[ifeed,iband,iscan,:] = atmos
                     self.atmos_errs[ifeed,iband,iscan,:] = atmos_errs
-
-                    #ps, nu, f_fits, w_auto = self.FitPowerSpectrum(band_average-atmos_filter-local_filter_tods[ifeed,iband,:])
 
                     for ichan in range(nChannels):
                         if np.nansum(tod[ifeed, iband, ichan,start:end]) == 0:
@@ -360,12 +360,11 @@ class FnoiseStats(BaseClasses.DataStructure):
                             Nfill = int(np.sum(~select))
                             resid[~select] = np.random.normal(size=Nfill,scale=w_auto)
                             
-                        ps, nu, f_fits, w_auto = self.FitPowerSpectrum(resid)
+                        ps, nu, f_fits, w_auto = self.FitPowerSpectrum(resid,tod_rms[ifeed,iband,ichan])
 
                         self.powerspectra[ifeed,iband,ichan,iscan,:] = ps
                         self.freqspectra[ifeed,iband,ichan,iscan,:]  = nu
-                        self.fnoise_fits[ifeed,iband,ichan,iscan,0]  = w_auto
-                        self.fnoise_fits[ifeed,iband,ichan,iscan,1:] = f_fits
+                        self.fnoise_fits[ifeed,iband,ichan,iscan,:] = f_fits
 
                     pbar.update(1)
 
@@ -467,15 +466,20 @@ class FnoiseStats(BaseClasses.DataStructure):
 
         return freqs/counts, signal/counts, counts
 
-    def Model(self, P, x, rms):
-        return rms**2 * (1 + (x/10**P[0])**P[1])
+    def Model(self, P, x, rms,ref_frequency):
+        return 10**P[0] * (x/ref_frequency)**P[1] + rms**2 #10**P[2]#**2
+    def Model_rms(self, P, x, rms,ref_frequency):
+        return 10**P[0] * (x/ref_frequency)**P[1] + 10**P[2]
 
-    def Error(self, P, x, y,e, rms):
+    def KneeFrequency(self,P,white_noise,ref_frequency):
+        return ref_frequency * (white_noise/10**P[0])**(1/P[1])
+
+    def Error(self, P, x, y,e, rms,ref_frequency,model):
         error = np.abs(y/e)
-        chi = (np.log(y) - np.log(self.Model(P,x,rms)))/error
+        chi = (np.log(y) - np.log(model(P,x,rms,ref_frequency)))/error
         return np.sum(chi**2)
 
-    def FitPowerSpectrum(self, tod):
+    def FitPowerSpectrum(self, tod, tsys_rms):
         """
         Calculate the power spectrum of the data, fits a 1/f noise curve, returns parameters
         """
@@ -485,15 +489,32 @@ class FnoiseStats(BaseClasses.DataStructure):
         # Only select non-nan values
         # You may want to increase min counts,
         # as the power spectrum is non-gaussian for small counts
-        good = (counts > 50) & ( (nu < 0.03) | (nu > 0.05))
+        good = (counts > 50) #& ( (nu < 0.03) | (nu > 0.05)) & np.isfinite(ps)
 
-        args = (nu[good], ps[good],auto_rms/np.sqrt(counts[good]), auto_rms)
-        bounds =  [[None,None],[-3,0]]
-        P0 = [0,-1]
+        ref_frequency = 2. # Hz
+        ps_nonan = ps[np.isfinite(ps)]
+        nu_nonan = nu[np.isfinite(ps)]
+        ref = np.argmin((nu_nonan - ref_frequency)**2)
+        args = (nu[good], ps[good],auto_rms/np.sqrt(counts[good]), auto_rms, ref_frequency,self.Model_rms)
+        bounds =  [[None,None],[-3,0],[None,None]]
+        P0 = [np.log10(ps_nonan[ref]),-1,np.log10(auto_rms**2)]
+
+        # We will do an initial guess
         P1 = minimize(self.Error, P0, args= args, bounds = bounds)
+        knee = self.KneeFrequency(P1.x, 10**P1.x[2], ref_frequency)
+
+        
+        fits = [10**P1.x[0], P1.x[1], 10**P1.x[2]]
+        # Check if we need to use white noise
+        if knee < 1:
+            args2 = (nu[good], ps[good],auto_rms/np.sqrt(counts[good]), tsys_rms, ref_frequency,self.Model)
+            bounds =  [[None,None],[-3,0]]
+            P0 = [np.log10(ps_nonan[ref]),-1]        
+            P2 = minimize(self.Error, P0, args= args2, bounds = bounds)
+            fits = [10**P2.x[0], P2.x[1], tsys_rms**2]
 
 
-        return ps, nu, P1.x, auto_rms
+        return ps, nu, fits, auto_rms
 
 
 

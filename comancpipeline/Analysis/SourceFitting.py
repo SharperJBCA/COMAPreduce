@@ -296,7 +296,9 @@ class FitSource(BaseClasses.DataStructure):
 
     def __init__(self, feeds='all',
                  database = None,
-                 output_dir=None,
+                 output_obsid_starts = [0],
+                 output_obsid_ends   = [None],
+                 output_dirs = ['.'],
                  lon=Coordinates.comap_longitude,
                  lat=Coordinates.comap_latitude,
                  prefix='AstroCal',
@@ -327,9 +329,10 @@ class FitSource(BaseClasses.DataStructure):
 
 
         self.database   = database
-        self.output_dir = output_dir
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
+        self.output_obsid_starts = output_obsid_starts
+        self.output_obsid_ends   = output_obsid_ends
+        self.output_dirs = output_dirs
+
         self.make_figures = make_figures
         self.figure_dir=figure_dir
         if not os.path.exists(self.figure_dir):
@@ -383,8 +386,14 @@ class FitSource(BaseClasses.DataStructure):
         fdir  = data.filename.split(fname)[0]
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
-
+        self.obsid = self.getObsID(data)
         comment = self.getComment(data)
+        self.output_dir = self.getOutputDir(self.obsid,
+                                            self.output_dirs,
+                                            self.output_obsid_starts,
+                                            self.output_obsid_ends)
+
+
         self.source = self.getSource(data)
 
         if self.checkAllowedSources(data, self.source, self.allowed_sources):

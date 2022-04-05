@@ -41,7 +41,7 @@ def subtract_filters(tod,az,el,filter_tod, filter_coefficients, atmos, atmos_coe
 class CreateLevel3(BaseClasses.DataStructure):
     def __init__(self,
                  level2='level2',
-                 level3='level3',
+                 level3='levesl3',
                  database=None,
                  output_dir = None,
                  cal_source='taua',
