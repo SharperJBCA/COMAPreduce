@@ -61,7 +61,7 @@ class DataStructure(object):
         if not os.path.exists(output_dir):
             try:
                 os.makedirs(output_dir)
-            except FileExistsError: # To catch race conditions
+            except (FileExistsError,PermissionError): # To catch race conditions
                 pass
         return output_dir
 

@@ -28,6 +28,25 @@ from tqdm import tqdm
 
 __level3_version__='v2'
 
+channel_mask = {1:lambda x: ((x >= 26) & (x <= 26.4)) | \
+                    ((x >= 26.8) & (x <= 27)) | \
+                    ((x >=27.25) & (x <= 27.38)) | \
+                    ((x >=27.45) & (x <=27.55)) | \
+                    ((x >=27.625)& (x <=27.725)) | \
+                    ((x >=28.10) & (x <=28.25)) | \
+                    ((x >=28.60) & (x <=28.72)) | \
+                    ((x >=28.85) & (x <=29.00)) | \
+                    ((x >=29.15) & (x <=29.25)) | \
+                    ((x >=29.70) & (x <=30.05)) | \
+                    ((x >=30.125)& (x <=30.25)) | \
+                    ((x >=30.72) & (x <=30.82)) | \
+                    ((x >=31.06) & (x <=31.16)) | \
+                    ((x >=31.50) & (x <=31.63)) | \
+                    ((x >=31.96) & (x <=32.04)) | \
+                    ((x >=32.97) & (x <=33.04)) | \
+                    ((x >=33.20) & (x <=33.40)) | \
+                    ((x >=33.80) & (x <=34.00))}
+
 
 def subtract_filters(tod,az,el,filter_tod, filter_coefficients, atmos, atmos_coefficient):
     """
@@ -41,7 +60,7 @@ def subtract_filters(tod,az,el,filter_tod, filter_coefficients, atmos, atmos_coe
 class CreateLevel3(BaseClasses.DataStructure):
     def __init__(self,
                  level2='level2',
-                 level3='levesl3',
+                 level3='level3',
                  database=None,
                  output_dir = None,
                  cal_source='taua',
@@ -142,15 +161,17 @@ class CreateLevel3(BaseClasses.DataStructure):
         Get all of the gain factors associated with this calibration source
         """
 
-        db = h5py.File(self.database,'r')
+        db = FileTools.safe_hdf5_open(self.database,'r')
         obsids = []
         for obsid, grp in db.items():
-            if not 'FitSource' in grp:
+            if not 'Flagged' in grp.attrs:
                 continue
             if grp.attrs['Flagged']:
                 continue
-            if grp['FitSource'].attrs['source'].lower() == self.cal_source.lower():
-                obsids += [int(obsid)]
+            if not 'TauA' in grp['level2'].attrs['source']:
+                continue
+
+            obsids += [int(obsid)]
 
         obsids = np.array(obsids)
         idx = np.argmin(np.abs(obsids-this_obsid))
@@ -181,6 +202,13 @@ class CreateLevel3(BaseClasses.DataStructure):
         bad = ~np.isfinite(tod) | ~np.isfinite(weights)
         tod[bad] = 0
         weights[bad] = 0
+
+        if feed in channel_mask:
+            frequency = data['level2/averaged_frequency'][...]
+            cmask = channel_mask[feed](frequency)
+            tod[~cmask] = 0
+            weights[~cmask]=0
+
         return tod, weights, cal_factors[0]
 
     def clean_tod(self,d,ifeed,feed):
@@ -273,6 +301,8 @@ class CreateLevel3(BaseClasses.DataStructure):
         feeds,feedidx,_ = self.getFeeds(d,'all')
 
         tod_shape = d[f'{self.level2}/averaged_tod'].shape
+        
+        scanedges = d[f'{self.level2}/Statistics/scan_edges'][...]
         nfeeds = 20
         nchannels = 8
         

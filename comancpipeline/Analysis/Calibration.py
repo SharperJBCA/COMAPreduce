@@ -364,7 +364,11 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         Write out the averaged TOD to a Level2 continuum file with an external link to the original level 1 data
         """
         if os.path.exists(self.outfilename):
-            self.outfile = h5py.File(self.outfilename,'a')
+            try:
+                self.outfile = h5py.File(self.outfilename,'a')
+            except OSError: # sometimes files can be come corrupted, in which case start fresh
+                os.remove(self.outfilename)
+                self.outfile = h5py.File(self.outfilename,'w')
         else:
             self.outfile = h5py.File(self.outfilename,'w')
 
@@ -461,6 +465,13 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         fname = data.filename.split('/')[-1]
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+        self.obsid = self.getObsID(data)
+
+        self.output_dir = self.getOutputDir(self.obsid,
+                                            self.output_dirs,
+                                            self.output_obsid_starts,
+                                            self.output_obsid_ends)
+        self.output_dir = '{}/{}'.format(self.output_dir, self.calvanedir)
         outfile = '{}/{}_{}'.format(self.output_dir,self.vaneprefix,fname)
 
         if os.path.exists(outfile) & (not self.overwrite):
@@ -969,7 +980,7 @@ class CreateLevel2RRL(CreateLevel2Cont):
             else:
                 cname, gain, tsys,spikes = self.getcalibration_obs(data)
         except ValueError:
-            cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
+            cname = '{}/{}_{}'.format(self.calvanepath,self.calvane_prefix,fname)
             gain = np.ones((2, nHorns, nSBs, nChans))
             tsys = np.ones((2, nHorns, nSBs, nChans))
 
@@ -1223,7 +1234,7 @@ class CompareTsys(BaseClasses.DataStructure):
         self.calvanepath = '{}/{}'.format(self.output_dir, self.calvanedir)
 
 
-        self.outfilename = '{}/{}_{}'.format(self.calvanedir,self.vaneprefix,fname)
+        self.outfilename = '{}/{}_{}'.format(self.calvanepath,self.vaneprefix,fname)
         
 
         # Skip files that are already calibrated:        
@@ -1257,7 +1268,7 @@ class CompareTsys(BaseClasses.DataStructure):
         Open vane calibration file.
         """
         fname = data.filename.split('/')[-1]
-        cname = '{}/{}_{}'.format(self.calvanedir,self.calvane_prefix,fname)
+        cname = '{}/{}_{}'.format(self.calvanepath,self.calvane_prefix,fname)
         gain_file = h5py.File(cname,'r')
         gain = gain_file['Gain'][...] # (event, horn, sideband, frequency)
         tsys = gain_file['Tsys'][...] # (event, horn, sideband, frequency) - use for weights

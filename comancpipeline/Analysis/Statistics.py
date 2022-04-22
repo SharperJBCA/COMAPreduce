@@ -472,7 +472,10 @@ class FnoiseStats(BaseClasses.DataStructure):
         return 10**P[0] * (x/ref_frequency)**P[1] + 10**P[2]
 
     def KneeFrequency(self,P,white_noise,ref_frequency):
-        return ref_frequency * (white_noise/10**P[0])**(1/P[1])
+        if P[1] != 0:
+            return ref_frequency * (white_noise/10**P[0])**(1/P[1])
+        else:
+            return np.inf
 
     def Error(self, P, x, y,e, rms,ref_frequency,model):
         error = np.abs(y/e)
@@ -494,7 +497,10 @@ class FnoiseStats(BaseClasses.DataStructure):
         ref_frequency = 2. # Hz
         ps_nonan = ps[np.isfinite(ps)]
         nu_nonan = nu[np.isfinite(ps)]
-        ref = np.argmin((nu_nonan - ref_frequency)**2)
+        try: # Catch is all the data is bad
+            ref = np.argmin((nu_nonan - ref_frequency)**2) 
+        except ValueError:
+            return ps, nu, [0,0,0], auto_rms
         args = (nu[good], ps[good],auto_rms/np.sqrt(counts[good]), auto_rms, ref_frequency,self.Model_rms)
         bounds =  [[None,None],[-3,0],[None,None]]
         P0 = [np.log10(ps_nonan[ref]),-1,np.log10(auto_rms**2)]

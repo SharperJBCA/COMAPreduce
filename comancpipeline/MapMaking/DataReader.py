@@ -8,6 +8,7 @@ from scipy import linalg as la
 import healpy as hp
 from comancpipeline.Tools import  binFuncs, stats,Coordinates
 from comancpipeline.data import Data
+from comancpipeline.Tools.median_filter import medfilt
 
 from comancpipeline.MapMaking import MapTypes, OffsetTypes
 
@@ -33,10 +34,13 @@ class ReadDataLevel2:
                  keeptod=False,
                  subtract_sky=False,
                  feed_weights=None,
+                 medfilt_stepsize=500,
+                 medfilt_name='none',
                  map_info={},
                  **kwargs):
         
-        
+        self.medfilt_stepsize=medfilt_stepsize
+        self.medfilt_name=medfilt_name
         # -- constants -- a lot of these are COMAP specific
         self.ifeature = ifeature
         self.chunks = []
@@ -92,6 +96,7 @@ class ReadDataLevel2:
 
         # Store the Time ordered data as required
         self.pixels = np.zeros(self.Nsamples,dtype=int)
+        self.edge_mask = np.zeros(self.Nsamples,dtype=bool)
         self.all_weights = np.zeros(self.Nsamples)
 
         if self.keeptod:
@@ -187,6 +192,7 @@ class ReadDataLevel2:
             
             tod_in = dset[ifeed,self.iband,:] 
             wei_in = wei_dset[ifeed,self.iband,:]
+
             flags_in = flags[ifeed,:]
             samples = np.arange(tod_in.size)
             if not isinstance(self.feed_weights,type(None)):
@@ -195,11 +201,9 @@ class ReadDataLevel2:
 
 
             if self.flag_spikes:
-                peaks, properties = find_peaks(np.abs(tod_in),prominence=1,width=[0,150])
-                widths = (properties['right_ips']-properties['left_ips'])*2.
-
-                for peak,width in zip(peaks,widths):
-                    wei_in[np.abs(samples-peak) < width] = 0
+                spikemask = d['level2/Statistics/Spikes/mask'][...]
+                wei_in[~spikemask] = 0
+                tod_in[~spikemask] = 0
 
             wei_in[flags_in > 0.5] = 0
 
@@ -208,11 +212,31 @@ class ReadDataLevel2:
             for iscan,(start,end) in enumerate(scan_edges):
                 N = int((end-start)//self.offset_length * self.offset_length)
                 end = start+N
+
+                if self.medfilt_name != 'none':
+                    zfilter = self.median_filter(tod_in[start:end])
+                    #pyplot.plot(tod_in[start:end])
+                    tod_in[start:end] -= zfilter
+                    #pyplot.plot(tod_in[start:end])
+                    #pyplot.plot(zfilter)
+                    #pyplot.show()
                 tod[index,last:last+N]  = tod_in[start:end]
                 weights[index,last:last+N] = wei_in[start:end]
                 last += N
 
         return tod, weights
+
+    def median_filter(self, tod):
+        """
+        """
+        if tod.size > 2*self.medfilt_stepsize:
+            z = np.concatenate((tod[::-1],tod,tod[::-1]))
+            filter_tod = np.array(medfilt.medfilt(z.astype(np.float64),np.int32(self.medfilt_stepsize)))[tod.size:2*tod.size]
+        else:
+            filter_tod = np.ones(tod.size)*np.nanmedian(tod)
+
+        return filter_tod[:tod.size]
+
 
     def readPSDs(self, i, filename):
         """
@@ -258,6 +282,10 @@ class ReadDataLevel2:
         # We store all the pointing information
         x  = d['level1/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
         y  = d['level1/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
+        az  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
+        el  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
+        tod= d['level3/tod'][0,self.iband,:]
+        dt = 1./50.
         #x  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
         #y  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
         #mjd  = d['level1/spectrometer/MJD'][:]
@@ -268,12 +296,21 @@ class ReadDataLevel2:
 
         scan_edges = d['level2/Statistics/scan_edges'][...]
         pixels = np.zeros((x.shape[0], self.datasizes[i]))
+        speed_mask = np.zeros((x.shape[0], self.datasizes[i]),dtype=bool)
         last = 0
+
         for iscan, (start,end) in enumerate(scan_edges):
             N = int((end-start)//self.offset_length * self.offset_length)
             end = start+N
             xc = x[:,start:end]
             yc = y[:,start:end]
+            azc= az[:,start:end]
+            elc= el[:,start:end]
+            x_veloc = np.gradient(azc[0],dt)*np.cos(np.nanmean(elc)*np.pi/180.)
+            y_veloc = np.gradient(elc[0],dt)
+            veloc = np.sqrt(x_veloc**2 + y_veloc**2)
+            
+            speed_mask[:,last:last+N] = ( np.abs(veloc) > 0.45 ) | (np.abs(veloc) < 0.1) # deg/s
             yshape = yc.shape
             # convert to Galactic
             if 'GLON' in self.naive.wcs.wcs.ctype[0]:
@@ -286,6 +323,7 @@ class ReadDataLevel2:
 
 
         self.pixels[self.chunks[i][0]:self.chunks[i][1]] = pixels.flatten()
+        self.edge_mask[self.chunks[i][0]:self.chunks[i][1]] = speed_mask.flatten()
         d.close()
 
     def readData(self, i, filename):
@@ -317,8 +355,8 @@ class ReadDataLevel2:
             tod[offpix_chunk == bad_offset] = 0
             weights[offpix_chunk == bad_offset] = 0
 
+        weights[self.edge_mask[self.chunks[i][0]:self.chunks[i][1]]] = 0 # mask out turn arounds
         # Store TOD
-        print(self.keeptod)
         if self.keeptod:
             self.all_tod[self.chunks[i][0]:self.chunks[i][1]] = tod*1.
         self.all_weights[self.chunks[i][0]:self.chunks[i][1]] = weights
@@ -384,6 +422,7 @@ class ReadDataLevel2_MADAM:
 
         # Store the Time ordered data as required
         self.pixels = np.zeros(self.Nsamples,dtype=int)
+        self.edge_mask = np.zeros(self.Nsamples,dtype=bool)
         self.all_weights = np.zeros(self.Nsamples)
         if self.keeptod:
             self.all_tod = np.zeros(self.Nsamples)
