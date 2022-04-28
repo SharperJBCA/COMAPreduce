@@ -17,7 +17,7 @@ import pandas as pd
 #from mpi4py import MPI
 import os
 #comm = MPI.COMM_WORLD
-from scipy.optimize import minimize
+from scipy.optimize import minimize 
 from scipy import linalg
 from tqdm import tqdm
 
@@ -50,10 +50,7 @@ class RepointEdges(BaseClasses.DataStructure):
 
     def __init__(self, **kwargs):
 
-        self.max_el_current_fraction = 0.7
-        self.min_sample_distance = 10
-        self.min_scan_length = 5000 # samples
-        self.offset_length = 50
+        self.scan_status_code = 1
         for item, value in kwargs.items():
             self.__setattr__(item,value)
 
@@ -85,61 +82,15 @@ class RepointEdges(BaseClasses.DataStructure):
         - Iteratively finding the best current fraction may also be needed
         """
         features = self.getFeatures(d) 
-        uf, counts = np.unique(features,return_counts=True) # select most common feature
-        ifeature = np.floor(np.log10(uf[np.argmax(counts)])/np.log10(2))
-        selectFeature = self.featureBits(features.astype(float), ifeature)
-        index_feature = np.where(selectFeature)[0]
-        from matplotlib import pyplot
-        if ifeature == 9.0:
-            #azcurrent = np.abs(d['level1/hk/antenna0/driveNode/azDacOutput'][:])
-            elutc = d['level1/spectrometer/MJD'][:] #d['level1/hk/antenna0/driveNode/utc'][:]
-            mjd = d['level1/spectrometer/MJD'][:]
-            # these are when the telescope is changing position
-            #cutpoint = np.max([np.max(azcurrent)*self.max_el_current_fraction,3000])
-            #select = np.where((azcurrent > cutpoint))[0]
-            ends = np.array([index_feature[0],index_feature[-1]])
-        elif ifeature == 5.0:
-            # Elevation current seems a good proxy for finding repointing times
-            elcurrent = np.abs(d['level1/hk/antenna0/driveNode/elDacOutput'][:])
-            elutc = d['level1/hk/antenna0/driveNode/utc'][:]
-            mjd = d['level1/spectrometer/MJD'][:]
-            cutoff = np.max(elcurrent)*self.max_el_current_fraction
-            
-            # these are when the telescope is changing position
-            select = np.where((elcurrent > cutoff))[0]
-
-            dselect = select[1:]-select[:-1]
-            large_step_indices = np.where((dselect > self.min_sample_distance))[0]
-
-            ends = select[np.append(large_step_indices,len(dselect)-1)]
-
-        else:
-            # Elevation current seems a good proxy for finding repointing times
-            elcurrent = np.abs(d['level1/hk/antenna0/driveNode/elDacOutput'][:])
-            elutc = d['level1/hk/antenna0/driveNode/utc'][:]
-            mjd = d['level1/spectrometer/MJD'][:]
-            
-            # these are when the telescope is changing position
-            select = np.where((elcurrent > np.max(elcurrent)*self.max_el_current_fraction))[0]
-
-            dselect = select[1:]-select[:-1]
-            large_step_indices = np.where((dselect > self.min_sample_distance))[0]
-
-            ends = select[np.append(large_step_indices,len(dselect)-1)]
-        # Now map these indices to the original indices
-        scan_edges = []
-        for (start,end) in zip(ends[:-1],ends[1:]):
-            tstart,tend = np.argmin((mjd-elutc[start])**2),np.argmin((mjd-elutc[end])**2)
-
-            # Need to check we are not in a bad feature region
-            if selectFeature[tstart] == 0:
-                tstart = index_feature[np.argmin((index_feature - tstart)**2)]
-            if selectFeature[tend] == 0:
-                tend = index_feature[np.argmin((index_feature - tend)**2)]
-
-            if (tend-tstart) > self.min_scan_length:
-                Nsteps = int((tend-tstart)//self.offset_length)
-                scan_edges += [[tstart,tstart+self.offset_length*Nsteps]]
+        scan_status = d['level1/hk/antenna0/deTracker/lissajous_status'][...]
+        scan_utc    = d['level1/hk/antenna0/deTracker/utc'][...]
+        scan_status_interp = interp1d(scan_utc,scan_status,kind='previous',bounds_error=False,
+                                      fill_value='extrapolate')(d['level1/spectrometer/MJD'][...])
+        
+        scans = np.where((scan_status_interp == self.scan_status_code))[0]
+        diff_scans = np.diff(scans)
+        edges = scans[np.concatenate(([0],np.where((diff_scans > 1))[0], [scans.size-1]))]
+        scan_edges = np.array([edges[:-1],edges[1:]]).T
 
         return scan_edges
 
