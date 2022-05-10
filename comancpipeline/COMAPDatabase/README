@@ -1,0 +1,53 @@
+# COMAP Database
+#
+# Version 1: SH, 10 May 2022
+#
+## Purpose
+
+The COMAP database contains all of the metadata associated with each
+observation ID stored at Manchester.
+
+## Overview of Metadata
+
+Vane - Tsys (from cal vane)
+     - Gain (from cal vane)
+     - Elevation (of the cal vane event)
+     - Level2Mask (Channel mask at 32MHz resolution to go from level2 -> level3)
+     - NormMask (Averaged version of per day tsys masks)
+     - Spikes (Spike mask produced per observation using peak finding algorithm)
+     - VaneEdges [Nevents,start/end] (Idx of vane events)
+     
+FnoiseStats - atmos [feed,band,null,params] (Atmospheric fits: ground, TaTau, offset)
+	    - atmos_coefficients [feed,band,channel,null,null] (Relative change in atmosphere per channel vs. band average)
+	    - atmos_errors [feed,band,null,params] (Atmospheric fit errors from bootstrap)
+	    - feed [feed] (Feed ids used in this observation)
+	    - filter_coefficients [feed,band,channel,null,null] (Relative change in median filter vs. band average) {Applied after atmos fit}
+	    - fnoise_fits [feed,band,channel,null,params] {Best fits to 1/f noise: red noise (K^2 at 0.1Hz),  alpha, white noise (K^2)}
+	    - freqspectra [feed,band,channel,null,bins] (Frequencies for binned 1/f power spectra in Hz)
+	    - powerspectra [feed,band,channel,null,bins] (Binned power spectra of TODs in K^2)
+	    - wnoise_auto [feed,band,channel,null,params] 
+
+SunDistance - moon_mean (Average distance of Moon from feed 1 in degrees)
+	    - sun_mean (Average distance Sun from feed 1 in degrees)
+
+level3      - {source}MainBeamFactor [feed,band] (Calibration factors to put data onto main beam scale using {source})
+
+## Usage
+
+The following provides an overview of the scripts used to create and query the database.
+
+# Database Creation
+
+comap_wiki_flags.py update_csv=<True/False> - Updates all obsids with the manually set flags downloaded from the wiki.
+
+datecuts/datecuts.py - Set ranges of obsids to use as groups for calibration factors and other data cuts.
+
+assign_stats_flags.py - Assigns {obsid}.attrs['Flagged'] to observations that fail stats tests.
+
+assign_normalised_mask.py <database> - Calculates the average channel mask and the level2 -> level3 channel mask for each obsid.
+
+assign_calibration_factors.py <database> <source> - Assigns calibration factors from fits to {source} to all obsids. 
+
+# Database Queries
+
+query_source.py <source> - Produce a list of filelists containing either the level 1 or the level 2 files associated with that source in {<datadir>/}. Also creates a list of bad obsids that do not have the correct metadata.
