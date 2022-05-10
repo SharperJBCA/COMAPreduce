@@ -24,8 +24,8 @@ def GetFeeds(file_feeds, selected_feeds):
 class ReadDataLevel2:
 
     def __init__(self,
-                 filelist, 
-                 feeds=1,  
+                 filelist,
+                 feeds=1,
                  flag_spikes=False,
                  offset_length=50,
                  ifeature=5,
@@ -38,7 +38,7 @@ class ReadDataLevel2:
                  medfilt_name='none',
                  map_info={},
                  **kwargs):
-        
+
         self.medfilt_stepsize=medfilt_stepsize
         self.medfilt_name=medfilt_name
         # -- constants -- a lot of these are COMAP specific
@@ -79,10 +79,10 @@ class ReadDataLevel2:
 
 
         #title = parameters['Inputs']['title']
-        #self.output_map_filename = f'{title}.fits'        
+        #self.output_map_filename = f'{title}.fits'
         self.filelist = filelist
 
-        self.naive  = MapTypes.FlatMapType(crval, cdelt, 
+        self.naive  = MapTypes.FlatMapType(crval, cdelt,
                                            crpix, ctype,
                                            nxpix=nxpix, nypix=nypix)
 
@@ -113,28 +113,28 @@ class ReadDataLevel2:
         self.Noffsets  = self.Nsamples//self.offset_length
 
         # Contains the difference between the TOD and the map average
-        self.offset_residuals = OffsetTypes.Offsets(self.offset_length, 
-                                                    self.Noffsets, 
+        self.offset_residuals = OffsetTypes.Offsets(self.offset_length,
+                                                    self.Noffsets,
                                                     self.Nsamples)
 
         for i, filename in enumerate(tqdm(filelist)):
             try:
-                self.readPixels(i,filename)      
+                self.readPixels(i,filename)
             except KeyError:
                 print('BAD FILE', filename)
 
         #for i, filename in enumerate(tqdm(filelist)):
         #    try:
-        #        self.readPSDs(i,filename)      
+        #        self.readPSDs(i,filename)
         #    except (KeyError,ValueError):
         #        print('BAD FILE', filename)
 
         for i, filename in enumerate(tqdm(filelist)):
             #try:
-            self.readData(i,filename)     
+            self.readData(i,filename)
             #except (KeyError,ValueError):
             #    print('BAD FILE', filename)
-        
+
         self.naive.average()
         self.offset_residuals.accumulate(-self.naive.sky_map[self.pixels],self.all_weights,[0,self.pixels.size])
         self.offset_residuals.average()
@@ -145,12 +145,12 @@ class ReadDataLevel2:
 
         Uses the features to select the correct chunk of data
         """
-        
+
         try:
             d = h5py.File(filename,'r')
         except:
             print(filename)
-            return 
+            return
 
         N = 0
         scan_edges = d['level2/Statistics/scan_edges'][:]
@@ -162,7 +162,7 @@ class ReadDataLevel2:
 
         # Store the beginning and end point of each file
         self.chunks += [[int(self.Nsamples), int(self.Nsamples+N)]]
-        
+
         # We also want to know how big each file is per feed
         self.datasizes += [int(N/self.Nfeeds)]
 
@@ -184,13 +184,13 @@ class ReadDataLevel2:
         tod_in = np.zeros(dset.shape[-1],dtype=dset.dtype)
 
         scan_edges = d['level2/Statistics/scan_edges'][...]
-        tod = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
-        weights = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
-            
+        tod = np.zeros((len(self.FeedIndex), self.datasizes[i]))
+        weights = np.zeros((len(self.FeedIndex), self.datasizes[i]))
+
         # Read in data from each feed
         for index, ifeed in enumerate(self.FeedIndex[:]):
-            
-            tod_in = dset[ifeed,self.iband,:] 
+
+            tod_in = dset[ifeed,self.iband,:]
             wei_in = wei_dset[ifeed,self.iband,:]
 
             flags_in = flags[ifeed,:]
@@ -213,8 +213,17 @@ class ReadDataLevel2:
                 N = int((end-start)//self.offset_length * self.offset_length)
                 end = start+N
 
+                # if medfilt name already in file - retrieve that median filter
+                # else create new medfilt and save it
                 if self.medfilt_name != 'none':
-                    zfilter = self.median_filter(tod_in[start:end])
+                    if 'medfilt' not in d['level3']:
+                        d['level3'].create_group('medfilt')
+                    if medfilt_name in d['level3/medfilt']:
+                        zfilter = d['level3/medfilt/{}'.format(medfilt_name)]
+                    else:
+                        zfilter = self.median_filter(tod_in[start:end])
+                        d['level3/medfilt/{}'.format(medfilt_name)] = zfilter
+
                     #pyplot.plot(tod_in[start:end])
                     tod_in[start:end] -= zfilter
                     #pyplot.plot(tod_in[start:end])
@@ -241,14 +250,14 @@ class ReadDataLevel2:
     def readPSDs(self, i, filename):
         """
         Reads PSDs
-        """    
+        """
 
-        
-        d = h5py.File(filename,'r')
-            
+
+        d = h5py.File(filename,'a')
+
         # --- Feed position indices can change
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
-        
+
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)
         nFeeds, nSamples = tod.shape
@@ -266,16 +275,16 @@ class ReadDataLevel2:
         data_psds = d['level2/Statistics/fnoise_fits'][self.FeedIndex,...]
         for ifeed,feed_num in enumerate(self.Feeds):
             psdfits  = np.nanmean(data_psds[ifeed],axis=(0,1,2))
-            self.psds[ifeed,:] += psdfits[0]**2*((self.psdfreqs/10**psdfits[1])**psdfits[2])/len(self.filelist)       
+            self.psds[ifeed,:] += psdfits[0]**2*((self.psdfreqs/10**psdfits[1])**psdfits[2])/len(self.filelist)
         d.close()
     def readPixels(self, i, filename):
         """
         Reads data
-        """    
+        """
 
-        
+
         d = h5py.File(filename,'r')
-            
+
         # --- Feed position indices can change
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
 
@@ -309,7 +318,7 @@ class ReadDataLevel2:
             x_veloc = np.gradient(azc[0],dt)*np.cos(np.nanmean(elc)*np.pi/180.)
             y_veloc = np.gradient(elc[0],dt)
             veloc = np.sqrt(x_veloc**2 + y_veloc**2)
-            
+
             speed_mask[:,last:last+N] = ( np.abs(veloc) > 0.45 ) | (np.abs(veloc) < 0.1) # deg/s
             yshape = yc.shape
             # convert to Galactic
@@ -329,13 +338,13 @@ class ReadDataLevel2:
     def readData(self, i, filename):
         """
         Reads data
-        """    
+        """
 
-        d = h5py.File(filename,'r')
+        d = h5py.File(filename,'a')
 
         # --- Feed position indices can change
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
-        
+
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)
         nFeeds, nSamples = tod.shape
@@ -373,11 +382,11 @@ from mpi4py import MPI
 
 class ReadDataLevel2_MADAM:
 
-    def __init__(self, filelist, parameters,nside=8, 
+    def __init__(self, filelist, parameters,nside=8,
                  ifeature=5,iband=0,ifreq=0,
                  keeptod=False,subtract_sky=False,**kwargs):
-        
-        
+
+
         # -- constants -- a lot of these are COMAP specific
         self.ifeature = ifeature
         self.chunks = []
@@ -404,7 +413,7 @@ class ReadDataLevel2_MADAM:
 
 
         title = parameters['Inputs']['title']
-        self.output_map_filename = f'{title}.fits'        
+        self.output_map_filename = f'{title}.fits'
 
 
         # SETUP MAPS:
@@ -438,10 +447,10 @@ class ReadDataLevel2_MADAM:
         self.Noffsets  = self.Nsamples//self.offset_length
 
         for i, filename in enumerate(tqdm(filelist)):
-            self.readPixels(i,filename)      
-        
+            self.readPixels(i,filename)
+
         for i, filename in enumerate(tqdm(filelist)):
-            self.readData(i,filename)     
+            self.readData(i,filename)
 
 
     def countDataSize(self,filename):
@@ -450,12 +459,12 @@ class ReadDataLevel2_MADAM:
 
         Uses the features to select the correct chunk of data
         """
-        
+
         try:
             d = h5py.File(filename,'r')
         except:
             print(filename)
-            return 
+            return
 
         N = 0
         scan_edges = d['level2/Statistics/scan_edges'][:]
@@ -467,7 +476,7 @@ class ReadDataLevel2_MADAM:
 
         # Store the beginning and end point of each file
         self.chunks += [[int(self.Nsamples), int(self.Nsamples+N)]]
-        
+
         # We also want to know how big each file is per feed
         self.datasizes += [int(N/self.Nfeeds)]
 
@@ -486,9 +495,9 @@ class ReadDataLevel2_MADAM:
         tod_in   = np.zeros(dset.shape[-1],dtype=dset.dtype)
 
         scan_edges = d['level2/Statistics/scan_edges'][...]
-        tod = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
-        weights = np.zeros((len(self.FeedIndex), self.datasizes[i])) 
-            
+        tod = np.zeros((len(self.FeedIndex), self.datasizes[i]))
+        weights = np.zeros((len(self.FeedIndex), self.datasizes[i]))
+
         # Read in data from each feed
         for index, ifeed in enumerate(self.FeedIndex[:]):
             tod_in = dset[ifeed,self.iband,:]
@@ -523,11 +532,11 @@ class ReadDataLevel2_MADAM:
     def readPixels(self, i, filename):
         """
         Reads data
-        """    
+        """
 
-        
+
         d = h5py.File(filename,'r')
-            
+
         # --- Feed position indices can change
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
 
@@ -539,7 +548,7 @@ class ReadDataLevel2_MADAM:
         mjd  = d['level1/spectrometer/MJD'][:]
         for i in range(x.shape[0]):
             x[i],y[i] = Coordinates.h2e_full(x[i],y[i],mjd,Coordinates.comap_longitude,Coordinates.comap_latitude)
-            
+
         scan_edges = d['level2/Statistics/scan_edges'][...]
         pixels = np.zeros((x.shape[0], self.datasizes[i]))
         last = 0
@@ -558,13 +567,13 @@ class ReadDataLevel2_MADAM:
     def readData(self, i, filename):
         """
         Reads data
-        """    
+        """
 
-        d = h5py.File(filename,'r')
+        d = h5py.File(filename,'a')
 
         # --- Feed position indices can change
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
-        
+
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)
         nFeeds, nSamples = tod.shape

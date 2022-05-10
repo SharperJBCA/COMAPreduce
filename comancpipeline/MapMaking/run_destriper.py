@@ -8,11 +8,11 @@ from astropy import wcs
 
 import h5py
 
-from tqdm import tqdm 
+from tqdm import tqdm
 import click
 import ast
 import os
- 
+
 from comancpipeline.Tools import ParserClass,binFuncs
 from comancpipeline.MapMaking import DataReader, Destriper
 
@@ -41,7 +41,7 @@ def build_covariance(offsets):
     offsets[bd] = np.interp(x[bd],x[~bd], offsets[~bd])
     # ps = np.abs(np.fft.fft(offsets))**2
     # nu = np.fft.fftfreq(offsets.size,d=1.)
-    
+
     # # build covariance
     # xb,yb = bindata(np.log10(nu[1:nu.size//2]),np.log10(ps[1:nu.size//2]),nbins=20)
     # ymdl = 10**np.interp(np.log10(nu[1:nu.size//2]),xb,yb)
@@ -60,7 +60,7 @@ def write_map(parameters,data,offsetMap,postfix=''):
     des[hits == 0] = np.nan
     clean_map = naive-offmap
 
-    
+
     hdu = fits.PrimaryHDU(des,header=data.naive.wcs.to_header())
     cov = fits.ImageHDU(variance,name='Covariance',header=data.naive.wcs.to_header())
     hits = fits.ImageHDU(hits,name='Hits',header=data.naive.wcs.to_header())
@@ -73,7 +73,7 @@ def write_map(parameters,data,offsetMap,postfix=''):
                                                       parameters['Inputs']['title'],
                                                       '-'.join([str(int(f)) for f in parameters['Inputs']['feeds']]),
                                                       int(parameters['ReadData']['iband']),postfix)
-                                               
+
     hdul.writeto(fname,overwrite=True)
 
 @click.command()
@@ -83,7 +83,7 @@ def call_level1_destripe(filename, options):
     level1_destripe(filename, options)
 
 def level1_destripe(filename,options):
-    
+
     """Plot hit maps for feeds
 
     Arguments:
@@ -93,7 +93,7 @@ def level1_destripe(filename,options):
     """
     # Get the inputs:
     p = ParserClass.Parser(filename)
-    title = p['Inputs']['title'] 
+    title = p['Inputs']['title']
     for k1,v1 in options.items():
         if len(options.keys()) == 0:
             break
@@ -105,7 +105,7 @@ def level1_destripe(filename,options):
         p['Inputs']['feeds'] = [p['Inputs']['feeds']]
     filelist = np.loadtxt(p['Inputs']['filelist'],dtype=str,ndmin=1)
 
-    
+
     np.random.seed(1)
     data = DataReader.ReadDataLevel2(filelist,
                                      all_tod=True,
@@ -117,7 +117,8 @@ def level1_destripe(filename,options):
                                      iband        =p['ReadData']['iband'],
                                      keeptod      =p['ReadData']['keeptod'],
                                      subtract_sky =p['ReadData']['subtract_sky'],
-                                     map_info     =p['Destriper'])
+                                     map_info     =p['Destriper'],
+                                     medfilt_name =p['ReadData']['medfilt_name'])
     offsetMap, offsets = Destriper.Destriper(data,
                                              offset=p['Destriper']['offset'],
                                              niter=p['Destriper']['niter'],
@@ -125,7 +126,7 @@ def level1_destripe(filename,options):
 
     write_map(p,data,offsetMap,postfix='')
 
-    ### 
+    ###
     # Write out the offsets
     ###
 
