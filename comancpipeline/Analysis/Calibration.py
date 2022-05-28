@@ -203,7 +203,7 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.write(data)
 
         if not isinstance(self.database,type(None)):
-            self.write_database(self.outfile) # pass it the new level 2 file
+            self.write_database(self.outfile,self.database) # pass it the new level 2 file
 
         self.logger(f'{fname}:{self.name}: Done.')
         # Now change to the level2 file for all future analyses.
@@ -226,16 +226,20 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.avg_frequency = np.zeros((nSBs, nChans))
         # Averaging the data either using a Tsys/Calvane measurement or assume equal weights
         try:
+        #if True:
             # Altered to allow Skydip files to be calibrated using the neighbouring
             # cal-vane files (following SKYDIP-LISSAJOUS obs. plan)
             if 'Sky nod' in self.comment:
+                print('hello sky nod')
                 cname, gain, tsys,rms,spikes = self.getcalibration_skydip(data)
             else:
                 cname, gain, tsys,rms,spikes = self.getcalibration_obs(data)
         except ValueError:
-            cname = '{}/{}_{}'.format(self.calvanepath,self.calvane_prefix,fname)
-            gain = np.ones((2, nHorns, nSBs, nChans*width))
-            tsys = np.ones((2, nHorns, nSBs, nChans*width))
+           cname = '{}/{}_{}'.format(self.calvanepath,self.calvane_prefix,fname)
+           gain = np.ones((2, nHorns, nSBs, nChans*width))
+           tsys = np.ones((2, nHorns, nSBs, nChans*width))
+           spikes = np.zeros((2, nHorns, nSBs, nChans*width),dtype=bool)
+           rms = np.ones((2, nHorns, nSBs, nChans*width))
 
         for ifeed, feed in enumerate(tqdm(self.feeds,desc=self.name)):
             feed_array_index = self.feed_dict[feed]
@@ -243,7 +247,7 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
 
             for sb in range(nSBs):
                 # Weights/gains already snipped to just the feeds we want
-                w, g,chan_flag = 1./rms[0,ifeed, sb, :]**2, gain[0,ifeed, sb, :], ~spikes[ifeed,sb,:]
+                w, g,chan_flag = 1./rms[0,ifeed, sb, :]**2, gain[0,ifeed, sb, :], spikes[0,ifeed,sb,:]
                 w[chan_flag] = 0
 
                 gvals = np.zeros(nChans)
@@ -329,17 +333,18 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         
         return True
 
-    def write_database(self,data):
+    @staticmethod
+    def write_database(data,database):
         """
         Write the fits to the general database
         """
 
-        if not os.path.exists(self.database):
-            output = FileTools.safe_hdf5_open(self.database,'w')
+        if not os.path.exists(database):
+            output = FileTools.safe_hdf5_open(database,'w')
         else:
-            output = FileTools.safe_hdf5_open(self.database,'a')
+            output = FileTools.safe_hdf5_open(database,'a')
 
-        obsid = self.getObsID(data)
+        obsid = BaseClasses.DataStructure.getObsID(data)
         if obsid in output:
             grp = output[obsid]
         else:
@@ -500,7 +505,10 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         self.logger(f'{fname}:{self.name}: Writing vane calibration file: {outfile}')
         self.write(data)
         if not isinstance(self.database,type(None)):
-            self.write_database(data)
+            dnames = ['Tsys','Gain','VaneEdges','Spikes','Elevation']
+            dsets  = [self.Tsys, self.Gain, self.vane_samples,self.Spikes,self.elevations]
+            dataout = {k:v for (k,v) in zip(dnames,dsets)}
+            self.write_database(data,self.database,dataout)
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
@@ -764,17 +772,18 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
                         
         output.close()
 
-    def write_database(self,data):
+    @staticmethod
+    def write_database(data,database,outputdata):
         """
         Write the fits to the general database
         """
 
-        if not os.path.exists(self.database):
-            output = FileTools.safe_hdf5_open(self.database,'w')
+        if not os.path.exists(database):
+            output = FileTools.safe_hdf5_open(database,'w')
         else:
-            output = FileTools.safe_hdf5_open(self.database,'a')
+            output = FileTools.safe_hdf5_open(database,'a')
 
-        obsid = self.getObsID(data)
+        obsid = BaseClasses.DataStructure.getObsID(data)
         if obsid in output:
             grp = output[obsid]
         else:
@@ -785,9 +794,7 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         else:
             vane = grp.create_group('Vane')
 
-        dnames = ['Tsys','Gain','VaneEdges','Spikes','Elevation']
-        dsets  = [self.Tsys, self.Gain, self.vane_samples,self.Spikes,self.elevations]
-        for (dname, dset) in zip(dnames, dsets):
+        for dname, dset in  outputdata.items(): #zip(dnames, dsets):
             if dname in vane:
                 del vane[dname]
             vane.create_dataset(dname,  data=dset)
@@ -1273,6 +1280,7 @@ class CompareTsys(BaseClasses.DataStructure):
         gain = gain_file['Gain'][...] # (event, horn, sideband, frequency)
         tsys = gain_file['Tsys'][...] # (event, horn, sideband, frequency) - use for weights
         spikes = gain_file['Spikes'][...]
+        print(gain.shape,tsys.shape,spikes.shape)
         gain_file.close()
         return cname, gain, tsys, spikes
 

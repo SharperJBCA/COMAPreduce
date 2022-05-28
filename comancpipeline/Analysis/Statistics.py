@@ -102,7 +102,7 @@ class ScanEdges(BaseClasses.DataStructure):
     """
 
     def __init__(self, 
-                 allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
+                 allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
                  level2='level2',
                  scan_edge_type='RepointEdges',**kwargs):
         """
@@ -193,7 +193,7 @@ class FnoiseStats(BaseClasses.DataStructure):
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self, allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
+    def __init__(self, allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
                  nbins=50, 
                  samplerate=50, 
                  medfilt_stepsize=5000,
@@ -357,7 +357,14 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.logger(f'{fname}:{self.name}: Writing noise stats to level 2 file ({fname})')
         self.write(data)
         if not isinstance(self.database,type(None)):
-            self.write_database(data)
+
+            feeds, feed_idx, feed_dict =self.getFeeds(data,'all')
+            dnames = ['feeds','fnoise_fits','wnoise_auto', 'powerspectra','freqspectra',
+                      'atmos','atmos_errors','filter_coefficients','atmos_coefficients']
+            dsets = [feeds,self.fnoise_fits,self.wnoise_auto,self.powerspectra,self.freqspectra,
+                     self.atmos,self.atmos_errs,self.filter_coefficients,self.atmos_coefficients]
+            dataout = {k:v for (k,v) in zip(dnames,dsets)} 
+            self.write_database(data,self.database,dataout)
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
@@ -525,18 +532,19 @@ class FnoiseStats(BaseClasses.DataStructure):
         pmdl = np.poly1d(np.polyfit(A, tod,1))
         return tod- pmdl(A), pmdl
 
-    def write_database(self,data):
+    @staticmethod
+    def write_database(data,database,dataout):
         """
         Write out the statistics to a common statistics database for easy access
         """
         
-        if not os.path.exists(self.database):
-            output = FileTools.safe_hdf5_open(self.database,'w')
+        if not os.path.exists(database):
+            output = FileTools.safe_hdf5_open(database,'w')
         else:
-            output = FileTools.safe_hdf5_open(self.database,'a')
+            output = FileTools.safe_hdf5_open(database,'a')
 
-        obsid = self.getObsID(data)
-        feeds, feed_idx, feed_dict =self.getFeeds(data,'all')
+        obsid = BaseClasses.DataStructure.getObsID(data)
+
         if obsid in output:
             grp = output[obsid]
         else:
@@ -547,11 +555,7 @@ class FnoiseStats(BaseClasses.DataStructure):
             del grp['FnoiseStats']
         stats = grp.create_group('FnoiseStats')
 
-        dnames = ['feeds','fnoise_fits','wnoise_auto', 'powerspectra','freqspectra',
-                  'atmos','atmos_errors','filter_coefficients','atmos_coefficients']
-        dsets = [feeds,self.fnoise_fits,self.wnoise_auto,self.powerspectra,self.freqspectra,
-                 self.atmos,self.atmos_errs,self.filter_coefficients,self.atmos_coefficients]
-        for (dname, dset) in zip(dnames, dsets):
+        for dname, dset in dataout.items():
             if dname in stats:
                 del stats[dname]
             stats.create_dataset(dname,  data=dset)
@@ -595,7 +599,7 @@ class SkyDipStats(BaseClasses.DataStructure):
     Does not require scan_edges to run
     """
 
-    def __init__(self,allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','Cyga'],
+    def __init__(self,allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
                  nbins=50, 
                  samplerate=50,
                  medfilt_stepsize=5000, 
@@ -951,7 +955,7 @@ class SunDistance(BaseClasses.DataStructure):
         self.logger(f'{fname}:{self.name}: Writing Sun distance to level 2 file ({fname})')
         self.write(data)
         if not isinstance(self.database,type(None)):
-            self.write_database(data)
+            self.write_database(data,self.database,self.distances)
         self.logger(f'{fname}:{self.name}: Done.')
 
         return data
@@ -980,29 +984,31 @@ class SunDistance(BaseClasses.DataStructure):
             if dname in distance_grp:
                 del distance_grp[dname]
             distance_grp.create_dataset(dname,data=dset)
-    def write_database(self,data):
+
+    @staticmethod
+    def write_database(data,database,dataout):
         """
         Write out the statistics to a common statistics database for easy access
         """
         
-        if not os.path.exists(self.database):
-            output = FileTools.safe_hdf5_open(self.database,'w')
+        if not os.path.exists(database):
+            output = FileTools.safe_hdf5_open(database,'w')
         else:
-            output = FileTools.safe_hdf5_open(self.database,'a')
+            output = FileTools.safe_hdf5_open(database,'a')
 
-        obsid = self.getObsID(data)
+        obsid = BaseClasses.DataStructure.getObsID(data)
         if obsid in output:
             grp = output[obsid]
         else:
             grp = output.create_group(obsid)
 
 
-        if  self.name in grp:
-            del grp[self.name]
-        stats = grp.create_group(self.name)
+        if 'SunDistance' in grp:
+            del grp['SunDistance']
+        stats = grp.create_group('SunDistance')
 
 
-        for dname, dset in self.distances.items():
+        for dname, dset in dataout.items():
             if not 'mean' in dname:
                 continue
             if dname in stats:
