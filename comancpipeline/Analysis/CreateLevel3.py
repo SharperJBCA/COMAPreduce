@@ -61,8 +61,10 @@ class CreateLevel3(BaseClasses.DataStructure):
     def __init__(self,
                  level2='level2',
                  level3='level3',
-                 database=None,
-                 output_dir = None,
+                 database=None, 
+                 output_obsid_starts = [0],
+                 output_obsid_ends   = [None],
+                 output_dirs = ['.'],
                  cal_source='taua',
                  set_permissions=True,
                  permissions_group='comap',
@@ -73,7 +75,11 @@ class CreateLevel3(BaseClasses.DataStructure):
         """
         super().__init__(**kwargs)
         self.name = 'CreateLevel3'
-        self.output_dir = output_dir
+
+        self.output_dirs = output_dirs
+        self.output_obsid_starts = output_obsid_starts
+        self.output_obsid_ends   = output_obsid_ends
+
         self.database = database
 
         self.level2=level2
@@ -96,8 +102,15 @@ class CreateLevel3(BaseClasses.DataStructure):
         assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
         fname = data.filename.split('/')[-1]
         data_dir = data.filename.split(fname)[0]
-        if isinstance(self.output_dir,type(None)):
-            self.output_dir = f'{data_dir}/{self.level3}'
+
+        # obtain obsid
+        obsid = int(data.filename.split('/')[-1].split('-')[1])
+        # determine output directory
+        self.output_dir = self.getOutputDir(obsid,
+                                            self.output_dirs,
+                                            self.output_obsid_starts,
+                                            self.output_obsid_ends)
+
         self.outfile = '{}/{}_{}'.format(self.output_dir,self.level3,fname)
 
         self.logger(f' ')
