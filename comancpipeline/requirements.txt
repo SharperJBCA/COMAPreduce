@@ -1,5 +1,5 @@
 statsmodels==0.12.2
-numpy==1.19.5
+numpy==1.22.0
 matplotlib==3.3.3
 tqdm==4.48.2
 mpi4py==3.0.3
