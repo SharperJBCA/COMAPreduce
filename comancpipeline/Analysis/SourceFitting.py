@@ -425,7 +425,8 @@ class FitSource(BaseClasses.DataStructure):
 
         if not isinstance(self.database,type(None)):
         
-            dnames = ['feeds','frequency','Fluxes','Gains','Values','Errors','Chi2','Az','El','MJD'] 
+            dnames = ['feeds','frequency','Fluxes','Gains','Values','Errors','Chi2','Az','El','MJD']
+            frequency = data[f'{self.level2}/frequency'][...]
             dsets  = [self.feeds,frequency,self.flux, self.gain, 
                       self.map_fits['Values'],
                       self.map_fits['Errors'],
@@ -434,7 +435,7 @@ class FitSource(BaseClasses.DataStructure):
                       np.array([self.source_positions['mean_el']]),
                       self.map_fits['MJD']]
             dataout = {k:v for k,v in zip(dnames,dsets)}
-            self.write_database(data,database,dataout)
+            self.write_database(data,self.database,dataout,self.name)
         if not self.nodata:
             self.write(data)
         self.logger(f'{fname}:{self.name}: Done.')
@@ -995,7 +996,7 @@ class FitSource(BaseClasses.DataStructure):
         return filters
                     
     @staticmethod
-    def write_database(data,database,dataout):
+    def write_database(data,database,dataout,name):
         """
         Write the fits to the general database
         """
@@ -1006,15 +1007,14 @@ class FitSource(BaseClasses.DataStructure):
             output = FileTools.safe_hdf5_open(database,'a')
 
         obsid = BaseClasses.DataStructure.getObsID(data)
-        frequency = data[f'{self.level2}/frequency'][...]
         if obsid in output:
             grp = output[obsid]
         else:
             grp = output.create_group(obsid)
 
-        if self.name in grp:
-            del grp[self.name]
-        stats = grp.create_group(self.name)
+        if name in grp:
+            del grp[name]
+        stats = grp.create_group(name)
 
         #for i in range(nBands):
         #    if isinstance(self.avg_map_fits[i],type(None)):

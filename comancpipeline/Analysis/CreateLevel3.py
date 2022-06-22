@@ -26,27 +26,7 @@ import shutil
 
 from tqdm import tqdm
 
-__level3_version__='v2'
-
-channel_mask = {1:lambda x: ((x >= 26) & (x <= 26.4)) | \
-                ((x >= 26.8) & (x <= 27)) | \
-                ((x >=27.25) & (x <= 27.38)) | \
-                ((x >=27.45) & (x <=27.55)) | \
-                ((x >=27.625)& (x <=27.725)) | \
-                ((x >=28.10) & (x <=28.25)) | \
-                ((x >=28.60) & (x <=28.72)) | \
-                ((x >=28.85) & (x <=29.00)) | \
-                ((x >=29.15) & (x <=29.25)) | \
-                ((x >=29.70) & (x <=30.05)) | \
-                ((x >=30.125)& (x <=30.25)) | \
-                ((x >=30.72) & (x <=30.82)) | \
-                ((x >=31.06) & (x <=31.16)) | \
-                ((x >=31.50) & (x <=31.63)) | \
-                ((x >=31.96) & (x <=32.04)) | \
-                ((x >=32.97) & (x <=33.04)) | \
-                ((x >=33.20) & (x <=33.40)) | \
-                ((x >=33.80) & (x <=34.00))}
-
+__level3_version__='v062022'
 
 def subtract_filters(tod,az,el,filter_tod, filter_coefficients, atmos, atmos_coefficient):
     """
@@ -195,6 +175,17 @@ class CreateLevel3(BaseClasses.DataStructure):
         db.close()
 
         return gains
+
+    def get_channel_mask(self,this_obsid,feed):
+        """
+        Get the updated channel mask for this obsid
+        """
+
+        db = FileTools.safe_hdf5_open(self.database,'r')
+        channel_mask = db[str(this_obsid)]['Vane/Level2Mask'][feed-1,...]
+        db.close()
+        return channel_mask
+
     def calibrate_tod(self,data, tod, weights, ifeed, feed):
         """
         Calibrates data using a given calibration source
@@ -210,17 +201,17 @@ class CreateLevel3(BaseClasses.DataStructure):
                 cal_factors = gains['Gains'][idx,...]
             else:
                 cal_factors = np.ones((1,tod.shape[0],tod.shape[1]))
+
         tod = tod/cal_factors[0,...,None]
         weights = weights*cal_factors[0,...,None]**2
         bad = ~np.isfinite(tod) | ~np.isfinite(weights)
         tod[bad] = 0
         weights[bad] = 0
 
-        if feed in channel_mask:
-            frequency = data['level2/averaged_frequency'][...]
-            cmask = channel_mask[feed](frequency)
-            tod[~cmask] = 0
-            weights[~cmask]=0
+
+        channel_mask = self.get_channel_mask(this_obsid,feed)
+        tod[~channel_mask] = 0
+        weights[~channel_mask] = 0
 
         return tod, weights, cal_factors[0]
 
@@ -247,7 +238,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         # then the data for each scan
         last = 0
         scan_samples = []
-        for iscan,(start,end) in enumerate(scan_edges):
+        for iscan,(start,end) in enumerate(tqdm(scan_edges)):
             scan_samples = np.arange(start,end,dtype=int)
             median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{iscan:02d}'][ifeed,...]
             N = int((end-start))
@@ -326,7 +317,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.all_mask = np.zeros((20,tod_shape[-1]))
         self.all_cal_factors = np.zeros((20,4,64))
         # Read in data from each feed
-        for ifeed,feed in enumerate(feeds):
+        for ifeed,feed in enumerate(tqdm(feeds,desc='Looping over feeds')):
             if feeds[ifeed] == 20:
                 continue
             feed_tod,feed_weights,mask = self.clean_tod(d,ifeed,feed)
@@ -339,7 +330,6 @@ class CreateLevel3(BaseClasses.DataStructure):
             self.all_tod[feed-1],self.all_weights[feed-1], self.all_auto[feed-1], self.all_frequency = self.average_tod(d,feed_tod,feed_weights,mask) 
             self.all_mask[feed-1] = mask
             self.all_cal_factors[feed-1] = cal_factors
-
         
     def write(self,data):
         """
@@ -379,7 +369,8 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         output.attrs['version'] = __level3_version__
         output['cal_factors'].attrs['source'] = self.cal_source
-                        
+        output['cal_factors'].attrs['calibrator_obsid'] = self.nearest_calibrator
+
         output.close()
         
         if self.level3 in data.keys():
@@ -408,6 +399,7 @@ class CreateLevel3(BaseClasses.DataStructure):
             del grp[self.name]
         lvl3 = grp.create_group(self.name)
 
+        lvl3.attrs['version'] = __level3_version__
         lvl3.attrs['calibrator_obsid'] = self.nearest_calibrator
         lvl3.attrs['calibrator_source'] = self.cal_source
         output.close()
