@@ -426,7 +426,7 @@ class FitSource(BaseClasses.DataStructure):
         if not isinstance(self.database,type(None)):
         
             dnames = ['feeds','frequency','Fluxes','Gains','Values','Errors','Chi2','Az','El','MJD']
-            frequency = data[f'{self.level2}/frequency'][...]
+            frequency = data[f'{self.level2}/avg_frequency'][...]
             dsets  = [self.feeds,frequency,self.flux, self.gain, 
                       self.map_fits['Values'],
                       self.map_fits['Errors'],
@@ -550,15 +550,15 @@ class FitSource(BaseClasses.DataStructure):
                     'el':np.nan}
 
         top = special_idx[0]
-        ra_point, dec_point = Coordinates.h2e_full(data['spectrometer/pixel_pointing/pixel_az'][0,:top],
-                                                   data['spectrometer/pixel_pointing/pixel_el'][0,:top],
-                                                   data['spectrometer/MJD'][:top],
+        ra_point, dec_point = Coordinates.h2e_full(data['level1/spectrometer/pixel_pointing/pixel_az'][0,:top],
+                                                   data['level1/spectrometer/pixel_pointing/pixel_el'][0,:top],
+                                                   data['level1/spectrometer/MJD'][:top],
                                                    Coordinates.comap_longitude,
                                                    Coordinates.comap_latitude)
         point_data = {'ra':np.nanmean(ra_point),
                       'dec':np.nanmean(dec_point),
-                      'az':np.nanmean(data['spectrometer/pixel_pointing/pixel_az'][0,:top]),
-                      'el':np.nanmean(data['spectrometer/pixel_pointing/pixel_el'][0,:top])}
+                      'az':np.nanmean(data['level1/spectrometer/pixel_pointing/pixel_az'][0,:top]),
+                      'el':np.nanmean(data['level1/spectrometer/pixel_pointing/pixel_el'][0,:top])}
         return point_data
 
     def get_sky_data_flag(self,data):
@@ -641,8 +641,10 @@ class FitSource(BaseClasses.DataStructure):
         """
         features = np.log10(self.getFeatures(data))/np.log10(2)
         special_idx = np.where((features==16))[0]
+        # This is for getting the stare data on more recent
+        # calibration observations.
         point_data = self.get_point_data(data,special_idx)
-
+        
         cel_maps = self.create_single_map(tod,
                                           coords['ra'],
                                           coords['dec'],
