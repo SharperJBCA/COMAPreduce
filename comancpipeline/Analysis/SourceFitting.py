@@ -426,7 +426,7 @@ class FitSource(BaseClasses.DataStructure):
         if not isinstance(self.database,type(None)):
         
             dnames = ['feeds','frequency','Fluxes','Gains','Values','Errors','Chi2','Az','El','MJD']
-            frequency = data[f'{self.level2}/avg_frequency'][...]
+            frequency = data[f'{self.level2}/averaged_frequency'][...]
             dsets  = [self.feeds,frequency,self.flux, self.gain, 
                       self.map_fits['Values'],
                       self.map_fits['Errors'],
@@ -451,7 +451,7 @@ class FitSource(BaseClasses.DataStructure):
         nHorns, nSBs, nChans, nSamples = data[f'{self.level2}/averaged_tod'].shape
 
         self.feeds, self.feedlist, self.feeddict = self.getFeeds(data,self.feeds_select)
-        freq = data[f'{self.level2}/frequency'][...]
+        freq = data[f'{self.level2}/averaged_frequency'][...]
         freqwidth = np.abs(freq[0,0]-freq[0,1])*self.binwidth * 1e3
 
         spike_mask = self.getSpikeMask(data)
@@ -517,7 +517,7 @@ class FitSource(BaseClasses.DataStructure):
         Convert the fitted brightness temperatures into gains
         """
         nFeeds,nBands,nChans,nParams = map_fits['Values'].shape
-        frequencies = data[f'{self.level2}/frequency'][...]
+        frequencies = data[f'{self.level2}/averaged_frequency'][...]
         kb = 1.38064852e-23
         c  = 2.99792458e8
         scale = 2 * kb * (1e9/ c)**2 * 1e26

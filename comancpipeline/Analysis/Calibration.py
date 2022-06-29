@@ -25,7 +25,7 @@ from scipy.interpolate import interp1d
 from scipy.signal import find_peaks
 
 __vane_version__ = 'v4'
-__level2_version__ = 'v2'
+__level2_version__ = 'v3'
 
 class NoColdError(Exception):
     pass
@@ -156,6 +156,22 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
 
         return True
 
+    def _legacyJun2022_check_level2(self,outfilename):
+        """
+        Eventually this function can be removed.
+
+        Checks to see if the avg_frequency dataset is in the level 2 file,
+        if so it updates the level 2 version to the latest value. If not,
+        the file will be updated to the latest version. 
+        """
+        if os.path.exists(outfilename):
+            h = h5py.File(outfilename,'a')
+            if 'averaged_frequency' in h[self.level2]:
+                print('Found: updating level2')
+                h[self.level2].attrs['version'] = __level2_version__
+            else:
+                print('NO AVERVAGED FREQUECNCY, WILL UPDATE')
+            h.close()
 
     def __call__(self,data):
         """
@@ -165,6 +181,7 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         fname = data.filename.split('/')[-1]
         self.logger(f' ')
         self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
 
         self.obsid = self.getObsID(data)
         self.comment = self.getComment(data)
@@ -179,8 +196,12 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         data_dir_search = np.where([os.path.exists('{}/{}_Level2Cont.hd5'.format(data_dir,prefix)) for data_dir in self.data_dirs])[0]
         if len(data_dir_search) > 0:
             self.output_dir = self.data_dirs[data_dir_search[0]]
-        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)
-        
+        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)        
+
+        # Legacy function: Check if the level2 file has avg_frequency, if so continue, 
+        #  else update the level2 data
+        self._legacyJun2022_check_level2(self.outfilename)
+
 
         # Skip files that are already calibrated:        
         if os.path.exists(self.outfilename) & (not self.overwrite): 
@@ -1211,6 +1232,7 @@ class CompareTsys(BaseClasses.DataStructure):
 
         if not 'version' in h[self.level2].attrs:
             return False
+        print( h[self.level2].attrs['version'], __level2_version__)
         if not h[self.level2].attrs['version'] == __level2_version__:
             return False
         if not 'vane-version' in h[self.level2].attrs:

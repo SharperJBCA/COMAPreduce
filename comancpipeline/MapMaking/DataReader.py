@@ -216,13 +216,13 @@ class ReadDataLevel2:
                 # if medfilt name already in file - retrieve that median filter
                 # else create new medfilt and save it
                 if self.medfilt_name != 'none':
-                    if 'medfilt' not in d['level3']:
-                        d['level3'].create_group('medfilt')
-                    if medfilt_name in d['level3/medfilt']:
-                        zfilter = d['level3/medfilt/{}'.format(medfilt_name)]
-                    else:
-                        zfilter = self.median_filter(tod_in[start:end])
-                        d['level3/medfilt/{}'.format(medfilt_name)] = zfilter
+                    # if 'medfilt' not in d['level3']:
+                    #     d['level3'].create_group('medfilt')
+                    # if self.medfilt_name in d['level3/medfilt']:
+                    #     zfilter = d['level3/medfilt/{}'.format(self.medfilt_name)]
+                    # else:
+                    zfilter = self.median_filter(tod_in[start:end])
+                    # d['level3/medfilt/{}'.format(self.medfilt_name)] = zfilter
 
                     #pyplot.plot(tod_in[start:end])
                     tod_in[start:end] -= zfilter
@@ -253,7 +253,7 @@ class ReadDataLevel2:
         """
 
 
-        d = h5py.File(filename,'a')
+        d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
@@ -264,7 +264,6 @@ class ReadDataLevel2:
 
 
         this_obsid = int(filename.split('/')[-1].split('-')[1])
-        # Get Gain Calibration Factors
         if isinstance(self.psds,type(None)):
             self.psdfreqs = d['level2/Statistics/freqspectra'][0,0,0,0,:]
             gd = np.isfinite(self.psdfreqs)
@@ -277,6 +276,7 @@ class ReadDataLevel2:
             psdfits  = np.nanmean(data_psds[ifeed],axis=(0,1,2))
             self.psds[ifeed,:] += psdfits[0]**2*((self.psdfreqs/10**psdfits[1])**psdfits[2])/len(self.filelist)
         d.close()
+
     def readPixels(self, i, filename):
         """
         Reads data
@@ -340,7 +340,7 @@ class ReadDataLevel2:
         Reads data
         """
 
-        d = h5py.File(filename,'a')
+        d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
@@ -369,6 +369,8 @@ class ReadDataLevel2:
         if self.keeptod:
             self.all_tod[self.chunks[i][0]:self.chunks[i][1]] = tod*1.
         self.all_weights[self.chunks[i][0]:self.chunks[i][1]] = weights
+
+
 
         # Bin data into maps
 
@@ -494,6 +496,7 @@ class ReadDataLevel2_MADAM:
         flags    = d['level2/Flags/sigma_clip_flag']
         tod_in   = np.zeros(dset.shape[-1],dtype=dset.dtype)
 
+
         scan_edges = d['level2/Statistics/scan_edges'][...]
         tod = np.zeros((len(self.FeedIndex), self.datasizes[i]))
         weights = np.zeros((len(self.FeedIndex), self.datasizes[i]))
@@ -569,7 +572,7 @@ class ReadDataLevel2_MADAM:
         Reads data
         """
 
-        d = h5py.File(filename,'a')
+        d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
         self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)

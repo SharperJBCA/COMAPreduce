@@ -50,6 +50,7 @@ class CreateLevel3(BaseClasses.DataStructure):
                  permissions_group='comap',
                  median_filter=True,
                  atmosphere=True,
+                 cal_database=None,
                  astro_cal=True, **kwargs):
         """
         """
@@ -61,6 +62,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.output_obsid_ends   = output_obsid_ends
 
         self.database = database
+        self.cal_database=cal_database
 
         self.level2=level2
         self.level3=level3
@@ -72,6 +74,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.astro_cal=astro_cal
         self.median_filter = median_filter
         self.atmosphere = atmosphere
+
     def __str__(self):
         return "Creating Level 3"
 
@@ -154,23 +157,23 @@ class CreateLevel3(BaseClasses.DataStructure):
         Get all of the gain factors associated with this calibration source
         """
 
-        db = FileTools.safe_hdf5_open(self.database,'r')
-        obsids = []
+        db = FileTools.safe_hdf5_open(self.cal_database,'r')
+
+        gains = {'Gains':np.zeros((20,8))} #N_feeds, N_bands
+
+        obsids = {k:[] for k in range(19)}
         for obsid, grp in db.items():
-            if not 'Flagged' in grp.attrs:
-                continue
-            if grp.attrs['Flagged']:
-                continue
-            if not 'TauA' in grp['level2'].attrs['source']:
-                continue
+            for ifeed in range(19):
+                if grp['CalFeedMask'][ifeed]:
+                    obsids[ifeed] += [int(obsid)]
 
-            obsids += [int(obsid)]
-
-        obsids = np.array(obsids)
-        idx = np.argmin(np.abs(obsids-this_obsid))
-        self.nearest_calibrator = str(obsids[idx])
-        gains = {'Gains':db[self.nearest_calibrator]['FitSource/Gains'][...],
-                 'Feeds':db[self.nearest_calibrator]['FitSource/feeds'][...]}
+        obsids = obsids
+        for ifeed in range(19):
+            if len(np.array(obsids[ifeed])) == 0:
+                continue
+            idx = np.argmin(np.abs(np.array(obsids[ifeed])-this_obsid))
+            self.nearest_calibrator = str(obsids[ifeed][idx])
+            gains['Gains'][ifeed] = db[self.nearest_calibrator]['CalGains'][ifeed,:]
 
         db.close()
 
@@ -196,11 +199,8 @@ class CreateLevel3(BaseClasses.DataStructure):
 
         nbands, nchan, ntod = tod.shape
         if self.cal_source != 'none':
-            idx = np.where((gains['Feeds'] == feed))[0]
-            if not len(idx) == 0:
-                cal_factors = gains['Gains'][idx,...]
-            else:
-                cal_factors = np.ones((1,tod.shape[0],tod.shape[1]))
+            idx = int(feed-1)
+            cal_factors = gains['Gains'][idx,...]
 
         tod = tod/cal_factors[0,...,None]
         weights = weights*cal_factors[0,...,None]**2
@@ -209,9 +209,9 @@ class CreateLevel3(BaseClasses.DataStructure):
         weights[bad] = 0
 
 
-        channel_mask = self.get_channel_mask(this_obsid,feed)
-        tod[~channel_mask] = 0
-        weights[~channel_mask] = 0
+        #channel_mask = self.get_channel_mask(this_obsid,feed)
+        #tod[~channel_mask] = 0
+        #weights[~channel_mask] = 0
 
         return tod, weights, cal_factors[0]
 
@@ -238,7 +238,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         # then the data for each scan
         last = 0
         scan_samples = []
-        for iscan,(start,end) in enumerate(tqdm(scan_edges)):
+        for iscan,(start,end) in enumerate(scan_edges):
             scan_samples = np.arange(start,end,dtype=int)
             median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{iscan:02d}'][ifeed,...]
             N = int((end-start))
