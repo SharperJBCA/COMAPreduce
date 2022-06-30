@@ -1,7 +1,7 @@
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
-
+size = comm.Get_size()
 import numpy as np
 #from comancpipeline.Tools import *
 from comancpipeline.Tools import Parser, Logging
@@ -9,6 +9,7 @@ import sys
 import h5py
 import os
 import click
+from tqdm import tqdm
 
 import ast
 class PythonLiteralOption(click.Option):
@@ -44,13 +45,14 @@ def main(parameters,classinfo, start=None, end=None):
     # Move this to parser and link to job objects?
 
     if isinstance(start,type(None)):
-        start = 0
-    if isinstance(end, type(None)):
-        end = len(filelist)
-
+        #start = 0
+        #end = len(filelist)
+        idx=np.sort(np.mod(np.arange(len(filelist)),size))
+        select = np.where((idx == rank))[0]
+        start = select[0]
+        end   = select[-1] + 1
     # Execute object jobs:
-    for filename in filelist[start:end]:
-        print('Opening : {}'.format(filename))
+    for filename in tqdm(filelist[start:end]):
         try:
             dh5 = h5py.File(filename, 'r')
         except OSError as e:
@@ -61,6 +63,7 @@ def main(parameters,classinfo, start=None, end=None):
             if rank == 0:
                 print(job,flush=True)
             try:
+            #if True:
                 dh5 = job(dh5)
             except Exception as e: 
                 fname = filename.split('/')[-1]
