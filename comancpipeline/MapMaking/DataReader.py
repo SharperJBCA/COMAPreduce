@@ -14,6 +14,18 @@ from comancpipeline.MapMaking import MapTypes, OffsetTypes
 
 from scipy.signal import find_peaks
 
+def BinModel(el_in,tod_in):
+    elmin = np.min(el_in)
+    elmax = np.max(el_in)
+    binwidth = 0.1 # degrees
+    nbins = int((elmax-elmin)/binwidth)
+    eledges = np.linspace(elmin,elmax,nbins+1)
+    elmids = (eledges[1:]+eledges[:-1])/2.
+    elmodel = np.histogram(el_in,eledges,weights=tod_in)[0]/\
+              np.histogram(el_in,eledges)[0]
+    return np.interp(el_in, elmids, elmodel)
+
+
 def GetFeeds(file_feeds, selected_feeds):
 
     feed_indices = np.array([np.argmin(np.abs(f-file_feeds)) for i,f in enumerate(selected_feeds)])
@@ -183,6 +195,10 @@ class ReadDataLevel2:
             flags = np.zeros((dset.shape[0],dset.shape[-1]),dtype=bool)
         tod_in = np.zeros(dset.shape[-1],dtype=dset.dtype)
 
+        #print
+        az = d['level1/spectrometer/pixel_pointing/pixel_az']
+        el = d['level1/spectrometer/pixel_pointing/pixel_el']
+
         scan_edges = d['level2/Statistics/scan_edges'][...]
         tod = np.zeros((len(self.FeedIndex), self.datasizes[i]))
         weights = np.zeros((len(self.FeedIndex), self.datasizes[i]))
@@ -192,6 +208,9 @@ class ReadDataLevel2:
 
             tod_in = dset[ifeed,self.iband,:]
             wei_in = wei_dset[ifeed,self.iband,:]
+
+            az_in = az[ifeed,:]
+            el_in = el[ifeed,:]
 
             flags_in = flags[ifeed,:]
             samples = np.arange(tod_in.size)
@@ -212,7 +231,8 @@ class ReadDataLevel2:
             for iscan,(start,end) in enumerate(scan_edges):
                 N = int((end-start)//self.offset_length * self.offset_length)
                 end = start+N
-
+                if (end-start) == 0:
+                    continue
                 # if medfilt name already in file - retrieve that median filter
                 # else create new medfilt and save it
                 if self.medfilt_name != 'none':
@@ -229,7 +249,15 @@ class ReadDataLevel2:
                     #pyplot.plot(tod_in[start:end])
                     #pyplot.plot(zfilter)
                     #pyplot.show()
+
+                # Make model of elevation 
+                tod_in[start:end] = tod_in[start:end] -\
+                                    BinModel(el_in[start:end],tod_in[start:end]) 
+                tod_in[start:end] = tod_in[start:end] -\
+                                    BinModel(az_in[start:end],tod_in[start:end]) 
+
                 tod[index,last:last+N]  = tod_in[start:end]
+                                          
                 weights[index,last:last+N] = wei_in[start:end]
                 last += N
 
