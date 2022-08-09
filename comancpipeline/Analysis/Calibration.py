@@ -10,7 +10,7 @@ from os import listdir, getcwd
 from os.path import isfile, join
 import grp
 import shutil
-
+import os
 
 from scipy.interpolate import interp1d
 import datetime
@@ -111,7 +111,7 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
 
-        self.database   = database
+        self.database   = database + '_{}'.format(os.get_pid())
 
     def __str__(self):
         return "Creating level2 file with channel binning of {}".format(self.average_width)
@@ -474,7 +474,7 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
 
-        self.database = database
+        self.database = database + '_{}'.format(os.get_pid())
         self.output_obsid_starts = output_obsid_starts
         self.output_obsid_ends   = output_obsid_ends
         self.output_dirs = output_dirs
@@ -1157,7 +1157,7 @@ class CompareTsys(BaseClasses.DataStructure):
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
 
-        self.database   = database
+        self.database   = database + '_{}'.format(os.get_pid())
 
     def __str__(self):
         return "Running {}".format(self.name)

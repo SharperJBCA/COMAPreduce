@@ -17,6 +17,7 @@ from comancpipeline.Tools import Coordinates, Types, stats, FileTools
 from comancpipeline.Tools.median_filter import medfilt
 from scipy.signal import find_peaks
 from scipy.optimize import minimize
+import os
 
 class Level3Statistics(BaseClasses.DataStructure):
 
@@ -26,7 +27,7 @@ class Level3Statistics(BaseClasses.DataStructure):
         super().__init__(**kwargs)
         self.name = 'Level3Statistics'
         self.level3=level3
-        self.database=database
+        self.database=database + '_{}'.format(os.get_pid())
         self.samplerate=50. # Hz
         self.nbins = 20
 

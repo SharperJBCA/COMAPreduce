@@ -328,7 +328,7 @@ class FitSource(BaseClasses.DataStructure):
         self.nfeeds_total = int(20)
 
 
-        self.database   = database
+        self.database   = database + '_{}'.format(os.get_pid())
         self.output_obsid_starts = output_obsid_starts
         self.output_obsid_ends   = output_obsid_ends
         self.output_dirs = output_dirs

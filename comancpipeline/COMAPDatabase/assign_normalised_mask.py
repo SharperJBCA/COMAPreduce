@@ -13,71 +13,101 @@ from tqdm import tqdm
 import os
 import pickle
 from scipy.ndimage import gaussian_filter1d
+from comancpipeline.COMAPDatabase.common_functions import *
+def get_data(h, nfeeds=20, 
+             nbands_level1=4, nfreq_level1=1024,
+             nfreq_level2=64,obsid=0):
+    """
+    Read the database data into a dictionary
 
-def main(filename):
+    h = h[obsid]
+    """
+    freq_mask = [None,[29.5,30],None,[33.5,34]]
+
+    output_data = {}
+
+    if not all([v in h for v in ['level2','Vane']]):
+        return output_data
+    if not all([v in h['Vane'] for v in ['Spikes']]):
+        return output_data
+
+    if not all([v in h['level2'].attrs for v in ['source','pixels']]):
+        return output_data
+
+    if not all([len(h[k].shape) == 4 for k in ['Vane/Spikes','Vane/Tsys']]):
+        return output_data
+
+    feeds = get_feeds(h)
+
+    out_keys = ['tsys','spikes']
+    keys = ['Vane/Tsys','Vane/Spikes']
+    for outk, k in zip(out_keys, keys):
+        dshape = list(h[k].shape)
+        dtype = h[k].dtype
+        if len(dshape) == 4:
+            dshape[1] = nfeeds
+        else:
+            dshape[0] = nfeeds
+        output_data[outk] = np.zeros(dshape,dtype=dtype)
+        output_data[outk][:,feeds-1,...] = h[k][...]
+
+    output_data['good'] = np.array([True])
+    return output_data
+
+def assign_normalised_mask(filename,dv=2./1024.,nfeeds=20,
+                           nbands_level1=4, nfreq_level1=1024):
+
+    file_dir = os.path.dirname(__file__) 
     h = h5py.File(filename,'r')
 
-    obsid = list(h.keys())
-    obsid = np.array(obsid).astype(int)
-    obsididx = np.argsort(obsid)
-    obsid = obsid[obsididx]
+    obsid = get_allkeys(h)
 
-    tsys = np.zeros((len(obsid), 20, 4, 1024))
-    spikes = np.zeros((len(obsid), 20, 4, 1024))
-    mask = np.zeros((len(obsid), 20, 4, 1024))
-    dv = 2./1024
-    freq = np.array([(np.arange(1024)+0.5)*-dv + 28,
-                     (np.arange(1024)+0.5)*dv  + 28,
-                     (np.arange(1024)+0.5)*-dv + 32,
-                     (np.arange(1024)+0.5)*dv  + 32])
+    output_data = {'tsys'       : np.zeros((len(obsid), 2, nfeeds, nbands_level1, nfreq_level1)),
+                   'spikes'     : np.zeros((len(obsid), 2, nfeeds, nbands_level1, nfreq_level1)),
+                   'good'       : np.zeros((len(obsid)),dtype=bool),
+                   'mask'       : np.zeros((len(obsid), nfeeds, nbands_level1, nfreq_level1))}
+
+
+    frequency = np.array([(np.arange(1024)+0.5)*-dv + 28,
+                          (np.arange(1024)+0.5)*dv  + 28,
+                          (np.arange(1024)+0.5)*-dv + 32,
+                          (np.arange(1024)+0.5)*dv  + 32])
     for i,obs in enumerate(tqdm(obsid)):
-        try:
-            feeds = np.sort([int(f[:-1]) for f in h[str(obs)]['level2'].attrs['pixels'].split() if 'A' in f])
-            if (len(feeds) != h[str(obs)]['Vane']['Tsys'].shape[1]):
-                feeds = np.append(feeds,20)
-            try:
-                tsys[i,feeds-1,:,:] = h[str(obs)]['Vane']['Tsys'][0,:,:,:]
-                spikes[i,feeds-1,:,:] = h[str(obs)]['Vane']['Spikes'][0,...]
-            except ValueError:
-                print(feeds)
-                print(tsys[i,feeds-1,:,:].shape)
-            
-        except KeyError:
-            tsys[i,feeds-1,:,:]   = np.nan
-            spikes[i,feeds-1,:,:] = np.nan
-            print(obs)
-            continue
+        #try:
+            data = get_data(h[str(obs)],obsid=obs)
+            for k,v in data.items():
+                output_data[k][i] = v
+
+        #except KeyError:
+        #    tsys[i,feeds-1,:,:]   = np.nan
+        #    spikes[i,feeds-1,:,:] = np.nan
+        #    print(obs)
+        #    continue
     h.close()
 
     # Create the normalised masks
     for ifeed in range(0,19):
         # [icut,start/end]
-        cuts = np.loadtxt('datecuts/Feed{:02d}_cuts.dat'.format(ifeed+1),dtype=float,usecols=[0,1])
-        fig = pyplot.figure()
-        for iband in range(4):
-            ax=pyplot.subplot(221+iband)
-            
+        cuts = np.loadtxt('{}/datecuts/Feed{:02d}_cuts.dat'.format(file_dir,ifeed+1),dtype=float,usecols=[0,1])
+        for iband in range(4):            
             for (start,end) in cuts:
                 lo = np.argmin((obsid - start)**2)
                 hi = np.argmin((obsid - end)**2)
-                s = np.nansum(spikes[lo:hi+1,ifeed,iband,:],axis=0)
-                w = np.sum(np.isfinite(spikes[lo:hi+1,ifeed,iband,:]),axis=0)
+                s = np.nansum(output_data['spikes'][lo:hi+1,0,ifeed,iband,:],axis=0)
+                w = np.sum(np.isfinite(output_data['spikes'][lo:hi+1,0,ifeed,iband,:]),axis=0)
                 sel = np.where((s>0.25*w))[0]
-                mask[lo:hi+1,ifeed,iband,sel] = 1
-            pyplot.imshow(mask[:,ifeed,iband,:],aspect='auto',interpolation='none')
+                output_data['mask'][lo:hi+1,ifeed,iband,sel] = 1
 
-        pyplot.suptitle(ifeed+1)
-        pyplot.savefig('figures/tsys/{:02d}_tsys_normalised_mask.png'.format(ifeed+1))
-        pyplot.close(fig)
 
     h = h5py.File(filename,'a')
 
     Nbin = 16
     for iobs,obs in enumerate(obsid):
-        if not 'Vane' in h[str(obs)]:
+        if not output_data['good'][iobs]:
             continue
-        m = 1-mask[iobs]
-        s = 1-spikes[iobs]
+
+        m = 1-output_data['mask'][iobs]
+        s = 1-output_data['spikes'][iobs,0]
         
         m = np.sum(np.reshape(m,(20, 4, 1024//16, 16)),axis=-1)
         s = np.sum(np.reshape(s,(20, 4, 1024//16, 16)),axis=-1)

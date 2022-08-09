@@ -251,11 +251,13 @@ class ReadDataLevel2:
                     #pyplot.show()
 
                 # Make model of elevation 
-                tod_in[start:end] = tod_in[start:end] -\
-                                    BinModel(el_in[start:end],tod_in[start:end]) 
-                tod_in[start:end] = tod_in[start:end] -\
-                                    BinModel(az_in[start:end],tod_in[start:end]) 
-
+                try:
+                    tod_in[start:end] = tod_in[start:end] -\
+                        BinModel(el_in[start:end],tod_in[start:end]) 
+                    tod_in[start:end] = tod_in[start:end] -\
+                        BinModel(az_in[start:end],tod_in[start:end]) 
+                except ValueError:
+                    pass
                 tod[index,last:last+N]  = tod_in[start:end]
                                           
                 weights[index,last:last+N] = wei_in[start:end]

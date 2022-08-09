@@ -61,7 +61,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.output_obsid_starts = output_obsid_starts
         self.output_obsid_ends   = output_obsid_ends
 
-        self.database = database
+        self.database = database + '_{}'.format(os.get_pid())
         self.cal_database=cal_database
 
         self.level2=level2
