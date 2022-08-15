@@ -46,6 +46,7 @@ def safe_hdf5_open(filename,mode,maxtries=10):
     for i in range(maxtries):
         try:
             h = h5py.File(filename,mode)
+            break
         except OSError:
             h = None
             time.sleep(5)

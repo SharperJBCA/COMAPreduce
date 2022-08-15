@@ -111,7 +111,7 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
 
-        self.database   = database + '_{}'.format(os.get_pid())
+        self.database   = database + '_{}'.format(os.getpid())
 
     def __str__(self):
         return "Creating level2 file with channel binning of {}".format(self.average_width)
@@ -474,7 +474,7 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
 
-        self.database = database + '_{}'.format(os.get_pid())
+        self.database = database + '_{}'.format(os.getpid())
         self.output_obsid_starts = output_obsid_starts
         self.output_obsid_ends   = output_obsid_ends
         self.output_dirs = output_dirs
@@ -645,7 +645,6 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         were made.
 
         """
-
         fname = data.filename.split('/')[-1]
 
         # Read in data that is required:
@@ -699,7 +698,6 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
 
                 tod_slice = tod[horn,:,:,start:end]
                 btod_slice = btod[horn,:,start:end]
-
                 try:
                     idHot, idCold = self.findHotCold(btod_slice[0,:])
                 except (NoHotError,NoColdError) as e:
@@ -804,6 +802,10 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         else:
             output = FileTools.safe_hdf5_open(database,'a')
 
+        print('--')
+        print(output)
+        print(database)
+        print(':::')
         obsid = BaseClasses.DataStructure.getObsID(data)
         if obsid in output:
             grp = output[obsid]
@@ -1157,7 +1159,7 @@ class CompareTsys(BaseClasses.DataStructure):
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
 
-        self.database   = database + '_{}'.format(os.get_pid())
+        self.database   = database + '_{}'.format(os.getpid())
 
     def __str__(self):
         return "Running {}".format(self.name)

@@ -18,7 +18,7 @@ from comancpipeline.Tools.WCS import ang2pix
 from comancpipeline.Tools.WCS import ang2pixWCS
 
 from comancpipeline.Analysis import CreateLevel3
-from statsmodels import robust
+
 from tqdm import tqdm
 
 from functools import partial
@@ -328,7 +328,7 @@ class FitSource(BaseClasses.DataStructure):
         self.nfeeds_total = int(20)
 
 
-        self.database   = database + '_{}'.format(os.get_pid())
+        self.database   = database + '_{}'.format(os.getpid())
         self.output_obsid_starts = output_obsid_starts
         self.output_obsid_ends   = output_obsid_ends
         self.output_dirs = output_dirs

@@ -13,7 +13,7 @@ from os.path import isfile, join
 from scipy.interpolate import interp1d
 import datetime
 from tqdm import tqdm
-import pandas as pd
+
 #from mpi4py import MPI
 import os
 #comm = MPI.COMM_WORLD
@@ -210,7 +210,7 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.medfilt_stepsize = int(medfilt_stepsize)
         self.level2=level2
         self.allowed_sources = allowed_sources
-        self.database = database + '_{}'.format(os.get_pid())
+        self.database = database + '_{}'.format(os.getpid())
     def __str__(self):
         return "Calculating noise statistics."
 
@@ -618,7 +618,7 @@ class SkyDipStats(BaseClasses.DataStructure):
         self.poly_iter = int(poly_iter)
         self.dipLo = int(dipLo)
         self.dipHi = int(dipHi)
-        self.database=database + '_{}'.format(os.get_pid())
+        self.database=database + '_{}'.format(os.getpid())
         self.allowed_sources = allowed_sources
     def __str__(self):
         return "Calculating noise statistics (skydip class)."
@@ -778,7 +778,7 @@ class FeedFeedCorrelations(BaseClasses.DataStructure):
         super().__init__(**kwargs)
         self.name = 'FeedFeedCorrelations'
         self.level2=level2
-        self.database=database + '_{}'.format(os.get_pid())
+        self.database=database + '_{}'.format(os.getpid())
 
     def __str__(self):
         return "Calculating feed feed correlations."
@@ -907,7 +907,7 @@ class SunDistance(BaseClasses.DataStructure):
         super().__init__(**kwargs)
         self.name = 'SunDistance'
         self.level2=level2
-        self.database=database + '_{}'.format(os.get_pid()) 
+        self.database=database + '_{}'.format(os.getpid()) 
 
     def __str__(self):
         return "Calculating sun distance."
@@ -1119,7 +1119,7 @@ class SpikeFlags(BaseClasses.DataStructure):
         super().__init__(**kwargs)
         self.name = 'Spikes'
         self.level2=level2
-        self.database=database + '_{}'.format(os.get_pid())
+        self.database=database + '_{}'.format(os.getpid())
 
     def __str__(self):
         return "Calculating spike mask"

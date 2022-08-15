@@ -15,7 +15,6 @@ import shutil
 from comancpipeline.Tools.WCS import DefineWCS
 from comancpipeline.Tools.WCS import ang2pix
 from comancpipeline.Tools.WCS import ang2pixWCS
-from statsmodels import robust
 
 from astropy import wcs 
 import h5py
