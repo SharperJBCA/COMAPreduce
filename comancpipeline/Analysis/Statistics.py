@@ -102,7 +102,7 @@ class ScanEdges(BaseClasses.DataStructure):
     """
 
     def __init__(self, 
-                 allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
+                 allowed_sources = ['co','fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
                  level2='level2',
                  scan_edge_type='RepointEdges',**kwargs):
         """
@@ -193,7 +193,7 @@ class FnoiseStats(BaseClasses.DataStructure):
     Takes level 1 files, bins and calibrates them for continuum analysis.
     """
 
-    def __init__(self, allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
+    def __init__(self, allowed_sources = ['co','fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
                  nbins=50, 
                  samplerate=50, 
                  medfilt_stepsize=5000,
@@ -599,7 +599,7 @@ class SkyDipStats(BaseClasses.DataStructure):
     Does not require scan_edges to run
     """
 
-    def __init__(self,allowed_sources = ['fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
+    def __init__(self,allowed_sources = ['co','fg','GField','Field','TauA','CasA','Jupiter','jupiter','CygA'],
                  nbins=50, 
                  samplerate=50,
                  medfilt_stepsize=5000, 

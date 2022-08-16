@@ -95,6 +95,8 @@ def main(parameters,classinfo, start=None, end=None):
             database = mainConfig['Inputs']['database']
             db = h5py.File(database,'a')
             for pid in pids:
+                if not os.path.exists(f'{database}_{pid}'):
+                    continue
                 db_pid = h5py.File(f'{database}_{pid}','r')
                 for k,v in db_pid.items():
                     if k in db:
