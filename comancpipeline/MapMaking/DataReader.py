@@ -48,6 +48,7 @@ class ReadDataLevel2:
                  feed_weights=None,
                  medfilt_stepsize=500,
                  medfilt_name='none',
+                 level3 = './',
                  map_info={},
                  **kwargs):
 
@@ -65,6 +66,8 @@ class ReadDataLevel2:
         self.psds = None
         self.psdfreqs = None
         self.feed_weights=feed_weights
+
+        self.level3 = level3
 
         # SETUP MAPS:
         crval = map_info['crval']
@@ -101,14 +104,15 @@ class ReadDataLevel2:
 
         # Will define Nsamples, datasizes[], and chunks[[]]
         for filename in tqdm(filelist):
-            try:
-                self.countDataSize(filename)
-            except KeyError:
-                print('BAD FILE', filename)
+            #try:
+            print(filename)
+            self.countDataSize(filename)
+            #except KeyError:
+            #    print('BAD FILE', filename)
 
         # Store the Time ordered data as required
-        self.pixels = np.zeros(self.Nsamples,dtype=int)
-        self.edge_mask = np.zeros(self.Nsamples,dtype=bool)
+        self.pixels      = np.zeros(self.Nsamples,dtype=int)
+        self.edge_mask   = np.zeros(self.Nsamples,dtype=bool)
         self.all_weights = np.zeros(self.Nsamples)
 
         if self.keeptod:
@@ -130,10 +134,10 @@ class ReadDataLevel2:
                                                     self.Nsamples)
 
         for i, filename in enumerate(tqdm(filelist)):
-            try:
-                self.readPixels(i,filename)
-            except KeyError:
-                print('BAD FILE', filename)
+            #try:
+            self.readPixels(i,filename)
+            #except KeyError:
+            #    print('BAD FILE', filename)
 
         #for i, filename in enumerate(tqdm(filelist)):
         #    try:
@@ -165,7 +169,7 @@ class ReadDataLevel2:
             return
 
         N = 0
-        scan_edges = d['level2/Statistics/scan_edges'][:]
+        scan_edges = d[f'{self.level3}/scan_edges'][:]
         for (start,end) in scan_edges:
             N += (end-start)//self.offset_length * self.offset_length
         d.close()
@@ -187,19 +191,19 @@ class ReadDataLevel2:
         Want to select each feed and average the data over some frequency range
         """
 
-        dset = d['level3/tod']
-        wei_dset = d['level3/weights']
-        if 'level2/Flags/sigma_clip_flag' in d:
-            flags = d['level2/Flags/sigma_clip_flag']
+        dset = d[f'{self.level3}/tod']
+        wei_dset = d[f'{self.level3}/weights']
+        if f'{self.level3}/Flags/sigma_clip_flag' in d:
+            flags = d[f'{self.level3}/Flags/sigma_clip_flag']
         else:
             flags = np.zeros((dset.shape[0],dset.shape[-1]),dtype=bool)
         tod_in = np.zeros(dset.shape[-1],dtype=dset.dtype)
 
         #print
-        az = d['level1/spectrometer/pixel_pointing/pixel_az']
-        el = d['level1/spectrometer/pixel_pointing/pixel_el']
+        az = d[f'{self.level3}/pixel_pointing/pixel_az']
+        el = d[f'{self.level3}/pixel_pointing/pixel_el']
 
-        scan_edges = d['level2/Statistics/scan_edges'][...]
+        scan_edges = d[f'{self.level3}/scan_edges'][...]
         tod = np.zeros((len(self.FeedIndex), self.datasizes[i]))
         weights = np.zeros((len(self.FeedIndex), self.datasizes[i]))
 
@@ -220,7 +224,7 @@ class ReadDataLevel2:
 
 
             if self.flag_spikes:
-                spikemask = d['level2/Statistics/Spikes/mask'][...]
+                spikemask = d[f'{self.level3}/mask'][ifeed,...].astype(bool)
                 wei_in[~spikemask] = 0
                 tod_in[~spikemask] = 0
 
@@ -286,7 +290,7 @@ class ReadDataLevel2:
         d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
-        self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
+        self.FeedIndex = GetFeeds(d[f'{self.level3}/feeds'][...], self.Feeds)
 
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)
@@ -316,14 +320,14 @@ class ReadDataLevel2:
         d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
-        self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
+        self.FeedIndex = GetFeeds(d[f'{self.level3}/feeds'][...], self.Feeds)
 
         # We store all the pointing information
-        x  = d['level1/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
-        y  = d['level1/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
-        az  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
-        el  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
-        tod= d['level3/tod'][0,self.iband,:]
+        x  = d[f'{self.level3}/pixel_pointing/pixel_ra'][self.FeedIndex,:]
+        y  = d[f'{self.level3}/pixel_pointing/pixel_dec'][self.FeedIndex,:]
+        az  = d[f'{self.level3}/pixel_pointing/pixel_az'][self.FeedIndex,:]
+        el  = d[f'{self.level3}/pixel_pointing/pixel_el'][self.FeedIndex,:]
+        tod= d[f'{self.level3}/tod'][0,self.iband,:]
         dt = 1./50.
         #x  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
         #y  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
@@ -333,7 +337,7 @@ class ReadDataLevel2:
         #                                     Coordinates.comap_longitude,
         #                                     Coordinates.comap_latitude)
 
-        scan_edges = d['level2/Statistics/scan_edges'][...]
+        scan_edges = d[f'{self.level3}/scan_edges'][...]
         pixels = np.zeros((x.shape[0], self.datasizes[i]))
         speed_mask = np.zeros((x.shape[0], self.datasizes[i]),dtype=bool)
         last = 0
@@ -373,7 +377,7 @@ class ReadDataLevel2:
         d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
-        self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
+        self.FeedIndex = GetFeeds(d[f'{self.level3}/feeds'][...], self.Feeds)
 
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)
@@ -499,7 +503,7 @@ class ReadDataLevel2_MADAM:
             return
 
         N = 0
-        scan_edges = d['level2/Statistics/scan_edges'][:]
+        scan_edges = d['level2/scan_edges'][:]
         for (start,end) in scan_edges:
             N += (end-start)//self.offset_length * self.offset_length
         d.close()
@@ -571,14 +575,14 @@ class ReadDataLevel2_MADAM:
         d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
-        self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
+        self.FeedIndex = GetFeeds(d[f'{self.level3}/feeds'][...], self.Feeds)
 
         # We store all the pointing information
-        x0  = d['level1/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
-        y0  = d['level1/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
-        x   = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
-        y   = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
-        mjd  = d['level1/spectrometer/MJD'][:]
+        x0  = d[f'{self.level3}/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
+        y0  = d[f'{self.level3}/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
+        x   = d[f'{self.level3}/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
+        y   = d[f'{self.level3}/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
+        mjd  = d[f'{self.level3}/spectrometer/MJD'][:]
         for i in range(x.shape[0]):
             x[i],y[i] = Coordinates.h2e_full(x[i],y[i],mjd,Coordinates.comap_longitude,Coordinates.comap_latitude)
 
@@ -605,7 +609,7 @@ class ReadDataLevel2_MADAM:
         d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
-        self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
+        self.FeedIndex = GetFeeds(d[f'{self.level3}/feeds'][...], self.Feeds)
 
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)

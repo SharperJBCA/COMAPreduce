@@ -26,7 +26,7 @@ import shutil
 
 from tqdm import tqdm
 
-__level3_version__='v062022'
+__level3_version__='v081722'
 
 def subtract_filters(tod,az,el,filter_tod, filter_coefficients, atmos, atmos_coefficient):
     """
@@ -67,6 +67,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.level2=level2
         self.level3=level3
         self.cal_source=cal_source
+        self.nearest_calibrator = 0
 
         self.set_permissions = set_permissions
         self.permissions_group = permissions_group
@@ -315,7 +316,7 @@ class CreateLevel3(BaseClasses.DataStructure):
         self.all_frequency = np.zeros((nchannels)) 
         self.all_auto = np.zeros((20,nchannels)) 
         self.all_mask = np.zeros((20,tod_shape[-1]))
-        self.all_cal_factors = np.zeros((20,4,64))
+        self.all_cal_factors = np.ones((20,4,64))
         # Read in data from each feed
         for ifeed,feed in enumerate(tqdm(feeds,desc='Looping over feeds')):
             if feeds[ifeed] == 20:
@@ -371,6 +372,16 @@ class CreateLevel3(BaseClasses.DataStructure):
         output['cal_factors'].attrs['source'] = self.cal_source
         output['cal_factors'].attrs['calibrator_obsid'] = self.nearest_calibrator
 
+        data['level1/spectrometer'].copy('pixel_pointing',output)
+        data['level1/spectrometer'].copy('feeds',output)
+        data['level1'].copy('comap',output)
+        data['level2/Statistics'].copy('scan_edges',output)
+        if 'Flags' in data['level2']:
+            data['level2'].copy('Flags',output)
+        if not 'Flags' in output:
+            output.create_group('Flags')
+        if 'Spikes' in 'level2/Statistics':
+            data['level2/Statistics'].copy('Spikes',output['Flags'])
         output.close()
         
         if self.level3 in data.keys():

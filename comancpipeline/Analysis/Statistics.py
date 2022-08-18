@@ -132,7 +132,7 @@ class ScanEdges(BaseClasses.DataStructure):
         self.source  = self.getSource(data)
         comment = self.getComment(data)
 
-        if (f'{self.level2}/Statistics' in data) & (not self.overwrite):
+        if (f'{self.level2}/Statistics/scan_edges' in data) & (not self.overwrite):
             return data
 
         self.logger(f'{fname}:{self.name}: {self.source} - {comment}')
@@ -315,7 +315,7 @@ class FnoiseStats(BaseClasses.DataStructure):
 
                         self.powerspectra[ifeed,iband,ichan,iscan,:] = ps
                         self.freqspectra[ifeed,iband,ichan,iscan,:]  = nu
-                        self.fnoise_fits[ifeed,iband,ichan,iscan,:] = f_fits
+                        self.fnoise_fits[ifeed,iband,ichan,iscan,:]  = f_fits
 
                     pbar.update(1)
 
@@ -356,6 +356,7 @@ class FnoiseStats(BaseClasses.DataStructure):
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing noise stats to level 2 file ({fname})')
         self.write(data)
+        
         if not isinstance(self.database,type(None)):
 
             feeds, feed_idx, feed_dict =self.getFeeds(data,'all')
@@ -585,6 +586,7 @@ class FnoiseStats(BaseClasses.DataStructure):
             statistics.create_dataset(dname,  data=dset)
 
         # Need to write filter_tods per scan
+        
         for iscan,dset in enumerate(self.filter_tods):
             dname = 'FilterTod_Scan{:02d}'.format(iscan)
             if dname in statistics:
