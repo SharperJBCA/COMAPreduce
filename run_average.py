@@ -33,8 +33,6 @@ def call_main(parameters, classinfo, start, end):
 def main(parameters,classinfo, start=None, end=None):
     # Get the inputs:
     jobobjs, prejobobjs, filelist, mainConfig, classConfig, logger = Parser.parse_parameters(parameters)
-    
-    filelist = filelist[0:2]
     logger(f'STARTING')
 
     # Only let rank 0 do prejobs
@@ -98,10 +96,14 @@ def main(parameters,classinfo, start=None, end=None):
                 if not os.path.exists(f'{database}_{pid}'):
                     continue
                 db_pid = h5py.File(f'{database}_{pid}','r')
-                for k,v in db_pid.items():
-                    if k in db:
-                        del db[k]
-                    db_pid.copy(k,db)
+                for obsid,obsdata in db_pid.items():
+                    if obsid in db:
+                        for k,v in obsdata.items():
+                            if k in db[obsid]:
+                                del db[obsid][k]
+                            db_pid[obsid].copy('{}'.format(k),db[obsid])
+                    else:
+                        db_pid.copy(obsid,db)
                 db_pid.close()
                 os.remove(f'{database}_{pid}')
 
