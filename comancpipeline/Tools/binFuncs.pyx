@@ -17,9 +17,9 @@ def binValues(double[:] image, long[:] pixels, double[:] weights=None, long[:] m
     mask    - Bool array, skip certain TOD values, 0 = skip, 1 = include
     """
 
-    cdef int i,j,k  
-    cdef int nsamples = pixels.size
-    cdef int maxbin   = image.size
+    cdef long i,j,k  
+    cdef long nsamples = pixels.size
+    cdef long maxbin   = image.size
     for i in range(nsamples):
         if not isinstance(mask, type(None)):
             if mask[i] == 0:
@@ -34,10 +34,10 @@ def binValues(double[:] image, long[:] pixels, double[:] weights=None, long[:] m
 
 def binValues2Map(double[:] image, long[:] pixels, double[:] weights, long[:] offsetpixels):
 
-    cdef int i
-    cdef int nsamples = pixels.size
-    cdef int maxbin   = image.size
-    cdef int noffsets = weights.size
+    cdef long i
+    cdef long nsamples = pixels.size
+    cdef long maxbin   = image.size
+    cdef long noffsets = weights.size
     for i in range(nsamples):
 
         if (pixels[i] >= 0) & (pixels[i] < maxbin) & (offsetpixels[i] >= 0) & (offsetpixels[i] < noffsets):
@@ -54,10 +54,10 @@ def EstimateResidual(double[:] residual,
                      long[:] offseti, 
                      long[:] pixel):
 
-    cdef int i
-    cdef int nsamples = pixel.size
-    cdef int maxbin1  = skyval.size
-    cdef int noffsets  = residual.size
+    cdef long i
+    cdef long nsamples = pixel.size
+    cdef long maxbin1  = skyval.size
+    cdef long noffsets  = residual.size
     
     for i in range(nsamples):
 
@@ -75,10 +75,10 @@ def EstimateResidualSimplePrior(double[:] output,
                                 long[:] offseti, 
                                 long[:] pixel):
 
-    cdef int i
-    cdef int nsamples = pixel.size
-    cdef int maxbin1  = resid_sky.size
-    cdef int noffsets  = output.size
+    cdef long i
+    cdef long nsamples = pixel.size
+    cdef long maxbin1  = resid_sky.size
+    cdef long noffsets  = output.size
     for i in range(nsamples):
 
         if ((pixel[i] >= 0) & (pixel[i] < maxbin1)) &\
@@ -99,10 +99,10 @@ def EstimateResidualFlatMapPrior(double[:] residual,
                                  double[:] pixhits,
                                  double[:] pcounts):
 
-    cdef int i
-    cdef int nsamples = pixel.size
-    cdef int maxbin1  = skyval.size
-    cdef int noffsets  = residual.size
+    cdef long i
+    cdef long nsamples = pixel.size
+    cdef long maxbin1  = skyval.size
+    cdef long noffsets  = residual.size
     
     for i in range(nsamples):
 

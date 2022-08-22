@@ -17,7 +17,7 @@ Sutton et al. 2011
 import numpy as np
 from matplotlib import pyplot
 from scipy.sparse.linalg import LinearOperator
-
+from comancpipeline.Tools import binFuncs
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 size = comm.Get_size()
@@ -71,7 +71,7 @@ def mpi_sum(x):
 
 
 
-def cgm(A,b,x0 = None,niter=100,threshold=1e-7,verbose=False):
+def cgm(A,b,x0 = None,niter=100,threshold=1e-5,verbose=False):
     """
     Biconjugate CGM implementation from Numerical Recipes 2nd, pg 83-85
     
@@ -114,9 +114,11 @@ def cgm(A,b,x0 = None,niter=100,threshold=1e-7,verbose=False):
         p = r + beta*p
         pb= rb+ beta*pb
         
-        delta = np.sum(r*rb)/thresh0
+        delta = mpi_sum(r*rb)/thresh0
         if verbose:
             print(delta)
+        if rank ==0:
+            print(delta, threshold)
         if delta < threshold:
             break
         
@@ -140,9 +142,13 @@ def bin_offset_map(pointing,
     else:
         z = offsets
 
-    m = np.histogram(pointing,pixel_edges,
-                     weights=z*weights)[0]
-    h = np.histogram(pointing,pixel_edges,weights=weights)[0]
+    m = np.zeros(int(pixel_edges[-1])+1)
+    h = np.zeros(int(pixel_edges[-1])+1)
+    binFuncs.binValues(m, pointing, weights=z*weights)
+    binFuncs.binValues(h, pointing, weights=weights)
+    #m = np.histogram(pointing,pixel_edges,
+    #                 weights=z*weights)[0]
+    #h = np.histogram(pointing,pixel_edges,weights=weights)[0]
 
     return m, h
 
@@ -290,6 +296,7 @@ def run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges):
     for irank in range(1,size):
         if (rank == 0) & (size > 1):
             m_node2 = np.zeros(m.size)
+            print(f'{rank} waiting for {irank}')
             comm.Recv(m_node2, source=irank,tag=irank)
             m += m_node2
             h_node2 = np.zeros(m.size)
@@ -299,12 +306,15 @@ def run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges):
             comm.Recv(n_node2, source=irank,tag=irank)
             n += n_node2
 
-        elif (rank !=0 ) & (size > 1):
+        elif (rank !=0 ) & (rank == irank) & (size > 1):
+            print(f'{irank} sending to 0')
             comm.Send(m, dest=0,tag=irank)
             comm.Send(h, dest=0,tag=irank)
             comm.Send(n, dest=0,tag=irank)
 
     #m[h2 != 0] /= h2[h2 != 0]
+
+    #comm.Bcast(h,root=0)
 
     if rank == 0:
         m[h!=0] /= h[h!=0]
@@ -312,7 +322,7 @@ def run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges):
 
         return {'map':n-m,'naive':n, 'weight':h}
     else:
-        return None
+        return None #{'weight':h}
 
 
 def test():
@@ -376,8 +386,6 @@ def test():
         _weights[:] = weights[:my_step]
 
 
-    
-    print('hello')
     
     for irank in range(1,size):
         if (rank == 0):

@@ -105,7 +105,6 @@ class ReadDataLevel2:
         # Will define Nsamples, datasizes[], and chunks[[]]
         for filename in tqdm(filelist):
             #try:
-            print(filename)
             self.countDataSize(filename)
             #except KeyError:
             #    print('BAD FILE', filename)
@@ -154,7 +153,7 @@ class ReadDataLevel2:
         self.naive.average()
         self.offset_residuals.accumulate(-self.naive.sky_map[self.pixels],self.all_weights,[0,self.pixels.size])
         self.offset_residuals.average()
-
+        
     def countDataSize(self,filename):
         """
         Opens each datafile and determines the number of samples
@@ -235,6 +234,7 @@ class ReadDataLevel2:
             for iscan,(start,end) in enumerate(scan_edges):
                 N = int((end-start)//self.offset_length * self.offset_length)
                 end = start+N
+                print('SCAN LENGTH', iscan, end-start)
                 if (end-start) == 0:
                     continue
                 # if medfilt name already in file - retrieve that median filter
@@ -349,11 +349,13 @@ class ReadDataLevel2:
             yc = y[:,start:end]
             azc= az[:,start:end]
             elc= el[:,start:end]
+        
             x_veloc = np.gradient(azc[0],dt)*np.cos(np.nanmean(elc)*np.pi/180.)
             y_veloc = np.gradient(elc[0],dt)
             veloc = np.sqrt(x_veloc**2 + y_veloc**2)
 
             speed_mask[:,last:last+N] = ( np.abs(veloc) > 0.45 ) | (np.abs(veloc) < 0.1) # deg/s
+
             yshape = yc.shape
             # convert to Galactic
             if 'GLON' in self.naive.wcs.wcs.ctype[0]:

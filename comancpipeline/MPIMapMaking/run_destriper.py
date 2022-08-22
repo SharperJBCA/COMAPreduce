@@ -3,11 +3,30 @@ import Destriper
 import COMAPData
 import sys
 from astropy.wcs import WCS
+from matplotlib import pyplot
+from astropy.io import fits
 
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
+
+def write_map(maps,map_info,postfix=''):
+
+    wcs = map_info['wcs']
+    nxpix = map_info['nxpix']
+    nypix = map_info['nypix']
+    hdu = fits.PrimaryHDU(np.reshape(maps['map'],(nxpix,nypix)),
+                                     header=wcs.to_header())
+    #cov = fits.ImageHDU(variance,name='Covariance',header=wcs.to_header())
+    #hits = fits.ImageHDU(hits,name='Hits',header=wcs.to_header())
+    naive = fits.ImageHDU(np.reshape(maps['naive'],(nxpix,nypix)),
+                          name='Naive',header=wcs.to_header())
+
+    hdul = fits.HDUList([hdu,naive])
+    fname = 'co2.fits'
+    hdul.writeto(fname,overwrite=True)
+
 
 if __name__ == "__main__":
 
@@ -25,6 +44,10 @@ if __name__ == "__main__":
     nxpix = nxpix
     nypix = nypix
 
+    map_info = {'wcs':w,
+                'nxpix':nxpix,
+                'nypix':nypix}
+
     pixel_edges = np.arange(nxpix*nypix)
 
     filelist = np.loadtxt(sys.argv[1],dtype=str)
@@ -38,7 +61,13 @@ if __name__ == "__main__":
 
     offset_length = 50
     feeds = [1,2,3,5,6,8,9,11,12,13,14,15,16,17,18,19]
-    tod, weights, pointing = COMAPData.read_comap_data(filelist,w,
+    tod, weights, pointing, az = COMAPData.read_comap_data(filelist,map_info,
                                                        offset_length=offset_length,
                                                        feeds=feeds)
-    run_destriper(pointing,tod,weights,offset_length,pixel_edges)
+    maps = Destriper.run_destriper(pointing,tod,weights,
+                                   offset_length,pixel_edges)
+
+    if rank == 0:
+        write_map(maps,map_info,postfix='')
+        pyplot.imshow(np.reshape(maps['map'],(nxpix,nypix)))
+        pyplot.savefig('test.png')
