@@ -242,6 +242,9 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         nHorns, nSBs, nChans, nSamples = tod.shape
         nHorns = len(self.feeds)
 
+        fname = data.filename.split('/')[-1]
+        vanefile = '{}/{}_{}'.format(self.calvanepath,self.calvane_prefix,fname)
+        vane = h5py.File(vanefile,'r')
 
         frequency = data['spectrometer/frequency'][...]
         self.avg_frequency = np.zeros((nSBs, nChans))
@@ -264,8 +267,8 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
 
         for ifeed, feed in enumerate(tqdm(self.feeds,desc=self.name)):
             feed_array_index = self.feed_dict[feed]
+            J_temp = vane['J_Temp'][ifeed,:]
             d = data['spectrometer/tod'][feed_array_index,...] 
-
             for sb in range(nSBs):
                 # Weights/gains already snipped to just the feeds we want
                 w, g,chan_flag = 1./rms[0,ifeed, sb, :]**2, gain[0,ifeed, sb, :], spikes[0,ifeed,sb,:]
@@ -279,7 +282,9 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
                         continue
 
                     if self.cal_mode.upper() == 'VANE':
-                        caltod = d[sb,chan*width:(chan+1)*width,:]/g[chan*width:(chan+1)*width,np.newaxis]
+                        caltod = d[sb,chan*width:(chan+1)*width,:]/g[chan*width:(chan+1)*width,np.newaxis] -\
+                                 J_temp[None,:]*tsys[0,ifeed,sb,chan*width:(chan+1)*width,None]
+
                     elif self.cal_mode.upper() == 'NOCAL':
                         caltod = d[sb,chan*width:(chan+1)*width,:]
                     elif self.cal_mode.upper() == 'ASTRO':
@@ -295,6 +300,7 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
                         self.avg_rms[ifeed,sb,chan] = np.sqrt(1./w)
 
                     self.avg_frequency[sb,chan] = np.mean(frequency[sb,chan*width:(chan+1)*width])
+        vane.close()
 
     def getcalibration_skydip(self,data):
         """
@@ -439,6 +445,238 @@ class CreateLevel2Cont(BaseClasses.DataStructure):
         lvl2.attrs['vane-version'] = lvl2['Vane'].attrs['version']
 
 
+class CalcGainCorrection(BaseClasses.DataStructure):
+    """
+    Implements Jonas' gain/tsys correction algorithm.
+
+    Based on the implementation at:
+    https://github.com/htihle/gain_cleaning 
+
+    Model: y(t, nu) = dg(t) + dT(t) / Tsys(nu) + alpha(t) / Tsys(nu) (nu - nu_0) / nu_0, nu_0 = 30 GHz
+    """
+    def __init__(self, feeds='all', 
+                 output_obsid_starts = [0],
+                 output_obsid_ends   = [None],
+                 output_dirs = ['.'],
+                 nworkers= 1,
+                 database=None,
+                 average_width=512,
+                 calvanedir='CalVanes',
+                 cal_mode = 'Vane', 
+                 cal_prefix='',level2='level2',
+                 data_dirs=None,
+                 set_permissions=True,
+                 permissions_group='comap',
+                 calvane_prefix='CalVane',**kwargs):
+        """
+        nworkers - how many threads to use to parallise the fitting loop
+        average_width - how many channels to average over
+        """
+        super().__init__(**kwargs)
+
+        self.name = 'CalcGainCorrection'
+        self.feeds_select = feeds
+
+        # We will be writing level 2 data to multiple drives,
+        #  drive to write to will be set by the obsid of the data
+        self.output_dirs = output_dirs
+        self.output_obsid_starts = output_obsid_starts
+        self.output_obsid_ends   = output_obsid_ends
+
+        if isinstance(data_dirs,list):
+            self.data_dirs = data_dirs
+        else:
+            self.data_dirs = [data_dirs]
+
+        self.nworkers = int(nworkers)
+        self.average_width = int(average_width)
+
+        self.calvanedir = calvanedir
+        self.calvane_prefix = calvane_prefix
+
+        self.cal_mode = cal_mode
+        self.cal_prefix=cal_prefix
+
+        self.level2=level2
+        self.set_permissions = set_permissions
+        self.permissions_group = permissions_group
+
+        self.database   = database + '_{}'.format(os.getpid())
+
+    def __str__(self):
+        return "Calculating Jonas' gain/temperature corrections"
+
+    def run(self,data):
+        """
+        Sets up feeds that are needed to be called,
+        grabs the pointer to the time ordered data,
+        and calls the averaging routine in SourceFitting.FitSource.average(*args)
+
+        """
+        # Setup feed indexing
+        # self.feeds : feed horn ID (in array indexing, only chosen feeds)
+        # self.feedlist : all feed IDs in data file (in lvl1 indexing)
+        # self.feeddict : map between feed ID and feed array index in lvl1
+        self.feeds, self.feed_index, self.feed_dict = self.getFeeds(data,self.feeds_select)
+
+        # Opening file here to write out data bit by bit
+        self.i_nFeeds, self.i_nBands, self.i_nChannels,self.i_nSamples = data['spectrometer/tod'].shape
+        fname = data.filename.split('/')[-1]
+        vane = h5py.File('{}/{}_{}'.format(self.calvanepath,self.calvane_prefix,fname),'r')
+        vane_edges = vane['VaneEdges'][...]
+
+        alpha_prior = -1
+        fknee_prior = 5.
+        todshape = data['spectrometer/tod'].shape
+        self.dg   = np.zeros((len(self.feeds), todshape[-1]))
+        self.dT   = np.zeros((len(self.feeds), todshape[-1]))
+        self.alpha= np.zeros((len(self.feeds), todshape[-1]))
+        
+        for ii,(ifeed, feed) in enumerate(zip(self.feed_index, tqdm(self.feeds))):
+            start,end = vane_edges[0,-1],vane_edges[1,0]
+            tod = data['spectrometer/tod'][ifeed,...,int(start):int(end)]
+            tsys = vane['Tsys'][0,ifeed,...]
+            y = tod/np.nanmean(tod,axis=-1)[:,:,None] - 1
+
+            sigma0_prior = np.nanstd(y[:,:,1::2]-y[:,:,:-1:2],axis=-1)
+
+            self.dg[ii,int(start):int(end)], self.dT[ii,int(start):int(end)], self.alpha[ii,int(start):int(end)] = self.fit_gain_fluctuations(y, tsys, 
+                                                                                        fknee_prior,
+                                                                                        alpha_prior)
+        vane.close()
+            
+    def fit_gain_fluctuations(self,y_feed, tsys, fknee_prior, alpha_prior):
+        """
+        Model: y(t, nu) = dg(t) + dT(t) / Tsys(nu) + alpha(t) / Tsys(nu) (nu - nu_0) / nu_0, nu_0 = 30 GHz
+        """
+        
+        nsb, Nfreqs, Ntod = y_feed.shape
+        
+        scaled_freqs = np.linspace(-4.0 / 30, 4.0 / 30, 4 * 1024)  # (nu - nu_0) / nu_0
+        scaled_freqs = scaled_freqs.reshape((4, 1024))
+        scaled_freqs[(0, 2), :] = scaled_freqs[(0, 2), ::-1]  # take into account flipped sidebands
+        
+        P = np.zeros((4, Nfreqs, 2))
+        F = np.zeros((4, Nfreqs, 1))
+        P[:, :,0] = 1 / tsys
+        P[:, :,1] = scaled_freqs/tsys
+        F[:, :,0] = 1
+
+        end_cut = 100
+        # Remove edge frequencies and the bad middle frequency
+        y_feed[:, :4] = 0
+        y_feed[:, -end_cut:] = 0
+        P[:, :4] = 0
+        P[:, -end_cut:] = 0
+        F[:, :4] = 0
+        F[:, -end_cut:] = 0
+        F[:, 512] = 0
+        P[:, 512] = 0
+        y_feed[:, 512] = 0
+        
+        calibrated = y_feed * tsys[:, :, None]  # only used for plotting
+        calibrated[(0, 2), :] = calibrated[(0, 2), ::-1]
+        
+        # Reshape to flattened grid
+        P = P.reshape((4 * Nfreqs, 2))
+        F = F.reshape((4 * Nfreqs, 1))
+        y_feed = y_feed.reshape((4 * Nfreqs, Ntod))
+
+        # Fit dg, dT and alpha
+        a_feed, m_feed = self.gain_temp_sep(y_feed, P, F, fknee_prior, alpha_prior)
+        dg = a_feed[0]
+        dT = m_feed[0]
+        alpha = m_feed[1]        
+
+        return dg, dT, alpha
+
+    def PS_1f(self,freqs, sigma0, fknee, alpha):
+        return sigma0**2*(1 + (freqs/fknee)**alpha)
+
+    def gain_temp_sep(self, y, P, F, fknee_g, alpha_g, samprate=50):
+        """
+        """
+        freqs = np.fft.rfftfreq(len(y[0]), d=1.0/samprate)
+        n_freqs, n_tod = y.shape
+        sigma0_est = np.std(y[:,1:] - y[:,:-1], axis=1)/np.sqrt(2)
+        sigma0_est = np.mean(sigma0_est)
+
+        Cf = self.PS_1f(freqs, sigma0_est, fknee_g, alpha_g)
+        Cf[0] = 1
+    
+        Z = np.eye(n_freqs, n_freqs) - P.dot(np.linalg.inv(P.T.dot(P))).dot(P.T)
+        
+        RHS = np.fft.rfft(F.T.dot(Z).dot(y))
+        
+        z = F.T.dot(Z).dot(F)
+        a_bestfit_f = RHS/(z + sigma0_est**2/Cf)
+        a_bestfit = np.fft.irfft(a_bestfit_f, n=n_tod)
+
+        m_bestfit = np.linalg.inv(P.T.dot(P)).dot(P.T).dot(y - F*a_bestfit)
+    
+        return a_bestfit, m_bestfit
+
+    def __call__(self,data):
+        """
+        Modify baseclass __call__ to change file from the level1 file to the level2 file.
+        """
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+
+        self.obsid   = self.getObsID(data)
+        self.comment = self.getComment(data)
+        prefix = data.filename.split('/')[-1].split('.hd5')[0]
+        self.output_dir = self.getOutputDir(self.obsid,
+                                            self.output_dirs,
+                                            self.output_obsid_starts,
+                                            self.output_obsid_ends)
+        self.calvanepath= '{}/{}'.format(self.output_dir,self.calvanedir)
+
+        data_dir_search = np.where([os.path.exists('{}/{}_Level2Cont.hd5'.format(data_dir,prefix)) for data_dir in self.data_dirs])[0]
+        if len(data_dir_search) > 0:
+            self.output_dir = self.data_dirs[data_dir_search[0]]
+        self.outfilename = '{}/{}_Level2Cont.hd5'.format(self.output_dir,prefix)        
+
+        self.logger(f'{fname}:{self.name}: Running fit...')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing...')
+        self.write(data)
+        self.logger(f'{fname}:{self.name}: Done.')
+        # Now change to the level2 file for all future analyses.
+        return data
+
+    def write(self,data):
+        """
+        """
+        # We will store these in a separate file and link them to the level2s
+        fname = data.filename.split('/')[-1]
+        outfile = '{}/{}_{}'.format(self.calvanepath,self.calvane_prefix,fname)
+        if os.path.exists(outfile):
+            output = h5py.File(outfile,'a')
+        else:
+            output = h5py.File(outfile,'w')
+
+
+        # Set permissions and group
+        if self.set_permissions:
+            try:
+                os.chmod(outfile,0o664)
+                shutil.chown(outfile, group=self.permissions_group)
+            except PermissionError:
+                self.logger(f'{self.name}: Warning, couldnt set the file permissions.')
+
+        # Store datasets in root
+        dnames = ['J_Temp','J_Gain','J_alpha']
+        dsets  = [self.dT,self.dg,self.alpha]
+        for (dname, dset) in zip(dnames, dsets):
+            if dname in output:
+                del output[dname]
+            output.create_dataset(dname,  data=dset)
+                        
+        output.close()
 
 class CalculateVaneMeasurement(BaseClasses.DataStructure):
     """
@@ -696,7 +934,7 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
                 if horn == 0:
                     self.vane_samples[vane_event,:] = int(start), int(end)
 
-                tod_slice = tod[horn,:,:,start:end]
+                tod_slice   = tod[horn,:,:,start:end]
                 btod_slice = btod[horn,:,start:end]
                 try:
                     idHot, idCold = self.findHotCold(btod_slice[0,:])
