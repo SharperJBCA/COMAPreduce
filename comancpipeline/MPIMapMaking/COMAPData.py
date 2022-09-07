@@ -90,22 +90,22 @@ def getTOD(filename,datasize,offset_length,Feeds,iband,level3='.'):
     """
 
     d = h5py.File(filename,'r')
-    dset     = d[f'{level3}/tod']
+    dset     = d[f'{level3}/filtered_tod']
+    dset_og     = d[f'{level3}/tod']
     wei_dset = d[f'{level3}/weights']
-    FeedIndex = GetFeeds(d[f'{level3}/feeds'][...], Feeds)
-
-    az_dset = d[f'{level3}/pixel_pointing/pixel_az']
+    FeedIndex = GetFeeds(np.arange(1,21), Feeds)
 
     scan_edges = d[f'{level3}/scan_edges'][...]
     tod     = np.zeros((len(FeedIndex), datasize))
     weights = np.zeros((len(FeedIndex), datasize))
-    az      = np.zeros((len(FeedIndex), datasize))
+    #az      = np.zeros((len(FeedIndex), datasize))
     # Read in data from each feed
     for index, ifeed in enumerate(FeedIndex[:]):
 
         tod_file = dset[ifeed,iband,:]
+        #ogtod_file = dset_og[ifeed,iband,:]
         weights_file = wei_dset[ifeed,iband,:]
-        az_file = az_dset[ifeed,:]
+        #az_file = az_dset[ifeed,:]
 
         # then the data for each scan
         last = 0
@@ -113,7 +113,7 @@ def getTOD(filename,datasize,offset_length,Feeds,iband,level3='.'):
             N = int((end-start)//offset_length * offset_length)
             end = start+N
             
-            try:
+            #try:
                 #min_az = np.min(az_file[start:end])
                 #max_az = np.max(az_file[start:end])
                 #az_bin = 0.25
@@ -126,15 +126,15 @@ def getTOD(filename,datasize,offset_length,Feeds,iband,level3='.'):
                 #pyplot.plot(np.interp(az_file[start:end],azmids,azbinned))
                 #pyplot.show()
 
-                tod[index,last:last+N]     = tod_file[start:end] - median_filter(tod_file[start:end],20)
-            except (ValueError, IndexError):
-                tod[index,last:last+N]     = tod_file[start:end]
+            #    tod[index,last:last+N]     = tod_file[start:end] - median_filter(tod_file[start:end],20)
+            #except (ValueError, IndexError):
+            tod[index,last:last+N]     = tod_file[start:end]
             weights[index,last:last+N] = weights_file[start:end]
-            az[index,last:last+N] = az_file[start:end]
+            #az[index,last:last+N] = az_file[start:end]
             last += N
                 
     d.close()
-    return tod.flatten(), weights.flatten(), az.flatten()
+    return tod.flatten(), weights.flatten()
 
 
 def readPixels(filename,datasize,offset_length,Feeds,map_info,level3='.'):
@@ -199,7 +199,7 @@ def read_comap_data(filelist,map_info,iband=0,offset_length=50,feeds=[i+1 for i 
     az       = np.zeros(all_info['N'])
     last = 0
     for ifile,filename in enumerate(filelist):
-        _tod, _weights,_az = getTOD(filename,
+        _tod, _weights = getTOD(filename,
                                 all_info['datasize'][ifile],
                                 offset_length,
                                 feeds,
@@ -212,7 +212,7 @@ def read_comap_data(filelist,map_info,iband=0,offset_length=50,feeds=[i+1 for i 
         N = _tod.size
         tod[last:last+N] = _tod
         weights[last:last+N] = _weights
-        az[last:last+N] = _az
+        #az[last:last+N] = _az
         pointing[last:last+N] = _pointing.flatten()
 
         last += N
@@ -221,4 +221,4 @@ def read_comap_data(filelist,map_info,iband=0,offset_length=50,feeds=[i+1 for i 
     tod[mask] = 0
     weights[mask] = 0
 
-    return tod, weights, pointing, az
+    return tod, weights, pointing

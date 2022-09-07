@@ -11,6 +11,8 @@ comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
 
+from comancpipeline.Tools import Coordinates
+
 def write_map(maps,map_info,postfix=''):
 
     wcs = map_info['wcs']
@@ -34,7 +36,9 @@ if __name__ == "__main__":
     nxpix = 480
     cdelt = [-0.016666,0.016666]
     crpix = [ 240,240]
-    crval = [ 25.435, 0.0]
+    crval = [Coordinates.sex2deg('00:42:44.330',hours=True),
+             Coordinates.sex2deg('+41:16:07.50')]
+    #[ 25.435, 0.0]
     ctype = ['RA---CAR', 'DEC--CAR']
     w = WCS(naxis=2)
     w.wcs.crval = crval
@@ -50,18 +54,19 @@ if __name__ == "__main__":
 
     pixel_edges = np.arange(nxpix*nypix)
 
-    filelist = np.loadtxt(sys.argv[1],dtype=str)
+    filelist = np.loadtxt(sys.argv[1],dtype=str,ndmin=1)
     
     step = filelist.size//size
     lo = step*rank
     hi = step*(rank+1)
     if hi > filelist.size:
         hi = filelist.size
+    print(lo,hi)
     filelist = filelist[lo:hi]
 
     offset_length = 50
     feeds = [1,2,3,5,6,8,9,11,12,13,14,15,16,17,18,19]
-    tod, weights, pointing, az = COMAPData.read_comap_data(filelist,map_info,
+    tod, weights, pointing = COMAPData.read_comap_data(filelist,map_info,
                                                        offset_length=offset_length,
                                                        feeds=feeds)
     maps = Destriper.run_destriper(pointing,tod,weights,
