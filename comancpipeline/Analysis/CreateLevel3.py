@@ -244,9 +244,9 @@ class CreateLevel3(BaseClasses.DataStructure):
         feed_tod = d[f'{self.level2}/averaged_tod'][ifeed,:,:,:]
         mask     = np.zeros(feed_tod.shape[-1],dtype=bool)
 
-        N2 = int(feed_tod.shape[-1]//2*2)
+        N2 = int((feed_tod.shape[-1]//2)*2)
         weights = feed_tod[...,:N2]
-        weights = 1./np.nanstd(feed_tod[...,1::2]-feed_tod[...,0::2],axis=-1)**2
+        weights = 1./np.nanstd(feed_tod[...,1:N2:2]-feed_tod[...,0:N2:2],axis=-1)**2
         weights = np.repeat(weights[:,None],feed_tod.shape[-1],axis=-1)
         for iscan,(start,end) in enumerate(scan_edges):
             mask[start:end] = True

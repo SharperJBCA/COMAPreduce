@@ -6,6 +6,7 @@ import time
 from astropy.time import Time
 from datetime import datetime
 comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
 import os
 
 class DataStructure(object):
@@ -60,7 +61,8 @@ class DataStructure(object):
 
         if not os.path.exists(output_dir):
             try:
-                os.makedirs(output_dir)
+                if rank == 0:
+                    os.makedirs(output_dir)
             except (FileExistsError,PermissionError): # To catch race conditions
                 pass
         return output_dir
