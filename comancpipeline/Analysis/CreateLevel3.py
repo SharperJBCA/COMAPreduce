@@ -428,11 +428,11 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
         self.medfilt_stepsize=medfilt_stepsize
         self.allowed_sources = allowed_sources
 
-        self.figure_dir = figure_dir
+        self._figure_dir = figure_dir
         if rank == 0:
-            if not os.path.exists(self.figure_dir):
-                os.makedirs(self.figure_dir)
-        
+            if not os.path.exists(self._figure_dir):
+                os.makedirs(self._figure_dir)
+
         self.database = database + '_{}'.format(os.getpid())
         self.make_figures = make_figures
     def __str__(self):
@@ -473,7 +473,6 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
 
         pbar = tqdm(total=(nFeeds*nBands*nScans),desc=self.name)
         for iscan,(start,end) in enumerate(scan_edges):
-
             for ifeed in range(nFeeds):
                 #if ifeed != 0:
                 #    continue
@@ -600,6 +599,12 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
 
 
         self.source = self.getSource(data)
+        self.figure_dir = f'{self._figure_dir}/{self.source}'
+        if rank == 0:
+            if not os.path.exists(self.figure_dir):
+                os.makedirs(self.figure_dir)
+
+
         comment = self.getComment(data)
 
         self.logger(f'{fname}:{self.name}: {self.source} - {comment}')
@@ -625,6 +630,7 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing noise stats to level 3 file ({fname})')
         self.write(data)
+        self.write_database(data)
 
         return data
 
@@ -656,6 +662,11 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
             grp = output[obsid]
         else:
             grp = output.create_group(obsid)
+
+        if 'level3' in grp:
+            lvl3 = grp['level3']
+        else:
+            lvl3 = grp.create_group('level3')
 
         for (dname, dset) in self.output_data.items():
             if dname == 'filtered_tod':
