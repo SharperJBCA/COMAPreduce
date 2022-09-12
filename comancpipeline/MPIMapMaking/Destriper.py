@@ -18,6 +18,7 @@ import numpy as np
 from matplotlib import pyplot
 from scipy.sparse.linalg import LinearOperator
 from comancpipeline.Tools import binFuncs
+import healpy as hp
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 size = comm.Get_size()
@@ -69,6 +70,34 @@ def mpi_sum(x):
     comm.Bcast(all_resid,root=0)
     return np.sum(all_resid)
 
+def mpi_sum_vector(x):
+
+    local = x
+    if rank == 0:
+        allvals = np.zeros((size,x.size))
+    else:
+        allvals = None
+    comm.Gather(local,allvals,root=0)
+    if rank == 0:
+        all_resid = np.sum(allvals,axis=0)
+    else:
+        all_resid = np.zeros(x.size)
+    comm.Bcast(all_resid,root=0)
+    return all_resid
+
+
+def mpi_share_map(m):
+    for irank in range(1,size):
+        if (rank == 0) & (size > 1):
+            m_node2 = np.zeros(m.size)
+            print(f'{rank} waiting for {irank}')
+            comm.Recv(m_node2, source=irank,tag=irank)
+            m += m_node2
+
+        elif (rank !=0 ) & (rank == irank) & (size > 1):
+            print(f'{irank} sending to 0')
+            comm.Send(m, dest=0,tag=irank)
+    return m
 
 
 def cgm(A,b,x0 = None,niter=100,threshold=1e-5,verbose=False):
@@ -118,14 +147,16 @@ def cgm(A,b,x0 = None,niter=100,threshold=1e-5,verbose=False):
         if verbose:
             print(delta)
         if rank ==0:
-            print(delta, threshold)
+            print(delta, threshold,flush=True)
         if delta < threshold:
             break
         
-    if (i == (niter-1)):
-        print('Convergence not achieved in {} steps'.format(niter))
 
-    print('Final covergence: {} in {:d} steps'.format(delta,i))
+    if rank == 0:
+        if (i == (niter-1)):
+            print('Convergence not achieved in {} steps'.format(niter),flush=True)
+
+        print('Final covergence: {} in {:d} steps'.format(delta,i),flush=True)
 
     return x0
 
@@ -134,7 +165,9 @@ def bin_offset_map(pointing,
                    offsets,
                    weights,
                    offset_length,
-                   pixel_edges,extend=False):
+                   pixel_edges,
+                   special_weight=None,
+                   extend=False):
     """
     """
     if extend:
@@ -145,7 +178,11 @@ def bin_offset_map(pointing,
     m = np.zeros(int(pixel_edges[-1])+1)
     h = np.zeros(int(pixel_edges[-1])+1)
     binFuncs.binValues(m, pointing, weights=z*weights)
-    binFuncs.binValues(h, pointing, weights=weights)
+    if isinstance(special_weight,type(None)):
+        binFuncs.binValues(h, pointing, weights=weights)
+    else:
+        binFuncs.binValues(h, pointing, weights=weights*special_weight)
+
     #m = np.histogram(pointing,pixel_edges,
     #                 weights=z*weights)[0]
     #h = np.histogram(pointing,pixel_edges,weights=weights)[0]
@@ -176,21 +213,25 @@ def share_map(m,w):
 
     return mout, wout
 
-def op_Z(pointing, tod, m):
+def op_Z(pointing, tod, m, special_weight=None):
     """
     """
     
-    return tod - m[pointing]
+    if isinstance(special_weight,type(None)):
+        return tod - m[pointing]
+    else:
+        return tod - m[pointing]*special_weight
     
 
 
 class op_Ax:
-    def __init__(self,pointing,weights,offset_length,pixel_edges):
+    def __init__(self,pointing,weights,offset_length,pixel_edges, special_weight=None):
         
         self.pointing = pointing
         self.weights  = weights
         self.offset_length = offset_length
         self.pixel_edges = pixel_edges
+        self.special_weight=special_weight
 
     def __call__(self,_tod,extend=True): 
         """
@@ -199,20 +240,25 @@ class op_Ax:
             tod = np.repeat(_tod,self.offset_length)
         else:
             tod = _tod
-        #pyplot.plot(tod)
-        #pyplot.show()
 
-        m_offset, w_offset = bin_offset_map(self.pointing,
-                                            tod,
-                                            self.weights,
-                                            self.offset_length,
-                                            self.pixel_edges,extend=False)
+        if isinstance(self.special_weight,type(None)):
+            m_offset, w_offset = bin_offset_map(self.pointing,
+                                                tod,
+                                                self.weights,
+                                                self.offset_length,
+                                                self.pixel_edges,extend=False)
+        else:
+            m_offset, w_offset = bin_offset_map(self.pointing,
+                                                tod/self.special_weight,
+                                                self.weights*self.special_weight**2,
+                                                self.offset_length,
+                                                self.pixel_edges,extend=False)
 
         m_offset, w_offset = share_map(m_offset,w_offset)
 
         diff = op_Z(self.pointing, 
                     tod, 
-                    m_offset)
+                    m_offset,special_weight=self.special_weight)
 
         #print(size,rank, np.sum(diff))
 
@@ -222,9 +268,10 @@ class op_Ax:
     
         return sum_diff
 
-def run(pointing,tod,weights,offset_length,pixel_edges):
+def run(pointing,tod,weights,offset_length,pixel_edges,special_weight=None):
 
-    i_op_Ax = op_Ax(pointing,weights,offset_length,pixel_edges)
+    i_op_Ax = op_Ax(pointing,weights,offset_length,pixel_edges,
+                    special_weight=special_weight)
 
     b = i_op_Ax(tod,extend=False)
 
@@ -232,10 +279,10 @@ def run(pointing,tod,weights,offset_length,pixel_edges):
     A = LinearOperator((n_offsets, n_offsets), matvec = i_op_Ax)
 
     if rank == 0:
-        print('Starting CG')
+        print('Starting CG',flush=True)
     x = cgm(A,b)
     if rank == 0:
-        print('Done')
+        print('Done',flush=True)
     return x
 
 def get_noise(N,sr):
@@ -279,8 +326,14 @@ def get_signal(N,x,y,npix):
     sky_tod[pixels==-1] = 0
     return sky_tod, pixels, sky
 
-def run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges):
-    result = run(_pointing,_tod,_weights,offset_length,pixel_edges)
+def destriper_iteration(_pointing,
+                        _tod,
+                        _weights,
+                        offset_length,
+                        pixel_edges,
+                        special_weight=None):
+    result = run(_pointing,_tod,_weights,offset_length,pixel_edges,
+                 special_weight=None)
     m,h = bin_offset_map(_pointing,
                          np.repeat(result,offset_length),
                          _weights,
@@ -292,38 +345,179 @@ def run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges):
                          _weights,
                          offset_length,
                          pixel_edges,extend=False)
+    d2,h = bin_offset_map(_pointing,
+                         (_tod-np.repeat(result,offset_length))**2,
+                         _weights,
+                         offset_length,
+                         pixel_edges,extend=False)
 
-    for irank in range(1,size):
-        if (rank == 0) & (size > 1):
-            m_node2 = np.zeros(m.size)
-            print(f'{rank} waiting for {irank}')
-            comm.Recv(m_node2, source=irank,tag=irank)
-            m += m_node2
-            h_node2 = np.zeros(m.size)
-            comm.Recv(h_node2, source=irank,tag=irank)
-            h += h_node2
-            n_node2 = np.zeros(m.size)
-            comm.Recv(n_node2, source=irank,tag=irank)
-            n += n_node2
-
-        elif (rank !=0 ) & (rank == irank) & (size > 1):
-            print(f'{irank} sending to 0')
-            comm.Send(m, dest=0,tag=irank)
-            comm.Send(h, dest=0,tag=irank)
-            comm.Send(n, dest=0,tag=irank)
-
-    #m[h2 != 0] /= h2[h2 != 0]
-
-    #comm.Bcast(h,root=0)
+    m = mpi_share_map(m)
+    h = mpi_share_map(h)
+    n = mpi_share_map(n)
+    d2 = mpi_share_map(d2)
 
     if rank == 0:
         m[h!=0] /= h[h!=0]
         n[h!=0] /= h[h!=0]
+        d2[h!=0] /= h[h!=0]
 
-        return {'map':n-m,'naive':n, 'weight':h}
+        return {'map':n-m,'naive':n, 'weight':h,'map2':d2}, result
     else:
-        return None #{'weight':h}
+        return {'map':None,'naive':None,'weight':None,'map2':None}  , result
 
+def run_destriper(_pointing,
+                  _tod,
+                  _weights,
+                  offset_length,
+                  pixel_edges,
+                  az,
+                  el,
+                  feedid,
+                  obsids,
+                  obsid_cuts,
+                  chi2_cutoff=100,special_weight=None):
+
+    maps,result = destriper_iteration(_pointing,
+                                      _tod,
+                                      _weights,
+                                      offset_length,
+                                      pixel_edges,
+                                      special_weight=None)
+
+    # Here we will check Chi^2 contributions of each datum to each pixel.
+    # Data that exceeds the chi2_cutoff are weighted to zero 
+    # Share maps to all nodes
+    for k in maps.keys():
+        maps[k] = comm.bcast(maps[k],root=0)
+
+    residual = (_tod-np.repeat(result,offset_length)-maps['map'][_pointing])
+    chi2 = residual**2*_weights
+    _weights[chi2 > chi2_cutoff] = 0
+
+    residual = (_tod-np.repeat(result,offset_length))
+    hpix = hp.ang2pix(1024,(90-el)*np.pi/180., az*np.pi/180.)
+    hedges = np.arange(12*1024**2+1)
+    top = np.histogram(hpix, hedges, weights=residual*_weights)[0]
+    bot = np.histogram(hpix, hedges, weights=_weights)[0]
+    top = mpi_sum_vector(top)
+    bot = mpi_sum_vector(bot)
+
+    mdl = top/bot
+    gd = np.isfinite(mdl)
+    mdl[~gd] = 0
+    if rank == 0:
+        hp.write_map('maps/azel_map.fits',mdl,overwrite=True)
+
+    _tod -= mdl[hpix]
+
+    _maps,result = destriper_iteration(_pointing,_tod,_weights,offset_length,pixel_edges)
+
+    # residual = (_tod-np.repeat(result,offset_length))
+    # hpix = hp.ang2pix(1024,(90-el)*np.pi/180., az*np.pi/180.)
+    # hedges = np.arange(12*1024**2+1)
+    # top = np.histogram(hpix, hedges, weights=residual*_weights)[0]
+    # bot = np.histogram(hpix, hedges, weights=_weights)[0]
+    # top = mpi_sum_vector(top)
+    # bot = mpi_sum_vector(bot)
+
+
+    # mdl = top/bot
+    # gd = np.isfinite(mdl)
+    # mdl[~gd] = 0
+    # if rank == 0:
+    #     hp.write_map('maps/azel_map_it2.fits',mdl,overwrite=True)
+    # _tod -= mdl[hpix]
+
+
+    # m,h = bin_offset_map(_pointing,
+    #                      np.repeat(result,offset_length),
+    #                      _weights,
+    #                      offset_length,
+    #                      pixel_edges,extend=False)
+
+    # n,h = bin_offset_map(_pointing,
+    #                      _tod,
+    #                      _weights,
+    #                      offset_length,
+    #                      pixel_edges,extend=False)
+    # d2,h = bin_offset_map(_pointing,
+    #                      (_tod-np.repeat(result,offset_length))**2,
+    #                      _weights,
+    #                      offset_length,
+    #                      pixel_edges,extend=False)
+
+    # m = mpi_share_map(m)
+    # h = mpi_share_map(h)
+    # n = mpi_share_map(n)
+    # d2 = mpi_share_map(d2)
+
+    # if rank == 0:
+    #     m[h!=0] /= h[h!=0]
+    #     n[h!=0] /= h[h!=0]
+    #     d2[h!=0] /= h[h!=0]
+
+    #     _maps = {'map':n-m,'naive':n, 'weight':h,'map2':d2}
+    # else:
+    #     _maps = {'map':None,'naive':None,'weight':None,'map2':None}
+
+
+    if rank == 0:
+        print('HELLO',flush=True)
+
+    maps = {'All':_maps}
+    residual = (_tod-np.repeat(result,offset_length))
+    # now make each individual feed map
+    ufeeds = np.unique(feedid)
+    for feed in ufeeds:
+        sel = np.where((feedid == feed))[0]
+        m,h = bin_offset_map(_pointing[sel],
+                             residual[sel],
+                             _weights[sel],
+                             offset_length,
+                             pixel_edges,extend=False)
+        m = mpi_share_map(m)
+        h = mpi_share_map(h)
+        if rank == 0:
+            m[h!=0] /= h[h!=0]
+
+            maps[f'Feed{feed:02d}']={'map':m,'weight':h}
+        else:           
+            maps[f'Feed{feed:02d}']={'map':None,'weight':None}
+    
+    for (low,high) in obsid_cuts:
+        sel = np.where(((obsids >= low) & (obsids < high)))[0]
+        m,h = bin_offset_map(_pointing[sel],
+                             residual[sel],
+                             _weights[sel],
+                             offset_length,
+                             pixel_edges,extend=False)
+        m = mpi_share_map(m)
+        h = mpi_share_map(h)
+        if rank == 0:
+            m[h!=0] /= h[h!=0]
+
+            maps[f'ObsID{low:07d}-{high:07d}']={'map':m,'weight':h}
+        else:           
+            maps[f'ObsID{low:07d}-{high:07d}']={'map':None,'weight':None}
+
+    for feed in ufeeds:
+        for (low,high) in obsid_cuts:
+            sel = np.where(((obsids >= low) & (obsids < high) & (feedid == feed)))[0]
+            m,h = bin_offset_map(_pointing[sel],
+                                 residual[sel],
+                                 _weights[sel],
+                                 offset_length,
+                                 pixel_edges,extend=False)
+            m = mpi_share_map(m)
+            h = mpi_share_map(h)
+            if rank == 0:
+                m[h!=0] /= h[h!=0]
+
+                maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':m,'weight':h}
+            else:           
+                maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':None,'weight':None}
+
+    return maps
 
 def test():
     """
@@ -336,7 +530,7 @@ def test():
 
     npix = 60
     offset_length = 20
-    pixel_edges = np.arange(npix*npix+1).astype(int)
+    pixel_edges = np.arange(npix*npix).astype(int)
 
     if rank == 0:
         phase = np.pi/4.
@@ -385,6 +579,7 @@ def test():
         _tod[:] = tod[:my_step]
         _weights[:] = weights[:my_step]
 
+    _tod[_tod.size//2+1000] += 100 # TEST SPIKE REMOVAL
 
     
     for irank in range(1,size):
@@ -420,12 +615,161 @@ def test():
     maps = run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges)
 
     if rank == 0:
-        pyplot.subplot(211)
+        pyplot.plot(maps['map2']-maps['map']**2)
+        pyplot.show()
+        pyplot.subplot(131)
         pyplot.imshow(np.reshape(maps['naive'],(npix,npix)))
-        pyplot.subplot(212)
+        pyplot.subplot(132)
+        des_map = maps['naive']-maps['map']
+        map_rms = np.sqrt(maps['map2']-maps['map']**2)#maps['map2']-des_map**2)
+        pyplot.imshow(np.reshape(map_rms,(npix,npix)))
+        pyplot.subplot(133)
+        map_rms = np.sqrt(1./maps['weight'])#maps['map2'])#-des_map**2)
         pyplot.imshow(np.reshape(maps['map'],(npix,npix)))
         pyplot.show()
 
+def iqu(m,npix):
+    return [m[i*npix:(i+1)*npix] for i in range(3)]
+
+def testpol():
+    """
+    Run an example 1/f + sky signal test case for N threads
+    """
+    np.random.seed(1)
+    T  = 120. # seconds
+    sr = 100.
+    N = int(T*sr)
+
+    npix = 60
+    offset_length = 20
+    pixel_edges = np.arange(3*npix*npix).astype(int)
+
+    if rank == 0:
+        phase = np.pi/4.
+        v = 1./2.
+        t = np.arange(N)/sr
+        T = N/sr
+        
+        sky_rate = 1./60.
+        offset = T/2.*sky_rate
+
+        x = np.concatenate([t*sky_rate - offset,np.sin(2*np.pi*v*t + phase)])
+        y = np.concatenate([np.sin(2*np.pi*v*t + phase),t*sky_rate - offset])
+
+        
+        signal,pixels,sky = get_signal(N,x,y,npix)
+
+        signalP,pixelsP,skyP = get_signal(N,x,y,npix)
+        signalP = np.abs(signalP)
+        skyP    = np.abs(skyP)
+        
+        N = N*2
+        chi = np.zeros(N) #np.mod(2*np.pi*10*np.linspace(0,1,N),np.pi)
+
+        signalQ = signalP*np.cos(2*chi)
+        signalU = signalP*np.sin(2*chi)
+
+
+
+        pixels = np.concatenate([get_pointing(x,y,npix),
+                                 get_pointing(x,y,npix)+npix**2,
+                                 get_pointing(x,y,npix)+npix**2*2]).astype(int)
+        tod = np.concatenate([get_noise(N,sr)*0 + signal/3.,
+                              get_noise(N,sr)*0 + signalQ/3.,
+                              get_noise(N,sr)*0 + signalU/3.])
+        pointing = pixels
+        weights = np.ones(tod.size)
+        weights[pixels == -1] = 0
+        special_weight = np.concatenate((np.ones(chi.size),
+                                         np.cos(2*chi),
+                                         np.sin(2*chi)))
+        m,h = bin_offset_map(pointing,
+                             tod,
+                             weights,
+                             offset_length,
+                             pixel_edges,
+                             special_weight=special_weight,
+                             extend=False)
+
+
+        
+        m[h != 0] /= h[h != 0]
+        
+        [i,q,u] = iqu(m,npix*npix)
+
+        p = np.sqrt(q**2 + u**2)
+        pyplot.subplot(121)
+        pyplot.imshow(np.reshape(q,(npix,npix)))
+        pyplot.subplot(122)
+        pyplot.imshow(np.reshape(u,(npix,npix)))
+        pyplot.show()
+
+    step = int(2*N/size)
+    lo = step*rank
+    hi = step*(rank +1)
+    if hi > 2*N:
+        hi = 2*N
+
+    my_step = hi-lo
+    _pointing = np.zeros(my_step,dtype=int)
+    _tod = np.zeros(my_step)
+    _weights = np.zeros(my_step)
+    
+    if (rank == 0):
+        _pointing[:] = pointing[:my_step]
+        _tod[:] = tod[:my_step]
+        _weights[:] = weights[:my_step]
+
+    # _tod[_tod.size//2+1000] += 100 # TEST SPIKE REMOVAL
+
+    
+    for irank in range(1,size):
+        if (rank == 0):
+            lo = step*irank
+            hi = step*(irank +1)
+            if hi > 2*N:
+                hi = 2*N
+
+            comm.Send(pointing[lo:hi],dest=irank) 
+        if (irank == rank) & (rank != 0):
+            comm.Recv(_pointing,source=0) 
+    for irank in range(1,size):
+        if (rank == 0):
+            lo = step*irank
+            hi = step*(irank +1)
+            if hi > 2*N:
+                hi = 2*N
+            comm.Send(tod[lo:hi],dest=irank) 
+        if (irank == rank) & (rank != 0):
+            comm.Recv(_tod,source=0) 
+    for irank in range(1,size):
+        if (rank == 0):
+            lo = step*irank
+            hi = step*(irank +1)
+            if hi > 2*N:
+                hi = 2*N
+            comm.Send(weights[lo:hi],dest=irank) 
+        if (irank == rank) & (rank != 0):
+            comm.Recv(_weights,source=0) 
+
+    comm.Barrier()
+    maps = run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges)
+
+    if rank == 0:
+        pyplot.subplot(221)
+        pyplot.imshow(np.reshape(maps['map'][:npix*npix],(npix,npix)))
+        pyplot.subplot(222)
+        P = np.sqrt(np.reshape(maps['map'][npix*npix:2*npix*npix],(npix,npix))**2+\
+            np.reshape(maps['map'][2*npix*npix:3*npix*npix],(npix,npix)))
+        pyplot.imshow(P)
+        #pyplot.subplot(223)
+        #pyplot.imshow()
+        pyplot.subplot(224)
+        pyplot.imshow(np.reshape(skyP,(npix,npix)))
+
+        pyplot.show()
+
+
 
 if __name__ == "__main__":
-    test()
+    testpol()

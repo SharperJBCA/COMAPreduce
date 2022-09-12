@@ -462,6 +462,9 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
         nScans = len(scan_edges)
 
         self.output_data = {'powerspectra':np.zeros((nFeeds, nBands, nScans, self.nbins)),
+                            'fnoise_fits':np.zeros((nFeeds, nBands, nScans, 3)),
+                            'atmos_fits':np.zeros((nFeeds, nBands, nScans, 3)),
+                            'atmos_errs':np.zeros((nFeeds, nBands, nScans, 3)),
                             'filtered_tod':np.zeros((nFeeds, nBands, tod.shape[-1])),
                             'freqspectra': np.zeros((self.nbins,)),
                             'cov5s': np.zeros((nFeeds, nFeeds, nScans)),
@@ -499,6 +502,9 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
                     self.output_data['powerspectra'][ifeed,iband,iscan] = ps
                     self.output_data['freqspectra'][:] = nu
                     self.output_data['filtered_tod'][ifeed,iband,start:end] = resid
+                    self.output_data['atmos_fits'][ifeed,iband,iscan] = atmos
+                    self.output_data['atmos_errs'][ifeed,iband,iscan] = atmos_errs
+                    self.output_data['fnoise_errs'][ifeed,iband,iscan] = f_fits
 
                     if self.make_figures:
                         ref_frequency = 1./2.

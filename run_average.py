@@ -93,6 +93,7 @@ def main(parameters,classinfo, start=None, end=None):
             dh5.close()
         logger('############')
 
+    comm.Barrier() # wait for all processes to finish before updating db
     if rank == 0:
         database = mainConfig['Inputs']['database']
         db = h5py.File(database,'a')
