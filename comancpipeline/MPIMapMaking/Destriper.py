@@ -394,72 +394,7 @@ def run_destriper(_pointing,
     chi2 = residual**2*_weights
     _weights[chi2 > chi2_cutoff] = 0
 
-    residual = (_tod-np.repeat(result,offset_length))
-    hpix = hp.ang2pix(1024,(90-el)*np.pi/180., az*np.pi/180.)
-    hedges = np.arange(12*1024**2+1)
-    top = np.histogram(hpix, hedges, weights=residual*_weights)[0]
-    bot = np.histogram(hpix, hedges, weights=_weights)[0]
-    top = mpi_sum_vector(top)
-    bot = mpi_sum_vector(bot)
-
-    mdl = top/bot
-    gd = np.isfinite(mdl)
-    mdl[~gd] = 0
-    if rank == 0:
-        hp.write_map('maps/azel_map.fits',mdl,overwrite=True)
-
-    _tod -= mdl[hpix]
-
     _maps,result = destriper_iteration(_pointing,_tod,_weights,offset_length,pixel_edges)
-
-    # residual = (_tod-np.repeat(result,offset_length))
-    # hpix = hp.ang2pix(1024,(90-el)*np.pi/180., az*np.pi/180.)
-    # hedges = np.arange(12*1024**2+1)
-    # top = np.histogram(hpix, hedges, weights=residual*_weights)[0]
-    # bot = np.histogram(hpix, hedges, weights=_weights)[0]
-    # top = mpi_sum_vector(top)
-    # bot = mpi_sum_vector(bot)
-
-
-    # mdl = top/bot
-    # gd = np.isfinite(mdl)
-    # mdl[~gd] = 0
-    # if rank == 0:
-    #     hp.write_map('maps/azel_map_it2.fits',mdl,overwrite=True)
-    # _tod -= mdl[hpix]
-
-
-    # m,h = bin_offset_map(_pointing,
-    #                      np.repeat(result,offset_length),
-    #                      _weights,
-    #                      offset_length,
-    #                      pixel_edges,extend=False)
-
-    # n,h = bin_offset_map(_pointing,
-    #                      _tod,
-    #                      _weights,
-    #                      offset_length,
-    #                      pixel_edges,extend=False)
-    # d2,h = bin_offset_map(_pointing,
-    #                      (_tod-np.repeat(result,offset_length))**2,
-    #                      _weights,
-    #                      offset_length,
-    #                      pixel_edges,extend=False)
-
-    # m = mpi_share_map(m)
-    # h = mpi_share_map(h)
-    # n = mpi_share_map(n)
-    # d2 = mpi_share_map(d2)
-
-    # if rank == 0:
-    #     m[h!=0] /= h[h!=0]
-    #     n[h!=0] /= h[h!=0]
-    #     d2[h!=0] /= h[h!=0]
-
-    #     _maps = {'map':n-m,'naive':n, 'weight':h,'map2':d2}
-    # else:
-    #     _maps = {'map':None,'naive':None,'weight':None,'map2':None}
-
 
     if rank == 0:
         print('HELLO',flush=True)
