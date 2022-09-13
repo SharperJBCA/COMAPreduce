@@ -504,7 +504,7 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
                     self.output_data['filtered_tod'][ifeed,iband,start:end] = resid
                     self.output_data['atmos_fits'][ifeed,iband,iscan] = atmos
                     self.output_data['atmos_errs'][ifeed,iband,iscan] = atmos_errs
-                    self.output_data['fnoise_errs'][ifeed,iband,iscan] = f_fits
+                    self.output_data['fnoise_fits'][ifeed,iband,iscan] = f_fits
 
                     if self.make_figures:
                         ref_frequency = 1./2.
