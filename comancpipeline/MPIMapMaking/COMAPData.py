@@ -12,6 +12,7 @@ import healpy as hp
 from comancpipeline.Tools import  binFuncs, stats,Coordinates
 from comancpipeline.data import Data
 from comancpipeline.Tools.median_filter import medfilt
+import os
 
 from comancpipeline.MapMaking import MapTypes, OffsetTypes
 from tqdm import tqdm 
@@ -79,7 +80,7 @@ def countDataSize(filename, Nfeeds, offset_length,level3='.'):
 
     info['datasize'] = N*1.
     N = N*Nfeeds
-    info['N']=N
+    info['N']=int(N)
 
     return info
 
@@ -90,51 +91,46 @@ def getTOD(filename,datasize,offset_length,Feeds,iband,level3='.'):
     """
 
     d = h5py.File(filename,'r')
-    dset     = d[f'{level3}/tod']
+    dset     = d[f'{level3}/filtered_tod']
+    dset_og  = d[f'{level3}/tod']
+    az_dset  = d[f'{level3}/pixel_pointing/pixel_az']
+    el_dset  = d[f'{level3}/pixel_pointing/pixel_el']
     wei_dset = d[f'{level3}/weights']
-    FeedIndex = GetFeeds(d[f'{level3}/feeds'][...], Feeds)
-
-    az_dset = d[f'{level3}/pixel_pointing/pixel_az']
-
+    FeedIndex = GetFeeds(np.arange(1,21), Feeds)
+    pointing_feeds = d[f'{level3}/feeds'][...]
+    pointFeedIndex =  GetFeeds(d[f'{level3}/feeds'][...], Feeds)
     scan_edges = d[f'{level3}/scan_edges'][...]
     tod     = np.zeros((len(FeedIndex), datasize))
     weights = np.zeros((len(FeedIndex), datasize))
     az      = np.zeros((len(FeedIndex), datasize))
+    el      = np.zeros((len(FeedIndex), datasize))
+    feedid  = np.zeros((len(FeedIndex), datasize))
+
     # Read in data from each feed
     for index, ifeed in enumerate(FeedIndex[:]):
 
+        if not (ifeed+1) in pointing_feeds:
+            continue
+        pifeed = np.argmin((pointing_feeds - (ifeed+1))**2)
         tod_file = dset[ifeed,iband,:]
         weights_file = wei_dset[ifeed,iband,:]
-        az_file = az_dset[ifeed,:]
+        az_file      = az_dset[pifeed,:]
+        el_file      = el_dset[pifeed,:]
+        feedid[index] = (ifeed+1)
 
         # then the data for each scan
         last = 0
         for iscan,(start,end) in enumerate(scan_edges):
             N = int((end-start)//offset_length * offset_length)
             end = start+N
-            
-            try:
-                #min_az = np.min(az_file[start:end])
-                #max_az = np.max(az_file[start:end])
-                #az_bin = 0.25
-                #nbins  = int((max_az-min_az)/az_bin)
-                #azedges= np.linspace(min_az,max_az,nbins+1)
-                #azmids = (azedges[1:] + azedges[:-1])/2.
-                #azbinned = np.histogram(az_file[start:end], azedges, weights=tod_file[start:end])[0]/\
-                #           np.histogram(az_file[start:end], azedges)[0]
-                #pyplot.plot(tod_file[start:end])
-                #pyplot.plot(np.interp(az_file[start:end],azmids,azbinned))
-                #pyplot.show()
-
-                tod[index,last:last+N]     = tod_file[start:end] - median_filter(tod_file[start:end],20)
-            except (ValueError, IndexError):
-                tod[index,last:last+N]     = tod_file[start:end]
+            tod[index,last:last+N]     = tod_file[start:end]
             weights[index,last:last+N] = weights_file[start:end]
-            az[index,last:last+N] = az_file[start:end]
+            az[index,last:last+N]      = az_file[start:end]
+            el[index,last:last+N]      = el_file[start:end]
             last += N
                 
     d.close()
-    return tod.flatten(), weights.flatten(), az.flatten()
+    return tod.flatten(), weights.flatten(),az.flatten(), el.flatten(), feedid.flatten().astype(int)
 
 
 def readPixels(filename,datasize,offset_length,Feeds,map_info,level3='.'):
@@ -163,6 +159,7 @@ def readPixels(filename,datasize,offset_length,Feeds,map_info,level3='.'):
         end = start+N
         xc = x[:,start:end]
         yc = y[:,start:end]
+        ycshape = yc.shape
         # convert to Galactic
         if 'GLON' in wcs.wcs.ctype[0]:
             rot    = hp.rotator.Rotator(coord=['C','G'])
@@ -173,7 +170,7 @@ def readPixels(filename,datasize,offset_length,Feeds,map_info,level3='.'):
                                                          yc.flatten(),
                                                          wcs,
                                                          nxpix,
-                                                         nypix),yc.shape)
+                                                         nypix),ycshape)
         last += N
     d.close()
     return pixels 
@@ -184,10 +181,11 @@ def read_comap_data(filelist,map_info,iband=0,offset_length=50,feeds=[i+1 for i 
     Nfeeds = len(feeds)
 
     if rank == 0:
-        filelist = tqdm(filelist)
-
+        _filelist = tqdm(filelist)
+    else:
+        _filelist = filelist
     all_info = {'N':0,'datasize':[]}
-    for filename in filelist:
+    for filename in _filelist:
         info = countDataSize(filename, Nfeeds, offset_length)
         all_info['N'] += info['N']
         all_info['datasize'] += [int(info['datasize'])]
@@ -197,28 +195,42 @@ def read_comap_data(filelist,map_info,iband=0,offset_length=50,feeds=[i+1 for i 
     weights  = np.zeros(all_info['N'])
     pointing = np.zeros(all_info['N'],dtype=int)
     az       = np.zeros(all_info['N'])
+    el       = np.zeros(all_info['N'])
+    feedid   = np.zeros(all_info['N'],dtype=int)
+    obsids   = np.zeros(all_info['N'],dtype=int)
     last = 0
-    for ifile,filename in enumerate(filelist):
-        _tod, _weights,_az = getTOD(filename,
-                                all_info['datasize'][ifile],
-                                offset_length,
-                                feeds,
-                                iband)
+
+    if rank == 0:
+        _filelist = tqdm(filelist)
+    else:
+        _filelist = filelist
+
+    for ifile,filename in enumerate(_filelist):
+        obsid = int(os.path.basename(filename).split('-')[1])
+        _tod, _weights,_az,_el, _feedid = getTOD(filename,
+                                             all_info['datasize'][ifile],
+                                             offset_length,
+                                             feeds,
+                                             iband)
         _pointing = readPixels(filename,
                                all_info['datasize'][ifile],
                                offset_length,
                                feeds,
                                map_info)
+
         N = _tod.size
         tod[last:last+N] = _tod
         weights[last:last+N] = _weights
         az[last:last+N] = _az
+        el[last:last+N] = _el
+        feedid[last:last+N] = _feedid
         pointing[last:last+N] = _pointing.flatten()
-
+        obsids[last:last+N]  = obsid
         last += N
+
 
     mask = ~np.isfinite(tod)
     tod[mask] = 0
     weights[mask] = 0
 
-    return tod, weights, pointing, az
+    return tod, weights, pointing, az, el, feedid, obsids

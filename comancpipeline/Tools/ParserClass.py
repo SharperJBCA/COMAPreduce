@@ -5,9 +5,9 @@ class Parser(object):
     """
     """
 
-    def __init__(self, filename):
+    def __init__(self, filename, delims=[':','=']):
         super(Parser, self)
-        
+        self.delims = delims
         self.infodict = {}
 
         self.file = open(filename, 'r')
@@ -49,7 +49,7 @@ class Parser(object):
                         self.infodict[thisHeader] = {}
                 else:
                     #Now fill the headers
-                    delims = [':','=']
+                    delims = self.delims #[':','=']
                     for _delim in delims:
                         try:
                             index = line_nocomments.index(_delim)

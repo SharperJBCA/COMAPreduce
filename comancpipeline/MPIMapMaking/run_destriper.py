@@ -5,37 +5,67 @@ import sys
 from astropy.wcs import WCS
 from matplotlib import pyplot
 from astropy.io import fits
+import os
 
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
 
-def write_map(maps,map_info,postfix=''):
+from comancpipeline.Tools import Coordinates,ParserClass
 
+def write_map(prefix,maps,map_info,output_dir,postfix=''):
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
     wcs = map_info['wcs']
     nxpix = map_info['nxpix']
     nypix = map_info['nypix']
-    hdu = fits.PrimaryHDU(np.reshape(maps['map'],(nxpix,nypix)),
-                                     header=wcs.to_header())
-    #cov = fits.ImageHDU(variance,name='Covariance',header=wcs.to_header())
-    #hits = fits.ImageHDU(hits,name='Hits',header=wcs.to_header())
-    naive = fits.ImageHDU(np.reshape(maps['naive'],(nxpix,nypix)),
-                          name='Naive',header=wcs.to_header())
 
-    hdul = fits.HDUList([hdu,naive])
-    fname = 'co2.fits'
-    hdul.writeto(fname,overwrite=True)
+    for k,v in maps.items():
+        hdulist = []
+        hdu = fits.PrimaryHDU(np.reshape(v['map'],(nxpix,nypix)),
+                              header=wcs.to_header())
+        hdulist += [hdu]
+
+        if 'naive' in v:
+            naive = fits.ImageHDU(np.reshape(v['naive'],(nxpix,nypix)),
+                                  name='Naive',header=wcs.to_header())
+            hdulist += [naive]
+        if 'weight' in v:
+            cov = fits.ImageHDU(np.reshape(np.sqrt(1./v['weight']),(nxpix,nypix)),
+                                name='Noise',header=wcs.to_header())
+            hdulist += [cov]
+
+        if 'map2' in v:
+            std = fits.ImageHDU(np.reshape(np.sqrt(v['map2']-v['map']**2),(nxpix,nypix)),
+                                name='NoiseSTD',
+                                header=wcs.to_header())
+            hdulist += [std]
+        hdul = fits.HDUList(hdulist)
+        fname = '{}/{}_{}.fits'.format(output_dir,k,prefix)
+        hdul.writeto(fname,overwrite=True)
 
 
-if __name__ == "__main__":
+def main(filelistname,
+         offset_length = 50,
+         prefix = 'fg9',
+         output_dir = 'maps/fg9/',
+         obsid_cuts = [],
+         feeds = [1,2,3,5,6,9,11,12,13,14,15,16,17,18,19],
+         nxpix=480,
+         nypix=480,
+         crval = [Coordinates.sex2deg('05:32:00.3',hours=True),
+                  Coordinates.sex2deg('+12:30:28.0')], # fg9
+         crpix=[ 240,240],
+         ctype = ['RA---CAR', 'DEC--CAR'],
+         cdelt=[-0.016666,0.016666]):
 
-    nypix = 480
-    nxpix = 480
-    cdelt = [-0.016666,0.016666]
-    crpix = [ 240,240]
-    crval = [ 25.435, 0.0]
-    ctype = ['RA---CAR', 'DEC--CAR']
+    filelist = np.loadtxt(filelistname,dtype=str,ndmin=1)
+
+    if isinstance(crval[0],str):
+        crval = [Coordinates.sex2deg(c,hours=f) for c,f in zip(crval,[True,False])]
+
     w = WCS(naxis=2)
     w.wcs.crval = crval
     w.wcs.cdelt = cdelt
@@ -49,25 +79,46 @@ if __name__ == "__main__":
                 'nypix':nypix}
 
     pixel_edges = np.arange(nxpix*nypix)
-
-    filelist = np.loadtxt(sys.argv[1],dtype=str)
     
     step = filelist.size//size
     lo = step*rank
     hi = step*(rank+1)
     if hi > filelist.size:
         hi = filelist.size
+
     filelist = filelist[lo:hi]
 
-    offset_length = 50
-    feeds = [1,2,3,5,6,8,9,11,12,13,14,15,16,17,18,19]
-    tod, weights, pointing, az = COMAPData.read_comap_data(filelist,map_info,
-                                                       offset_length=offset_length,
-                                                       feeds=feeds)
-    maps = Destriper.run_destriper(pointing,tod,weights,
-                                   offset_length,pixel_edges)
+    tod, weights, pointing, az, el ,feedid, obsids = COMAPData.read_comap_data(filelist,map_info,
+                                                                   offset_length=offset_length,
+                                                                   feeds=feeds)
+    maps = Destriper.run_destriper(pointing,
+                                   tod,
+                                   weights,
+                                   offset_length,
+                                   pixel_edges,
+                                   az,
+                                   el,
+                                   feedid,
+                                   obsids,
+                                   obsid_cuts,
+                                   chi2_cutoff=20)
 
     if rank == 0:
-        write_map(maps,map_info,postfix='')
-        pyplot.imshow(np.reshape(maps['map'],(nxpix,nypix)))
-        pyplot.savefig('test.png')
+        write_map(prefix,maps,map_info,output_dir,postfix='')
+
+
+if __name__ == "__main__":
+    
+    p = ParserClass.Parser(sys.argv[1],delims=['='])
+    params = p['Inputs']
+    main(params['filelistname'],
+         offset_length=int(params['offset_length']),
+         prefix=params['prefix'],
+         output_dir=params['output_dir'],
+         feeds=params['feeds'],
+         nxpix=int(params['nxpix']),
+         nypix=int(params['nypix']),
+         crval=params['crval'],
+         crpix=params['crpix'],
+         ctype=params['ctype'],
+         cdelt=params['cdelt'])

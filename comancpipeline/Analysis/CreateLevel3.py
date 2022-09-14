@@ -2,6 +2,10 @@
 # Data will be cleaned such that it is ready to enter the destriper:
 # 1) From Statistics : Remove atmosphere and baselines 
 # 2) From astrocalibration : Apply Jupiter calibration to each feed
+from mpi4py import MPI 
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
 
 import numpy as np
 import h5py
@@ -18,6 +22,20 @@ from comancpipeline.Analysis.FocalPlane import FocalPlane
 from comancpipeline.Analysis import SourceFitting
 from comancpipeline.Analysis import Statistics
 from scipy import signal
+from scipy.optimize import minimize
+
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+#from matplotlib.axes import inset_axes
+from scipy.signal import butter, lfilter
+
+def butter_bandpass(lowcut, highcut, fs, order=5):
+    return butter(order, [lowcut, highcut], fs=fs, btype='band')
+
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = lfilter(b, a, data)
+    return y
 
 import time
 import os
@@ -224,48 +242,17 @@ class CreateLevel3(BaseClasses.DataStructure):
         nscans = scan_edges.shape[0]
 
         feed_tod = d[f'{self.level2}/averaged_tod'][ifeed,:,:,:]
-        weights  = np.zeros(feed_tod.shape)
         mask     = np.zeros(feed_tod.shape[-1],dtype=bool)
-        az = d['level1/spectrometer/pixel_pointing/pixel_az'][ifeed,:]
-        el = d['level1/spectrometer/pixel_pointing/pixel_el'][ifeed,:]
 
-        # Statistics for this feed                        
-        medfilt_coefficient = d[f'{self.level2}/Statistics/filter_coefficients'][ifeed,...]
-        atmos = d[f'{self.level2}/Statistics/atmos'][ifeed,...]
-        atmos_coefficient = d[f'{self.level2}/Statistics/atmos_coefficients'][ifeed,...]
-        wnoise_auto = d[f'{self.level2}/Statistics/wnoise_auto'][ifeed,...]
-        fnoise_fits = d[f'{self.level2}/Statistics/fnoise_fits'][ifeed,...]
-
-        # then the data for each scan
-        last = 0
-        scan_samples = []
+        N2 = int((feed_tod.shape[-1]//2)*2)
+        weights = feed_tod[...,:N2]
+        weights = 1./np.nanstd(feed_tod[...,1:N2:2]-feed_tod[...,0:N2:2],axis=-1)**2
+        weights = np.repeat(weights[:,None],feed_tod.shape[-1],axis=-1)
         for iscan,(start,end) in enumerate(scan_edges):
-            scan_samples = np.arange(start,end,dtype=int)
-            median_filter = d[f'{self.level2}/Statistics/FilterTod_Scan{iscan:02d}'][ifeed,...]
-            N = int((end-start))
-            end = start+N
-            tod = feed_tod[...,start:end]
             mask[start:end] = True
-            # Subtract atmospheric fluctuations per channel
-            for iband in range(4):
-                for ichannel in range(64):
-                    #if self.channelmask[ifeed,iband,ichannel] == False:
-                    amdl = Statistics.AtmosGroundModel(atmos[iband,iscan],az[start:end],el[start:end]) *\
-                           atmos_coefficient[iband,ichannel,iscan,0]
-                    if self.median_filter:
-                        tod[iband,ichannel,:] -= median_filter[iband,:N] * medfilt_coefficient[iband,ichannel,iscan,0]
-                    if self.atmosphere:
-                        tod[iband,ichannel,:] -= amdl
-                    tod[iband,ichannel,:] -= np.nanmedian(tod[iband,ichannel,:])
 
-
-            wnoise = wnoise_auto[:,:,iscan,0]
-            weights[...,start:end] = 1./wnoise[...,None]**2
-            bad = np.isnan(weights) | np.isinf(weights) | ~np.isfinite(feed_tod)
-            feed_tod[bad] = 0
-            weights[bad] = 0
-
-        return feed_tod, weights, mask
+        new_shape = (feed_tod.shape[0],feed_tod.shape[1],feed_tod.shape[2])
+        return np.reshape(feed_tod,new_shape), np.reshape(weights,new_shape), mask
 
     def average_tod(self,d,feed_tod,feed_weights,mask):
         """
@@ -372,16 +359,17 @@ class CreateLevel3(BaseClasses.DataStructure):
         output['cal_factors'].attrs['source'] = self.cal_source
         output['cal_factors'].attrs['calibrator_obsid'] = self.nearest_calibrator
 
-        data['level1/spectrometer'].copy('pixel_pointing',output)
-        data['level1/spectrometer'].copy('feeds',output)
-        data['level1'].copy('comap',output)
-        data['level2/Statistics'].copy('scan_edges',output)
-        if 'Flags' in data['level2']:
-            data['level2'].copy('Flags',output)
-        if not 'Flags' in output:
-            output.create_group('Flags')
-        if 'Spikes' in 'level2/Statistics':
-            data['level2/Statistics'].copy('Spikes',output['Flags'])
+        if not 'pixel_pointing' in output:
+            data['level1/spectrometer'].copy('pixel_pointing',output)
+            data['level1/spectrometer'].copy('feeds',output)
+            data['level1'].copy('comap',output)
+            data['level2/Statistics'].copy('scan_edges',output)
+            if 'Flags' in data['level2']:
+                data['level2'].copy('Flags',output)
+            if not 'Flags' in output:
+                output.create_group('Flags')
+            if 'Spikes' in 'level2/Statistics':
+                data['level2/Statistics'].copy('Spikes',output['Flags'])
         output.close()
         
         if self.level3 in data.keys():
@@ -414,3 +402,444 @@ class CreateLevel3(BaseClasses.DataStructure):
         lvl3.attrs['calibrator_obsid'] = self.nearest_calibrator
         lvl3.attrs['calibrator_source'] = self.cal_source
         output.close()
+
+
+class Level3FnoiseStats(BaseClasses.DataStructure):
+    """
+    Calculate statistics based on the level 3 data only.
+    """
+
+    def __init__(self, allowed_sources = ['co','fg','GField',
+                                          'Field','TauA','CasA',
+                                          'Jupiter','jupiter','CygA'],
+                 nbins=50, 
+                 samplerate=50, 
+                 database = None,
+                 medfilt_stepsize=1000,
+                 figure_dir = 'figures/Level3FnoiseStats',
+                 make_figures = False,
+                 **kwargs):
+        """
+        """
+        super().__init__(**kwargs)
+        self.name = 'Level3FnoiseStats'
+        self.nbins = int(nbins)
+        self.samplerate = samplerate
+        self.medfilt_stepsize=medfilt_stepsize
+        self.allowed_sources = allowed_sources
+
+        self._figure_dir = figure_dir
+        if rank == 0:
+            if not os.path.exists(self._figure_dir):
+                os.makedirs(self._figure_dir)
+
+        self.database = database + '_{}'.format(os.getpid())
+        self.make_figures = make_figures
+    def __str__(self):
+        return f'Running {self.name}'
+
+    def run(self, data):
+        """
+        Expects a level2 file structure to be passed.
+        """
+        fname = data.filename.split('/')[-1]
+        # First we need:
+        # 1) The TOD data
+        # 2) The feature bits to select just the observing period
+        # 3) Elevation to remove the atmospheric component
+        tod   = data[f'level3/tod'][...]
+        az    = data['level3/pixel_pointing/pixel_az'][...]
+        el    = data['level3/pixel_pointing/pixel_el'][...]
+        feeds = np.arange(1,tod.shape[0]+1,dtype=int)#data['level1/spectrometer/feeds'][:]
+        pointing_feeds = data['level3/feeds'][:]
+        bands = [b.decode('ascii') for b in data['level1/spectrometer/bands'][:]]
+        scan_edges = data['level2/Statistics/scan_edges'][...]
+
+        obsid = self.getObsID(data)
+
+        # Looping over Feed - Band - Channel, perform 1/f noise fit
+        nFeeds, nBands, nSamples = tod.shape
+        nScans = len(scan_edges)
+
+        self.output_data = {'powerspectra':np.zeros((nFeeds, nBands, nScans, self.nbins)),
+                            'fnoise_fits':np.zeros((nFeeds, nBands, nScans, 3)),
+                            'atmos_fits':np.zeros((nFeeds, nBands, nScans, 3)),
+                            'atmos_errs':np.zeros((nFeeds, nBands, nScans, 3)),
+                            'filtered_tod':np.zeros((nFeeds, nBands, tod.shape[-1])),
+                            'freqspectra': np.zeros((self.nbins,)),
+                            'cov5s': np.zeros((nFeeds, nFeeds, nScans)),
+                            '10Hz_inband_C':np.zeros((nFeeds, nFeeds, nScans)),
+                            '10Hz_inband_rms':np.zeros((nFeeds, nScans)),
+                            '9Hz_lowband_C':np.zeros((nFeeds, nFeeds, nScans)),
+                            '9Hz_lowband_rms':np.zeros((nFeeds, nScans))}
+
+
+        pbar = tqdm(total=(nFeeds*nBands*nScans),desc=self.name)
+        for iscan,(start,end) in enumerate(scan_edges):
+            for ifeed in range(nFeeds):
+                #if ifeed != 0:
+                #    continue
+                if not feeds[ifeed] in pointing_feeds:
+                    continue
+                pointing_ifeed = np.argmin((feeds[ifeed] - pointing_feeds)**2)
+                if feeds[ifeed] == 20:
+                    pbar.update(nBands)
+                    continue
+                for iband in range(nBands):
+
+                    atmos_filter,atmos,atmos_errs = self.FitAtmosAndGround(tod[ifeed,iband,start:end],
+                                                                           az[pointing_ifeed,start:end],
+                                                                           el[pointing_ifeed,start:end])
+                    resid = tod[ifeed,iband,start:end] - atmos_filter
+                    tod_filter = self.median_filter(resid)
+                    resid = resid - tod_filter
+
+                    w_auto = stats.AutoRMS(tod[ifeed,iband,start:end])
+
+                    ps, nu, f_fits, w_auto = self.FitPowerSpectrum(resid,
+                                                                   w_auto)
+
+                    self.output_data['powerspectra'][ifeed,iband,iscan] = ps
+                    self.output_data['freqspectra'][:] = nu
+                    self.output_data['filtered_tod'][ifeed,iband,start:end] = resid
+                    self.output_data['atmos_fits'][ifeed,iband,iscan] = atmos
+                    self.output_data['atmos_errs'][ifeed,iband,iscan] = atmos_errs
+                    self.output_data['fnoise_fits'][ifeed,iband,iscan] = f_fits
+
+                    if self.make_figures:
+                        ref_frequency = 1./2.
+                        fig = pyplot.figure()
+                        ax1 = pyplot.subplot(111)
+                        pyplot.plot(nu,ps)
+                        pyplot.plot(nu,self.Model_Plot(f_fits,nu,w_auto,ref_frequency))
+                        pyplot.axvline(ref_frequency,color='k',ls='--')
+                        pyplot.axhline(f_fits[0],color='k',ls='--')
+                        pyplot.yscale('log')
+                        pyplot.xscale('log')
+                        pyplot.xlabel('Frequency (Hz)')
+                        pyplot.ylabel('Power (K$^2$)')
+                        pyplot.title('Feed {:02d} : Band {:02d} Scan{:02d} '.format(feeds[ifeed],iband,iscan))
+                        pyplot.text(0.05,0.25, r'$\sigma_{2s}=$'+'{:.4f} K'.format(np.sqrt(f_fits[0])),
+                                    transform=ax1.transAxes,size=15,ha='left')
+                        pyplot.text(0.05,0.175,r'$\alpha=$'+'{:.4f}'.format(f_fits[1]),
+                                    transform=ax1.transAxes,size=15,ha='left')
+                        pyplot.text(0.05,0.10, r'$\sigma_{w}=$'+'{:.4f} K'.format(np.sqrt(f_fits[2])),
+                                    transform=ax1.transAxes,size=15,ha='left')
+
+
+                        #axin1 = ax1.inset_axes([0.7,0.7,0.25,0.25])
+                        #im = axin1.imshow(c5)
+                        #axin1.set_xticklabels([])
+                        #axin1.set_yticklabels([])
+
+                        axin2 = ax1.inset_axes([0.6,0.45,0.4,0.25])
+                        im = axin2.plot(self.downsample_tod(resid[None,:],
+                                                            int(5*self.samplerate))[0])
+                        axin2.set_xticklabels([])
+                        axin2.set_yticklabels([])
+
+
+                        if not os.path.exists(f'{self.figure_dir}/{obsid}'):
+                            os.makedirs(f'{self.figure_dir}/{obsid}')
+                        pyplot.savefig(f'{self.figure_dir}/{obsid}/Fnoise_Feeds{feeds[ifeed]:02d}_Band{iband:02d}_Scan{iscan:02d}.png')
+
+                        #pyplot.show()
+                        pyplot.close(fig)
+                    pbar.update(1)
+
+            cs,c5 = self.calculate_covariances(self.output_data['filtered_tod'][:,0,start:end], [1./self.samplerate, 5])
+            self.output_data['cov5s'][:,:,iscan] = c5
+
+            limits = [[9.95,10.05],[8.95,9.05]]
+            inband,lowband = self.bandpass_signals(self.output_data['filtered_tod'][:,0,start:end],
+                                                          limits)
+            self.output_data['10Hz_inband_C'][:,:,iscan] = inband['C']
+            self.output_data['10Hz_inband_rms'][:,iscan] = inband['rms']
+            self.output_data['9Hz_lowband_C'][:,:,iscan] = lowband['C']
+            self.output_data['9Hz_lowband_rms'][:,iscan] = lowband['rms']
+
+            fig = pyplot.figure()
+            ax = pyplot.subplot(121)
+            im = pyplot.imshow(inband['C'],vmin=0,vmax=1)
+            pyplot.title('9.95-10.05Hz',size=10)
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes('right',size='5%', pad=0.05)
+            pyplot.colorbar(im,cax=cax)
+            ax = pyplot.subplot(122)
+            im = pyplot.imshow(lowband['C'],vmin=0,vmax=1)
+            pyplot.title('8.95-9.05Hz',size=10)
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes('right',size='5%', pad=0.05)
+            pyplot.colorbar(im,cax=cax)
+            pyplot.suptitle(f'Spike Feed{feeds[ifeed]:02d} Band{iband:02d} Scan{iscan:02d}')
+            pyplot.savefig(f'{self.figure_dir}/{obsid}/Spike10Hz_Feeds{feeds[ifeed]:02d}_Band{iband:02d}_Scan{iscan:02d}.png')
+            pyplot.close(fig)
+
+            fig = pyplot.figure()
+            ax = pyplot.subplot(121)
+            im = pyplot.imshow(cs,vmin=0,vmax=1)
+            pyplot.title('25Hz',size=10)
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes('right',size='5%', pad=0.05)
+            pyplot.colorbar(im,cax=cax)
+
+            ax=pyplot.subplot(122)
+            im=pyplot.imshow(c5,vmin=0,vmax=1)
+            pyplot.title('0.2Hz',size=10)
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes('right',size='5%', pad=0.05)
+            pyplot.colorbar(im,cax=cax)
+
+            pyplot.suptitle(f'Atmos Feed{feeds[ifeed]:02d} Band{iband:02d} Scan{iscan:02d}')
+            pyplot.savefig(f'{self.figure_dir}/{obsid}/Atmos_Feeds{feeds[ifeed]:02d}_Band{iband:02d}_Scan{iscan:02d}.png')
+            pyplot.close(fig)
+
+
+        pbar.close()
+
+    def __call__(self,data):
+        assert isinstance(data, h5py._hl.files.File), 'Data is not a h5py file structure'
+        fname = data.filename.split('/')[-1]
+        self.logger(f' ')
+        self.logger(f'{fname}:{self.name}: Starting. (overwrite = {self.overwrite})')
+
+
+        self.source = self.getSource(data)
+        self.figure_dir = f'{self._figure_dir}/{self.source}'
+        if rank == 0:
+            if not os.path.exists(self.figure_dir):
+                os.makedirs(self.figure_dir)
+
+
+        comment = self.getComment(data)
+
+        self.logger(f'{fname}:{self.name}: {self.source} - {comment}')
+
+        if self.checkAllowedSources(data, self.source, self.allowed_sources):
+            return data
+
+        if any([s in self.source for s in ['jupiter','CygA','Jupiter','TauA','CasA']]):
+            self.isCalibrator = True
+        else:
+            self.isCalibrator = False 
+
+        if ('Sky nod' in comment) | ('Engineering Test' in comment):
+            return data
+
+        if ('level2/Statistics/fnoise_fits' in data) & (not self.overwrite):
+            return data
+
+        # Want to ensure the data file is read/write
+        data = self.setReadWrite(data)
+
+        self.logger(f'{fname}:{self.name}: Measuring noise stats.')
+        self.run(data)
+        self.logger(f'{fname}:{self.name}: Writing noise stats to level 3 file ({fname})')
+        self.write(data)
+        self.write_database(data)
+
+        return data
+
+    def write(self,data):
+        """
+        Write out fitted statistics to the level 2 file
+        """
+        fname = data.filename.split('/')[-1]
+
+        lvl3 = data['level3']
+
+        for (dname, dset) in self.output_data.items():
+            if dname in lvl3:
+                del lvl3[dname]
+            lvl3.create_dataset(dname,  data=dset)
+
+    def write_database(self,data):
+        """
+        Write out the statistics to a common statistics database for easy access
+        """
+        
+        if not os.path.exists(self.database):
+            output = FileTools.safe_hdf5_open(self.database,'w')
+        else:
+            output = FileTools.safe_hdf5_open(self.database,'a')
+
+        obsid = self.getObsID(data)
+        if obsid in output:
+            grp = output[obsid]
+        else:
+            grp = output.create_group(obsid)
+
+        if 'level3' in grp:
+            lvl3 = grp['level3']
+        else:
+            lvl3 = grp.create_group('level3')
+
+        for (dname, dset) in self.output_data.items():
+            if dname == 'filtered_tod':
+                continue
+            if dname in lvl3:
+                del lvl3[dname]
+            lvl3.create_dataset(dname,  data=dset)
+
+
+        output.close()
+
+    def PowerSpectrum(self, tod):
+        """
+        Calculates the bin averaged power spectrum
+        """
+        nu = np.fft.fftfreq(tod.size, d=1/self.samplerate)
+        binEdges = np.logspace(np.log10(nu[1]), np.log10(nu[nu.size//2-1]), self.nbins+1)
+        ps     = np.abs(np.fft.fft(tod))**2/tod.size
+
+        counts = np.histogram(nu[1:nu.size//2], binEdges)[0]
+        signal = np.histogram(nu[1:nu.size//2], binEdges, weights=ps[1:nu.size//2])[0]
+        freqs  = np.histogram(nu[1:nu.size//2], binEdges, weights=nu[1:nu.size//2])[0]
+
+        return freqs/counts, signal/counts, counts
+
+    def Model_Plot(self,P,x,rms,ref_frequency):
+        return self.Model_rms([np.log10(P[0]),P[1],np.log10(P[2])], x, rms,ref_frequency)
+    def Model_rms(self, P, x, rms,ref_frequency):
+        return 10**P[0] * (x/ref_frequency)**P[1] + 10**P[2]
+
+    def KneeFrequency(self,P,white_noise,ref_frequency):
+        if P[1] != 0:
+            return ref_frequency * (white_noise/10**P[0])**(1/P[1])
+        else:
+            return np.inf
+
+    def Error(self, P, x, y,e, rms,ref_frequency,model):
+        error = np.abs(y/e)
+        chi = (np.log(y) - np.log(model(P,x,rms,ref_frequency)))/error
+        return np.sum(chi**2)
+
+    def FitPowerSpectrum(self, tod, tsys_rms):
+        """
+        Calculate the power spectrum of the data, fits a 1/f noise curve, returns parameters
+        """
+        auto_rms = stats.AutoRMS(tod)
+        nu, ps, counts = self.PowerSpectrum(tod)
+
+        # Only select non-nan values
+        # You may want to increase min counts,
+        # as the power spectrum is non-gaussian for small counts
+        good = (counts > 50) #& ( (nu < 0.03) | (nu > 0.05)) & np.isfinite(ps)
+
+        ref_frequency = 1./2. # Hz
+        ps_nonan = ps[np.isfinite(ps)]
+        nu_nonan = nu[np.isfinite(ps)]
+        try: # Catch is all the data is bad
+            ref = np.argmin((nu_nonan - ref_frequency)**2) 
+        except ValueError:
+            return ps, nu, [0,0,0], auto_rms
+        args = (nu[good], ps[good],auto_rms/np.sqrt(counts[good]), auto_rms, ref_frequency,self.Model_rms)
+        bounds =  [[None,None],[-3,0],[None,None]]
+        P0 = [np.log10(ps_nonan[ref]),-1,np.log10(auto_rms**2)]
+
+        # We will do an initial guess
+        P1 = minimize(self.Error, P0, args= args, bounds = bounds)
+        knee = self.KneeFrequency(P1.x, 10**P1.x[2], ref_frequency)
+
+        fits = [10**P1.x[0], P1.x[1], 10**P1.x[2]]
+
+
+        return ps, nu, fits, auto_rms
+
+    def downsample_tod(self,stod,nbin):
+        N = stod.shape[-1]
+        nsteps = int(N//nbin)
+        N2  = int(nsteps*nbin)
+        mtod = np.nanmean(np.reshape(stod[:,:N2],(stod.shape[0], nsteps,nbin)),axis=-1)
+        return mtod
+
+    def calculate_covariances(self,stod, nbins):
+        out = []
+        for nbin_sec in nbins:
+            N = stod.shape[1]
+            nbin   = int(nbin_sec*self.samplerate)
+            nsteps = int(N//nbin)
+            N2  = int(nsteps*nbin)
+            mtod = np.nanmean(np.reshape(stod[:,:N2],(stod.shape[0], nsteps,nbin)),axis=-1)
+            mtod = (mtod - np.nanmean(mtod,axis=-1)[:,None])/np.nanstd(mtod,axis=-1)[:,None]
+        
+            out += [mtod.dot(mtod.T)/mtod.shape[-1]]
+            
+        return out
+
+    def bandpass_signals(self,stod, limits,fs=50):
+        out = []
+        for (low,high) in limits:
+            filtered_data = []
+            for i in range(stod.shape[0]):
+                filtered_data += [butter_bandpass_filter(stod[i],low,high,fs)]
+            filtered_data = np.array(filtered_data)
+            rms = np.nanstd(filtered_data,axis=-1)
+            f = (filtered_data - np.nanmean(filtered_data,axis=-1)[:,None])/\
+                rms[:,None]
+            C = f.dot(f.T)/f.shape[1]
+            out += [{'rms':rms, 'C':C}]
+        return out
+
+
+    def median_filter(self,tod):
+        """
+        Calculate this AFTER removing the atmosphere.
+        """
+        if tod.size > 2*self.medfilt_stepsize:
+            z = np.concatenate((tod[::-1],tod,tod[::-1]))
+            filter_tod = np.array(medfilt.medfilt(z.astype(np.float64),np.int32(self.medfilt_stepsize)))[tod.size:2*tod.size]
+        else:
+            filter_tod = np.ones(tod.size)*np.nanmedian(tod)
+
+        return filter_tod[:tod.size]
+
+    def FitAtmosAndGround(self,_tod,_az,_el,mask=None,niter=100):
+        if isinstance(mask,type(None)):
+            mask = np.ones(_tod.size,dtype=bool)
+
+        tod =_tod[mask]
+        az  =_az[mask]
+        el  =_el[mask]
+        # Fit gradients
+        dlength = tod.size
+
+        templates = np.ones((3,tod.size))
+        templates[0,:] = az
+        if np.abs(np.max(az)-np.min(az)) > 180:
+            high = templates[0,:] > 180
+            templates[0,high] -= 360
+        templates[0,:] -= np.median(templates[0,:])
+        templates[1,:] = 1./np.sin(el*np.pi/180.)
+
+        a_all = np.zeros((niter,templates.shape[0]))
+
+        for a_iter in range(niter):
+            sel = np.random.uniform(low=0,high=dlength,size=dlength).astype(int)
+
+            cov = np.sum(templates[:,None,sel] * templates[None,:,sel],axis=-1)
+            z = np.sum(templates[:,sel]*tod[None,sel],axis=1)
+            try:
+                a_all[a_iter,:] = np.linalg.solve(cov, z).flatten()
+            except:
+                a_all[a_iter,:] = np.nan
+
+        fits,errs =  np.nanmedian(a_all,axis=0),stats.MAD(a_all,axis=0)
+        tod_filter = np.sum(templates[:,:]*fits[:,None],axis=0)
+
+        # interpolate to mask
+        tod_filter_all = np.zeros(_tod.size)
+        tod_filter_all[mask] = tod_filter
+        t = np.arange(_tod.size)
+        tod_filter_all[~mask] = np.interp(t[~mask],t[mask],tod_filter)
+        
+        return tod_filter_all, fits, errs
+
+
+    def RemoveAtmosphere(self, tod, el):
+        """
+        Remove 1/sin(E) relationship from TOD
+        """
+        A = 1/np.sin(el*np.pi/180) # Airmass
+        pmdl = np.poly1d(np.polyfit(A, tod,1))
+        return tod- pmdl(A), pmdl

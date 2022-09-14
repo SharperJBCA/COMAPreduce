@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use('Agg')
+
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -33,6 +36,7 @@ def call_main(parameters, classinfo, start, end):
 def main(parameters,classinfo, start=None, end=None):
     # Get the inputs:
     jobobjs, prejobobjs, filelist, mainConfig, classConfig, logger = Parser.parse_parameters(parameters)
+    
     logger(f'STARTING')
 
     # Only let rank 0 do prejobs
@@ -73,11 +77,11 @@ def main(parameters,classinfo, start=None, end=None):
         except OSError as e:
             logger(f'{filename}:{e}',error=e)
             continue
-        print(os.path.basename(filename))
         for job in jobobjs:
             if rank == 0:
                 print(job,flush=True)
             try:
+            
                 dh5 = job(dh5)
             except Exception as e: 
                 fname = filename.split('/')[-1]
@@ -89,23 +93,24 @@ def main(parameters,classinfo, start=None, end=None):
             dh5.close()
         logger('############')
 
-        if rank == 0:
-            database = mainConfig['Inputs']['database']
-            db = h5py.File(database,'a')
-            for pid in pids:
-                if not os.path.exists(f'{database}_{pid}'):
-                    continue
-                db_pid = h5py.File(f'{database}_{pid}','r')
-                for obsid,obsdata in db_pid.items():
-                    if obsid in db:
-                        for k,v in obsdata.items():
-                            if k in db[obsid]:
-                                del db[obsid][k]
-                            db_pid[obsid].copy('{}'.format(k),db[obsid])
-                    else:
-                        db_pid.copy(obsid,db)
-                db_pid.close()
-                os.remove(f'{database}_{pid}')
+    comm.Barrier() # wait for all processes to finish before updating db
+    if rank == 0:
+        database = mainConfig['Inputs']['database']
+        db = h5py.File(database,'a')
+        for pid in pids:
+            if not os.path.exists(f'{database}_{pid}'):
+                continue
+            db_pid = h5py.File(f'{database}_{pid}','r')
+            for k,v in db_pid.items():
+                if k in db:
+                    for k2,v2 in v.items():
+                        if k2 in db[k]:
+                            del db[k][k2]
+                        db_pid[k].copy(k2,db[k])
+                else:
+                    db_pid.copy(k,db)
+            db_pid.close()
+            os.remove(f'{database}_{pid}')
 
 
 if __name__ == "__main__": 
