@@ -265,6 +265,8 @@ class CreateLevel3(BaseClasses.DataStructure):
         all_tod = np.zeros((8, feed_tod.shape[-1]))
         all_weights=np.zeros((8, feed_tod.shape[-1]))
         all_frequency=np.zeros((8))
+        feed_weights[~np.isfinite(feed_tod)] = 0
+        feed_tod[~np.isfinite(feed_tod)] = 0
         for ichan, (flow,fhigh) in enumerate(zip(np.arange(8)+26,np.arange(8)+27)):
             sel = ((self.frequency >= flow) & (self.frequency < fhigh))
             top = np.sum(feed_tod[sel,:]*feed_weights[sel,:],axis=0)
