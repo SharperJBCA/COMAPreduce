@@ -641,8 +641,8 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
         self.logger(f'{fname}:{self.name}: Measuring noise stats.')
         self.run(data)
         self.logger(f'{fname}:{self.name}: Writing noise stats to level 3 file ({fname})')
-        #self.write(data)
-        #self.write_database(data)
+        self.write(data)
+        self.write_database(data)
 
         return data
 
