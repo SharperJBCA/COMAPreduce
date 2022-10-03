@@ -127,9 +127,9 @@ class CreateLevel3(BaseClasses.DataStructure):
             self.logger(f'{fname}:{self.name}:Error: No {self.level2} data found?')
             return data
 
-        if not 'Statistics' in data[self.level2].keys():
-            self.logger(f'{fname}:{self.name}:Error: No {self.level2}/Statistics found?')
-            return data
+        #if not 'Statistics' in data[self.level2].keys():
+        #    self.logger(f'{fname}:{self.name}:Error: No {self.level2}/Statistics found?')
+        #    return data
 
         if not 'scan_edges' in data[f'{self.level2}/Statistics'].keys():
             self.logger(f'{fname}:{self.name}:Error: No {self.level2}/Statistics/scan_edges found?')
@@ -265,6 +265,8 @@ class CreateLevel3(BaseClasses.DataStructure):
         all_tod = np.zeros((8, feed_tod.shape[-1]))
         all_weights=np.zeros((8, feed_tod.shape[-1]))
         all_frequency=np.zeros((8))
+        feed_weights[~np.isfinite(feed_tod)] = 0
+        feed_tod[~np.isfinite(feed_tod)] = 0
         for ichan, (flow,fhigh) in enumerate(zip(np.arange(8)+26,np.arange(8)+27)):
             sel = ((self.frequency >= flow) & (self.frequency < fhigh))
             top = np.sum(feed_tod[sel,:]*feed_weights[sel,:],axis=0)
@@ -413,7 +415,7 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
                                           'Field','TauA','CasA',
                                           'Jupiter','jupiter','CygA'],
                  nbins=50, 
-                 samplerate=50, 
+                 samplerate=20, 
                  database = None,
                  medfilt_stepsize=1000,
                  figure_dir = 'figures/Level3FnoiseStats',
@@ -486,15 +488,20 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
                     pbar.update(nBands)
                     continue
                 for iband in range(nBands):
-
-                    atmos_filter,atmos,atmos_errs = self.FitAtmosAndGround(tod[ifeed,iband,start:end],
+                    t = np.arange(tod[ifeed,iband,start:end].size)/self.samplerate
+                    scantod = tod[ifeed,iband,start:end]
+                    gd = np.isfinite(scantod)
+                    scantod[~gd] = np.interp(t[~gd],t[gd],scantod[gd])
+                    atmos_filter,atmos,atmos_errs = self.FitAtmosAndGround(scantod,
                                                                            az[pointing_ifeed,start:end],
                                                                            el[pointing_ifeed,start:end])
-                    resid = tod[ifeed,iband,start:end] - atmos_filter
+
+                    resid = scantod - atmos_filter
                     tod_filter = self.median_filter(resid)
                     resid = resid - tod_filter
-
-                    w_auto = stats.AutoRMS(tod[ifeed,iband,start:end])
+                    
+                    
+                    w_auto = stats.AutoRMS(resid)
 
                     ps, nu, f_fits, w_auto = self.FitPowerSpectrum(resid,
                                                                    w_auto)
@@ -631,7 +638,7 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
             return data
 
         # Want to ensure the data file is read/write
-        data = self.setReadWrite(data)
+        #data = self.setReadWrite(data)
 
         self.logger(f'{fname}:{self.name}: Measuring noise stats.')
         self.run(data)

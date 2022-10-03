@@ -4,7 +4,7 @@ import emcee
 from comancpipeline.Tools import stats
 from tqdm import tqdm
 # FUNCTION FOR FITTING ROUTINES
-
+from matplotlib import pyplot
 class Gauss2dRot:
 
     def __init__(self):
@@ -440,11 +440,22 @@ class Gauss2dRot_General:
             # Perform the least-sqaures fit
             result = minimize(self.minimize_errfunc,P0,args=(xy,z,covariance),method='Nelder-Mead')
             pos = result.x + 1e-4 * np.random.normal(size=(nwalkers, len(result.x)))
+
             sampler = emcee.EnsembleSampler(nwalkers,len(result.x),self.emcee_errfunc, 
                                             args=(xy,z,covariance))
             sampler.run_mcmc(pos,samples,progress=True)
             
             flat_samples = sampler.get_chain(discard=discard,thin=thin,flat=True)
+            print(flat_samples.shape)
+            #for i in range(flat_samples.shape[1]):
+            #    pyplot.plot(flat_samples[:,i,0])
+            #pyplot.show()
+            #stop
+            #pyplot.plot(flat_samples)
+            #pyplot.show()
+            import corner
+            corner.corner(flat_samples)
+            pyplot.show()
             result = np.nanmedian(flat_samples,axis=0)
             error  = stats.MAD(flat_samples ,axis=0)
 
@@ -496,14 +507,19 @@ class Gauss2dRot_General:
             self.defaults[k] = v
 
     def emcee_errfunc(self,P,xy,z,cov):  
+        if not np.isfinite(np.sum(P)):
+            print(P)
         if self.limfunc(P):
-            return -1e32
+            #P[:] = 0
+            #P[-1] = 1
+            #P[-2] = 5./60./2.355
+            return -np.inf
         else:
             chi2 = -np.sum( (self.func(P,xy) - z)**2/cov ) #- self.Priors(P)
             if np.isfinite(chi2):
                 return chi2
             else:
-                return -1e32
+                return -np.inf
 
     def minimize_errfunc(self,P,xy,z,cov):
         if self.limfunc(P):
