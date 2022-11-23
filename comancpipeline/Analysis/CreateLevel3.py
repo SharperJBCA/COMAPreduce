@@ -415,7 +415,7 @@ class Level3FnoiseStats(BaseClasses.DataStructure):
                                           'Field','TauA','CasA',
                                           'Jupiter','jupiter','CygA'],
                  nbins=50, 
-                 samplerate=20, 
+                 samplerate=50, 
                  database = None,
                  medfilt_stepsize=1000,
                  figure_dir = 'figures/Level3FnoiseStats',
