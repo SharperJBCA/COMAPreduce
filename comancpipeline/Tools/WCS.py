@@ -17,6 +17,39 @@ def ylim_proj(w,y0,y1):
         w.world_to_pixel(SkyCoord(w.wcs.crval[0],y1,frame='galactic',unit='deg'))[1])
     pyplot.ylim(*z)
 
+
+def get_flat_pixels(x, y,wcs,nxpix,nypix, return_xy=False):
+    """
+    Convert sky angles to pixel space
+    """
+    if isinstance(wcs, type(None)):
+        raise TypeError( 'No WCS object declared')
+        return
+    else:
+        pixels = wcs.wcs_world2pix(x+wcs.wcs.cdelt[0]/2.,
+                                   y+wcs.wcs.cdelt[1]/2.,0)
+        pflat = (pixels[0].astype(int) + nxpix*pixels[1].astype(int)).astype(int)
+            
+
+        # Catch any wrap around pixels
+        pflat[(pixels[0] < 0) | (pixels[0] > nxpix)] = -1
+        pflat[(pixels[1] < 0) | (pixels[1] > nypix)] = -1
+        
+        #
+        pixels = wcs.wcs_pix2world(*np.unravel_index(pflat,(nypix,nxpix),order='F'),0)
+        pixels[0][pixels[0] > 180] -= 360
+    if return_xy:
+        return pflat,pixels
+    else:
+        return pflat
+    
+def get_pixel_coordinates(wcs,shape):
+    """
+    Get the world coordinates of pixels
+    """
+    return wcs.wcs_pix2world(*np.unravel_index(np.arange(shape[0]*shape[1]),(shape),order='F'),0)
+
+
 def get_xlim_ylim(x0,y0,width,wcs,shape):
 
     nypix,nxpix = shape
