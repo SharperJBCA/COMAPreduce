@@ -756,6 +756,7 @@ class CalculateVaneMeasurement(BaseClasses.DataStructure):
         self.output_dir = '{}/{}'.format(self.output_dir, self.calvanedir)
         # Ignore Sky dips
         if 'Sky nod' in comment:
+            print('Sky Dip')
             self.logger(f'{fname}:{self.name}: Observation is a sky nod (ignoring)')
             return None
 

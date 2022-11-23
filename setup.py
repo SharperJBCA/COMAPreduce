@@ -62,7 +62,7 @@ config = {'name':'comancpipeline',
                       'comancpipeline.SEDs.amemodels',
                       'comancpipeline.MapMaking'],
           'package_data':{'':["*.dat","gains.hd5"],
-                          'comancpipeline':['COMAPDatabase/datecuts/*.dat']},
+                          'comancpipeline':['COMAPDatabase/datecuts/*.dat','Analysis/*.hdf5']},
           'include_package_data':True,
           'ext_modules':cythonize([ffuncs,pysla, filters,binFuncs],
                                   compiler_directives={'language_level':"3"})}
