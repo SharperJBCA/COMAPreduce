@@ -17,6 +17,7 @@ Sutton et al. 2011
 import numpy as np
 from matplotlib import pyplot
 from scipy.sparse.linalg import LinearOperator
+from scipy.ndimage import gaussian_filter
 from comancpipeline.Tools import binFuncs
 import healpy as hp
 from mpi4py import MPI
@@ -87,6 +88,7 @@ def mpi_sum_vector(x):
 
 
 def mpi_share_map(m):
+    comm.Barrier()
     for irank in range(1,size):
         if (rank == 0) & (size > 1):
             m_node2 = np.zeros(m.size)
@@ -97,6 +99,7 @@ def mpi_share_map(m):
         elif (rank !=0 ) & (rank == irank) & (size > 1):
             print(f'{irank} sending to 0')
             comm.Send(m, dest=0,tag=irank)
+    comm.Barrier()
     return m
 
 
@@ -329,11 +332,13 @@ def get_signal(N,x,y,npix):
 def destriper_iteration(_pointing,
                         _tod,
                         _weights,
+                        _weights_destriping,
                         offset_length,
                         pixel_edges,
                         special_weight=None):
-    result = run(_pointing,_tod,_weights,offset_length,pixel_edges,
+    result = run(_pointing,_tod,_weights_destriping,offset_length,pixel_edges,
                  special_weight=None)
+    
     m,h = bin_offset_map(_pointing,
                          np.repeat(result,offset_length),
                          _weights,
@@ -351,9 +356,13 @@ def destriper_iteration(_pointing,
                          offset_length,
                          pixel_edges,extend=False)
 
+    print(rank,f'Sharing map data size:{_tod.size}')
     m = mpi_share_map(m)
+    print(rank,'Sharing weights')
     h = mpi_share_map(h)
+    print(rank,'Sharing naive map')
     n = mpi_share_map(n)
+    print(rank,'Sharing square map')
     d2 = mpi_share_map(d2)
 
     if rank == 0:
@@ -375,36 +384,47 @@ def run_destriper(_pointing,
                   feedid,
                   obsids,
                   obsid_cuts,
+                  ufeeds,
                   chi2_cutoff=100,special_weight=None):
 
-    maps,result = destriper_iteration(_pointing,
-                                      _tod,
-                                      _weights,
-                                      offset_length,
-                                      pixel_edges,
-                                      special_weight=None)
-
+    #maps,result = destriper_iteration(_pointing,
+    #                                  _tod,
+    #                                  _weights,
+    #                                  offset_length,
+    #                                  pixel_edges,
+    #                                  special_weight=None)
+    result = np.zeros(_tod.size//offset_length)
     # Here we will check Chi^2 contributions of each datum to each pixel.
     # Data that exceeds the chi2_cutoff are weighted to zero 
     # Share maps to all nodes
-    for k in maps.keys():
-        maps[k] = comm.bcast(maps[k],root=0)
+    #for k in maps.keys():
+    #    maps[k] = comm.bcast(maps[k],root=0)
 
-    residual = (_tod-np.repeat(result,offset_length)-maps['map'][_pointing])
+    _weights_destriping = _weights*1.
+    chi2_cutoff = 15
+    residual = (_tod-np.repeat(result,offset_length))
     chi2 = residual**2*_weights
-    _weights[chi2 > chi2_cutoff] = 0
-
-    _maps,result = destriper_iteration(_pointing,_tod,_weights,offset_length,pixel_edges)
+    _weights_destriping[chi2 > chi2_cutoff] = 0
+    _maps,result = destriper_iteration(_pointing,
+                                       _tod,
+                                       _weights,
+                                       _weights_destriping,
+                                       offset_length,pixel_edges)
 
     if rank == 0:
         print('HELLO',flush=True)
 
     maps = {'All':_maps}
     residual = (_tod-np.repeat(result,offset_length))
-    # now make each individual feed map
-    ufeeds = np.unique(feedid)
+#    # now make each individual feed map
     for feed in ufeeds:
+        print(f'Rank {rank} binning Feed:{feed:02d}')
         sel = np.where((feedid == feed))[0]
+        n,h = bin_offset_map(_pointing[sel],
+                             _tod[sel],
+                             _weights[sel],
+                             offset_length,
+                             pixel_edges,extend=False)
         m,h = bin_offset_map(_pointing[sel],
                              residual[sel],
                              _weights[sel],
@@ -412,15 +432,23 @@ def run_destriper(_pointing,
                              pixel_edges,extend=False)
         m = mpi_share_map(m)
         h = mpi_share_map(h)
+        n = mpi_share_map(n)
         if rank == 0:
             m[h!=0] /= h[h!=0]
-
-            maps[f'Feed{feed:02d}']={'map':m,'weight':h}
+            n[h!=0] /= h[h!=0]
+            maps[f'Feed{feed:02d}']={'map':m,'weight':h,'naive':n}
         else:           
-            maps[f'Feed{feed:02d}']={'map':None,'weight':None}
+            maps[f'Feed{feed:02d}']={'map':None,'weight':None,'naive':None}
+    
     
     for (low,high) in obsid_cuts:
         sel = np.where(((obsids >= low) & (obsids < high)))[0]
+        print(f'Rank {rank} binning {low} to {high}')
+        n,h = bin_offset_map(_pointing[sel],
+                             _tod[sel],
+                             _weights[sel],
+                             offset_length,
+                             pixel_edges,extend=False)
         m,h = bin_offset_map(_pointing[sel],
                              residual[sel],
                              _weights[sel],
@@ -428,16 +456,22 @@ def run_destriper(_pointing,
                              pixel_edges,extend=False)
         m = mpi_share_map(m)
         h = mpi_share_map(h)
+        n = mpi_share_map(n)
         if rank == 0:
             m[h!=0] /= h[h!=0]
-
-            maps[f'ObsID{low:07d}-{high:07d}']={'map':m,'weight':h}
+            n[h!=0] /= h[h!=0]
+            maps[f'ObsID{low:07d}-{high:07d}']={'map':m,'weight':h,'naive':n}
         else:           
-            maps[f'ObsID{low:07d}-{high:07d}']={'map':None,'weight':None}
+            maps[f'ObsID{low:07d}-{high:07d}']={'map':None,'weight':None,'naive':None}
 
     for feed in ufeeds:
         for (low,high) in obsid_cuts:
             sel = np.where(((obsids >= low) & (obsids < high) & (feedid == feed)))[0]
+            n,h = bin_offset_map(_pointing[sel],
+                                 _tod[sel],
+                                 _weights[sel],
+                                 offset_length,
+                                 pixel_edges,extend=False)
             m,h = bin_offset_map(_pointing[sel],
                                  residual[sel],
                                  _weights[sel],
@@ -445,12 +479,13 @@ def run_destriper(_pointing,
                                  pixel_edges,extend=False)
             m = mpi_share_map(m)
             h = mpi_share_map(h)
+            n = mpi_share_map(n)
             if rank == 0:
                 m[h!=0] /= h[h!=0]
-
-                maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':m,'weight':h}
+                n[h!=0] /= h[h!=0]
+                maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':m,'weight':h,'naive':n}
             else:           
-                maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':None,'weight':None}
+                maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':None,'weight':None,'naive':None}
 
     return maps
 

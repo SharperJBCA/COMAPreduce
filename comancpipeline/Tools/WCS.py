@@ -35,9 +35,6 @@ def get_flat_pixels(x, y,wcs,nxpix,nypix, return_xy=False):
         pflat[(pixels[0] < 0) | (pixels[0] > nxpix)] = -1
         pflat[(pixels[1] < 0) | (pixels[1] > nypix)] = -1
         
-        #
-        pixels = wcs.wcs_pix2world(*np.unravel_index(pflat,(nypix,nxpix),order='F'),0)
-        pixels[0][pixels[0] > 180] -= 360
     if return_xy:
         return pflat,pixels
     else:
