@@ -98,7 +98,16 @@ def fit_gain_fluctuations(y_feed, tsys, sigma0_prior, fknee_prior, alpha_prior):
     return np.reshape(F*dg[None,:],(4,Nfreqs,dg.size)), dT, alpha, spec
 
 def model(P,x):
+    """
+    Assuming model \sigma_w^2 + \sigma_r^2 (frequency/frequency_r)^\alpha
+
+    Parameters
+    ----------
+
+    Returns
+    -------
     
+    """
     return P[0] + P[1]*np.abs(x/1.)**P[2]
 
 def error(P,x,y,sig2):
@@ -343,7 +352,7 @@ class CreateLevel2GainCorr(BaseClasses.DataStructure):
                 gl,gb = Coordinates.e2g(ra,dec)
                 for (xsrc,ysrc,rsrc) in bright_sources:
                     src_sep = Coordinates.AngularSeperation(xsrc,ysrc,gl,gb)
-                    src_mask= (src_src < rsrc)
+                    src_mask= (src_sep < rsrc)
 
                 el  = el_grp[ifeed,start:end]
                 features = np.unique(np.log(feature_grp[start:end])/np.log(2))
