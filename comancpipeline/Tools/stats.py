@@ -1,12 +1,4 @@
 import numpy as np
-from matplotlib import pyplot
-import h5py
-import healpy as hp
-import sys
-from tqdm import tqdm
-from comancpipeline.Tools import Coordinates
-from matplotlib.transforms import ScaledTranslation
-from scipy.signal import fftconvolve
 
 c = 299792458.
 k = 1.3806488e-23
@@ -64,7 +56,7 @@ def MAD(d,axis=0):
 
     return rms
 
-def AutoRMS(tod):
+def auto_rms(tod : np.ndarray):
     """
     Auto-differenced RMS
     """
@@ -83,7 +75,7 @@ def TsysRMS(tod,sample_rate,bandwidth):
     """
     Calculate Tsys from the RMS
     """
-    rms =  AutoRMS(tod) 
+    rms =  auto_rms(tod) 
     Tsys = rms*np.sqrt(bandwidth/sample_rate)
     return Tsys
 

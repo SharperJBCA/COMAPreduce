@@ -1,1 +1,8 @@
-from comancpipeline.Analysis import Calibration,SourceFitting,Mapping,BaseClasses,Massaging,Simulations,Statistics,Flagging,CreateLevel3,Level3Statistics
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jan 25 15:27:21 2023
+
+@author: sharper
+"""
+
