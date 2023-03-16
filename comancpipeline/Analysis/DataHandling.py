@@ -13,12 +13,16 @@ from h5py import File, Dataset
 from dataclasses import dataclass, field
 import itertools
 from typing import Callable
+from scipy.interpolate import interp1d
+import logging
 
+from comancpipeline.Tools import Coordinates
     
 @dataclass 
 class HDF5Data:
     """General class for reading/writing in HDF5 files to memory using dictionaries"""
     
+    name : str = 'HDF5Data' 
     large_datasets : list[str] = field(default_factory=list)
     hdf5_file : File = None
     overwrite : bool = True
@@ -29,15 +33,14 @@ class HDF5Data:
         if isinstance(self.hdf5_file, File):
             self.hdf5_file.close()    
             
-    def __setitem__(self, key, item, attr=False):
-        if attr:
-            self.__hdf5_attributes[key] = item
+    def __setitem__(self, key, item):
         self.__hdf5_data[key] = item
 
-    def __getitem__(self, key, attr=False):
-        if attr:
-            return self.__hdf5_attributes[key]
+    def __getitem__(self, key):
         return self.__hdf5_data[key]
+    
+    def attrs(self, path, attribute_key):
+        return self.__hdf5_attributes[path][attribute_key] 
     
     def keys(self):
         #if attr:
@@ -49,6 +52,12 @@ class HDF5Data:
             return self.__hdf5_attributes.items()
         return self.__hdf5_data.items()
     
+    @property 
+    def groups(self):
+        """ """ 
+        groups = [g.split('/')[0] for g in self.__hdf5_data.keys()] 
+        return np.unique(groups)
+    
     def create_from_dictionary(self, data : dict, attributes : dict = {}) -> None:
         """Create a data object using a dictionary"""
         self.__hdf5_data = {k:v for k, v in data.item()}
@@ -56,7 +65,8 @@ class HDF5Data:
         
     def read_data_file(self, filename : str) -> None:
         """Implement file reading"""
-        
+        logging.info(f'{self.name}: READING {filename}')
+
         self.hdf5_file = File(filename,'r')
         
         # Read in all of the data
@@ -64,10 +74,13 @@ class HDF5Data:
         
     def write_data_file(self, filename : str) -> None:
         """Implements file writing for this data_type"""
+        logging.info(f'{self.name}: WRITING {filename}')
         
         if os.path.exists(filename) & self.overwrite:
+            logging.info(f'{self.name}: Overwriting {filename}')
             os.remove(filename)
         elif os.path.exists(filename) & ~self.overwrite:
+            logging.info(f'{self.name}: {filename} already exists and overwrite={self.overwrite}')
             raise FileExistsError(f'{filename} already exists and overwrite={self.overwrite}')
             
         if os.path.exists(filename):
@@ -106,9 +119,9 @@ class HDF5Data:
             
         if isinstance(node, Dataset):
             if name in self.large_datasets:
-                self.__hdf5_data[name] = node
+                self[name] = node
             else:
-                self.__hdf5_data[name] = node[...]
+                self[name] = node[...]
 
 PipelineFunction = Callable[[HDF5Data], HDF5Data]
 
@@ -117,15 +130,8 @@ class RepointEdges:
     Scan Edge Split - Each time the telescope stops to repoint this is defined as the edge of a scan                                                            
     """
 
-    def __call__(self, data, source=''):
-        """                                                                                                                                                    
-        Expects a level 1 data structure                                                                                                                       
-        """
-        
-        return self.getScanPositions(data)
-
     @staticmethod
-    def get_scan_positions(data : HDF5Data):
+    def get_scan_positions(data : HDF5Data, scan_status_code : int = 1):
         """                                                                                                                                                     
         Finds beginning and ending of scans, creates mask that removes data when the telescope is not moving,                                                   
         provides indices for the positions of scans in masked array                                                                                             
@@ -134,22 +140,55 @@ class RepointEdges:
         - We may need to check for vane position too                                                                                                            
         - Iteratively finding the best current fraction may also be needed                                                                                      
         """
-        features = data.features 
-        scan_status = d['hk/antenna0/deTracker/lissajous_status'][...]
-        scan_utc    = d['hk/antenna0/deTracker/utc'][...]
-        scan_status_interp = interp1d(scan_utc,scan_status,kind='previous',bounds_error=False,
-                                      fill_value='extrapolate')(d['spectrometer/MJD'][...])
+        if data.source_name in Coordinates.CalibratorList: 
+            scan_edges = RepointEdges.get_scan_positions_calibrator(data, scan_status_code)
+        else: 
+            scan_edges = RepointEdges.get_scan_positions_source(data, scan_status_code)
 
-        scans = np.where((scan_status_interp == self.scan_status_code))[0]
+        return scan_edges
+    
+    def get_scan_positions_source(data : HDF5Data, scan_status_code : int = 1):
+        """                                                                                                                                                     
+        Finds beginning and ending of scans, creates mask that removes data when the telescope is not moving,                                                   
+        provides indices for the positions of scans in masked array                                                                                             
+                                                                                                                                                                
+        Notes:                                                                                                                                                  
+        - We may need to check for vane position too                                                                                                            
+        - Iteratively finding the best current fraction may also be needed                                                                                      
+        """
+        scan_status = data['hk/antenna0/deTracker/lissajous_status'][...]
+        scan_utc    = data['hk/antenna0/deTracker/utc'][...]
+        scan_status_interp = interp1d(scan_utc,scan_status,kind='previous',bounds_error=False,
+                                      fill_value='extrapolate')(data['spectrometer/MJD'][...])
+        scans = np.where((scan_status_interp == scan_status_code))[0]
         diff_scans = np.diff(scans)
         edges = scans[np.concatenate(([0],np.where((diff_scans > 1))[0], [scans.size-1]))]
         scan_edges = np.array([edges[:-1],edges[1:]]).T
 
         return scan_edges
 
+    
+    @staticmethod
+    def get_scan_positions_calibrator(data : HDF5Data, scan_status_code : int = 1):
+        """                                                                                                                                                     
+        Finds beginning and ending of scans, creates mask that removes data when the telescope is not moving,                                                   
+        provides indices for the positions of scans in masked array                                                                                             
+                                                                                                                                                                
+        Notes:                                                                                                                                                  
+        - We may need to check for vane position too                                                                                                            
+        - Iteratively finding the best current fraction may also be needed                                                                                      
+        """
+
+        edges = np.where(data.on_source)[0] 
+        scan_edges = np.array([[int(min(edges))], [int(max(edges))]]).T
+        return scan_edges
+
+
 @dataclass 
 class COMAPLevel1(HDF5Data):
     """Some helper functions for Level 1 COMAP Data handling are included"""
+    
+    name : str = 'COMAPLevel1'
     
     vane_bit_flag : int = 13
     
@@ -157,6 +196,18 @@ class COMAPLevel1(HDF5Data):
     OBSID_MAXIMUM : int = 1_000_000 
     
     VANE_HOT_TEMP_OFFSET : float = 273.15 # K
+
+
+    @property
+    def features(self):
+        f = self['spectrometer/features']*1
+        good = (f != 0)
+        f[good] = np.log(f[good])/np.log(2)
+        return f.astype(int)
+    
+    @property
+    def on_source(self):
+        return (self.features != 13) & (self.features != 0)
 
     @property
     def vane_flag(self):
@@ -182,7 +233,7 @@ class COMAPLevel1(HDF5Data):
     
     @property 
     def scan_edges(self):
-        return 
+        return RepointEdges.get_scan_positions(self)
     
     @property
     def ra(self):
@@ -217,6 +268,24 @@ class COMAPLevel1(HDF5Data):
     def el(self, v):
         self['spectrometer/pixel_pointing/pixel_el'] = v
 
+    @property 
+    def source_name(self):
+        source_split = self.attrs('comap','source').split(',')
+        if len(source_split) > 1:
+            source = [s for s in source_split if s not in self.bad_keywords]
+            if len(source) > 0:
+                source = source[0]
+            else:
+                source = ''
+        else:
+            source = source_split[0]
+
+        return source
+
+    @property 
+    def airmass(self):
+        A = 1./np.sin(self.el*np.pi/180.)
+        return A
     
     def tod_loop(self,feeds=True, bands=True, channels=True):
         """Applies a function to all spectrometer/tod data"""
@@ -236,44 +305,58 @@ class COMAPLevel1(HDF5Data):
 class COMAPLevel2(HDF5Data):
     """Some helper functions for Level 2 COMAP Data handling are included"""
 
+    name : str = 'COMAPLevel2'
     filename : str = 'pipeline_output.hdf5'
 
     def __post_init__(self):
         """Define the expected structure for the Level 2 File"""
         
-        self['vane/system_temperature'] = np.zeros(1)
-        self['vane/system_gain'] = np.zeros(1)
-
-        self['astro_cal/calibration_factors'] = np.zeros(1)
-        
-        self['spectrometer/tod'] = np.zeros(1)
-        self['spectrometer/tod_stddev'] = np.zeros(1)
-        self['spectrometer/MJD'] = np.zeros(1)
-        self['spectrometer/feeds'] = np.zeros(1)
-        self['spectrometer/bands'] = np.zeros(1)
-        self['spectrometer/MJD'] = np.zeros(1)
-        self['spectrometer/features'] = np.zeros(1)
-
-        self['spectrometer/pixel_pointing/pixel_ra'] = np.zeros(1)
-        self['spectrometer/pixel_pointing/pixel_dec'] = np.zeros(1)
-        self['spectrometer/pixel_pointing/pixel_az'] = np.zeros(1)
-        self['spectrometer/pixel_pointing/pixel_el'] = np.zeros(1)
+        if os.path.exists(self.filename):
+            self.read_data_file(self.filename)
+                
+    def contains(self, pipeline_function : PipelineFunction):
+        """Check if process data is already in level 2 structure"""
+        if all([g in self.groups for g in pipeline_function.groups]):
+            return True
+        else:
+            return False
         
     def update(self, pipeline_function : PipelineFunction):
         """Update data"""
         data, attrs = pipeline_function.save_data
         for k,v in data.items():
             self[k] = v
+            
         for k,v in attrs.items():
             self.__hdf5_attributes[k] = v
 
+
+    @property
+    def features(self):
+        f = self['spectrometer/features']*1
+        good = (f != 0)
+        f[good] = np.log(f[good])/np.log(2)
+        return f.astype(int)
+    
+    @property
+    def on_source(self):
+        return (self.features != 13) & (self.features != 0)
+
+    @property 
+    def scan_edges(self):
+        return RepointEdges.get_scan_positions(self)
+
+    @property
+    def tod_shape(self):
+        return self['averaged_tod/tod'].shape
+    
     @property
     def tod(self):
-        return self['spectrometer/tod'] 
-    
+        return self['averaged_tod/tod'] 
+
     @tod.setter 
     def tod(self, v):
-        self['spectrometer/tod'] = v
+        self['averaged_tod/tod'] = v
 
     @property
     def mjd(self):
@@ -284,8 +367,27 @@ class COMAPLevel2(HDF5Data):
         self['spectrometer/MJD'] = v
         
     @property
+    def ra(self):
+        return self['spectrometer/pixel_pointing/pixel_ra'] 
+            
+    @property
+    def dec(self):
+        return self['spectrometer/pixel_pointing/pixel_dec'] 
+    
+    @property
+    def az(self):
+        return self['spectrometer/pixel_pointing/pixel_az'] 
+
+    @property
+    def el(self):
+        return self['spectrometer/pixel_pointing/pixel_el'] 
+
+        
+    @property
     def system_temperature(self):
         return self['vane/system_temperature'] 
+    
+
         
     @system_temperature.setter 
     def system_temperature(self, v):
@@ -298,3 +400,27 @@ class COMAPLevel2(HDF5Data):
     @system_gain.setter 
     def system_gain(self, v):
         self['vane/system_gain'] = v
+        
+    @property 
+    def airmass(self):
+        A = 1./np.sin(self.el*np.pi/180.)
+        return A
+    
+    def tod_auto_rms(self, ifeed : int, iband : int):
+        """Return the auto rms of the feed/band requested"""
+        tod = self['averaged_tod/tod'][ifeed,iband] 
+        N = tod.size//2 * 2 
+        diff = tod[:N:2]-tod[1:N:2] 
+        return np.nanstd(diff)/np.sqrt(2)
+
+    def tod_loop(self,feeds=True, bands=True):
+        """Applies a function to all spectrometer/tod data"""
+        n_feeds, n_bands, n_samples = self.tod_shape
+
+        iterators = []
+        if feeds:
+            iterators += [np.vstack([np.arange(n_feeds,dtype=int), self['spectrometer/feeds']]).T]
+        if bands:
+            iterators += [np.arange(n_bands,dtype=int)]
+        
+        return itertools.product(*iterators)

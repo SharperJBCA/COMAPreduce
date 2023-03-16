@@ -14,10 +14,12 @@ from dataclasses import dataclass, field
 from .Running import PipelineFunction
 from .DataHandling import HDF5Data , COMAPLevel2
 from comancpipeline.Tools.stats import auto_rms
+import logging
 
 @dataclass 
 class MeasureSystemTemperature(PipelineFunction):
-    
+    name : str = 'MeasureSystemTemperature'
+
     level2 : COMAPLevel2 = field(default_factory=COMAPLevel2()) 
 
     system_temperature : np.ndarray = field(default_factory=lambda : np.zeros(1))
@@ -28,12 +30,14 @@ class MeasureSystemTemperature(PipelineFunction):
     
     VANE_COLD_TEMP : float = 2.73 # K
     
+    groups : list[str] = field(default_factory=lambda:['vane'])
     
-    def __call__(self, data : HDF5Data) -> HDF5Data:
-                
+    overwrite : bool = False
+    STATE : bool = True 
+
+    def __call__(self, data : HDF5Data, level2_data : COMAPLevel2):
         self.measure_system_temperature(data)
-        
-        return data
+        return self.STATE 
     
     @property 
     def save_data(self):
@@ -105,7 +109,6 @@ class MeasureSystemTemperature(PipelineFunction):
             return id_vane, njumps
         
         rms = auto_rms(tod[:,None]).flatten()
-
         hot_id, hot_njumps  = find_indices(tod, rms, command='>')
         cold_id,cold_njumps = find_indices(tod, rms, command='<')
 
@@ -131,10 +134,13 @@ class MeasureSystemTemperature(PipelineFunction):
                 tod = data['spectrometer/tod'][ifeed,iband,:,start:end]
                 band_average = data['spectrometer/band_average'][ifeed,iband,start:end]
 
-                hot_samples, cold_samples = self.find_hot_cold_from_tod(band_average)
+                try: 
+                    hot_samples, cold_samples = self.find_hot_cold_from_tod(band_average)
+                    tsys, gain = self.system_temperature_from_tod(data.vane_temperature, tod, hot_samples, cold_samples) 
+                    self.system_temperature[ivane,ifeed,iband,:] = tsys
+                    self.system_gain[ivane,ifeed,iband,:] = gain
+                    logging.debug(f'{self.name}: Average Gain for Event {ivane:02d} in Feed {feed:02d} BAND {iband:02d}: {np.nanmean(gain):.2f}')
+                    logging.debug(f'{self.name}: Average Tsys for Event {ivane:02d} in Feed {feed:02d} BAND {iband:02d}: {np.nanmean(tsys):.2f}')
 
-                tsys, gain = self.system_temperature_from_tod(data.vane_temperature, tod, hot_samples, cold_samples) 
-
-                self.system_temperature[ivane,ifeed,iband,:] = tsys
-                self.system_gain[ivane,ifeed,iband,:] = gain
-    
+                except RuntimeError:
+                    logging.info(f'{self.name}: NO VANE DATA IN FEED {feed:02d} BAND {iband:02d}')

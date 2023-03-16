@@ -1,10 +1,7 @@
 import numpy as np
 from matplotlib import pyplot
-from matplotlib.patches import Ellipse
 
-from scipy.interpolate import interp1d
 from astropy.io import fits
-from astropy import wcs
 
 import h5py
 
@@ -13,7 +10,7 @@ import click
 import ast
 import os
  
-from comancpipeline.Tools import ParserClass,binFuncs
+from comancpipeline.Tools import ParserClass
 from comancpipeline.MapMaking import DataReader, Destriper
 
 class PythonLiteralOption(click.Option):
@@ -103,8 +100,6 @@ def write_map(parameters,data,offsetMap,postfix=''):
 
     des = naive-offmap
     des[hits == 0] = np.nan
-    clean_map = naive-offmap
-
     
     hdu = fits.PrimaryHDU(des,header=data.naive.wcs.to_header())
     cov = fits.ImageHDU(variance,name='Covariance',header=data.naive.wcs.to_header())
@@ -145,7 +140,6 @@ def level1_destripe(filename,options):
         for k2, v2 in v1.items():
             p[k1][k2] = v2
 
-    title = p['Inputs']['title']
     # Read in all the data
     if not isinstance(p['Inputs']['feeds'], list):
         p['Inputs']['feeds'] = [p['Inputs']['feeds']]

@@ -1,13 +1,9 @@
 import numpy as np
 import h5py
-from astropy import wcs
 from matplotlib import pyplot
 from tqdm import tqdm
-import pandas as pd
-from scipy import linalg as la
 import healpy as hp
-from comancpipeline.Tools import  binFuncs, stats,Coordinates
-from comancpipeline.data import Data
+from comancpipeline.Tools import  Coordinates
 from comancpipeline.Tools.median_filter import medfilt
 
 from comancpipeline.MapMaking import MapTypes, OffsetTypes
@@ -165,7 +161,7 @@ class ReadDataLevel2:
             return
 
         N = 0
-        scan_edges = d['level2/Statistics/scan_edges'][:]
+        scan_edges = d['averaged_tod/scan_edges'][:]
         for (start,end) in scan_edges:
             N += (end-start)//self.offset_length * self.offset_length
         d.close()
@@ -187,19 +183,19 @@ class ReadDataLevel2:
         Want to select each feed and average the data over some frequency range
         """
 
-        dset = d['level3/tod']
-        wei_dset = d['level3/weights']
-        if 'level2/Flags/sigma_clip_flag' in d:
-            flags = d['level2/Flags/sigma_clip_flag']
-        else:
-            flags = np.zeros((dset.shape[0],dset.shape[-1]),dtype=bool)
+        dset = d['averaged_tod/tod']
+        wei_dset = d['averaged_tod/weights']
+        #if 'level2/Flags/sigma_clip_flag' in d:
+        #    flags = d['level2/Flags/sigma_clip_flag']
+        #else:
+        flags = np.zeros((dset.shape[0],dset.shape[-1]),dtype=bool)
         tod_in = np.zeros(dset.shape[-1],dtype=dset.dtype)
 
         #print
-        az = d['level1/spectrometer/pixel_pointing/pixel_az']
-        el = d['level1/spectrometer/pixel_pointing/pixel_el']
+        az = d['spectrometer/pixel_pointing/pixel_az']
+        el = d['spectrometer/pixel_pointing/pixel_el']
 
-        scan_edges = d['level2/Statistics/scan_edges'][...]
+        scan_edges = d['averaged_tod/scan_edges'][...]
         tod = np.zeros((len(self.FeedIndex), self.datasizes[i]))
         weights = np.zeros((len(self.FeedIndex), self.datasizes[i]))
 
@@ -213,16 +209,15 @@ class ReadDataLevel2:
             el_in = el[ifeed,:]
 
             flags_in = flags[ifeed,:]
-            samples = np.arange(tod_in.size)
             if not isinstance(self.feed_weights,type(None)):
                 wei_in /= self.feed_weights[index]**2 # bigger feed weights, mean the weights are... lower?
                 #print(self.Feeds[index],self.feed_weights[index])
 
 
-            if self.flag_spikes:
-                spikemask = d['level2/Statistics/Spikes/mask'][...]
-                wei_in[~spikemask] = 0
-                tod_in[~spikemask] = 0
+            #if self.flag_spikes:
+            #    spikemask = d['level2/Statistics/Spikes/mask'][...]
+            #    wei_in[~spikemask] = 0
+            #    tod_in[~spikemask] = 0
 
             wei_in[flags_in > 0.5] = 0
 
@@ -291,7 +286,6 @@ class ReadDataLevel2:
         nFeeds, nSamples = tod.shape
 
 
-        this_obsid = int(filename.split('/')[-1].split('-')[1])
         if isinstance(self.psds,type(None)):
             self.psdfreqs = d['level2/Statistics/freqspectra'][0,0,0,0,:]
             gd = np.isfinite(self.psdfreqs)
@@ -314,24 +308,16 @@ class ReadDataLevel2:
         d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
-        self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
+        self.FeedIndex = GetFeeds(d['spectrometer/feeds'][...], self.Feeds)
 
         # We store all the pointing information
-        x  = d['level1/spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
-        y  = d['level1/spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
-        az  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
-        el  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
-        tod= d['level3/tod'][0,self.iband,:]
+        x  = d['spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
+        y  = d['spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
+        az = d['spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
+        el = d['spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
         dt = 1./50.
-        #x  = d['level1/spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
-        #y  = d['level1/spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
-        #mjd  = d['level1/spectrometer/MJD'][:]
-        #for j in range(x.shape[0]):
-        #    x[j],y[j] = Coordinates.h2e_full(x[j],y[j],mjd,
-        #                                     Coordinates.comap_longitude,
-        #                                     Coordinates.comap_latitude)
 
-        scan_edges = d['level2/Statistics/scan_edges'][...]
+        scan_edges = d['averaged_tod/scan_edges'][...]
         pixels = np.zeros((x.shape[0], self.datasizes[i]))
         speed_mask = np.zeros((x.shape[0], self.datasizes[i]),dtype=bool)
         last = 0
@@ -371,7 +357,7 @@ class ReadDataLevel2:
         d = h5py.File(filename,'r')
 
         # --- Feed position indices can change
-        self.FeedIndex = GetFeeds(d['level1/spectrometer/feeds'][...], self.Feeds)
+        self.FeedIndex = GetFeeds(d['spectrometer/feeds'][...], self.Feeds)
 
         # Now accumulate the TOD into the naive map
         tod, weights     = self.getTOD(i,d)

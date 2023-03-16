@@ -17,35 +17,42 @@ from comancpipeline.Tools.stats import auto_rms
 
 @dataclass 
 class AssignLevel1Data(PipelineFunction):
+    name : str = 'AssignLevel1Data'
     
+    overwrite : bool = False
+
     level2 : COMAPLevel2 = field(default_factory=COMAPLevel2()) 
 
+    def __post_init__(self):
+        
+        self.data = {'spectrometer/MJD':np.empty(1),
+                'spectrometer/feeds':np.empty(1),
+                'spectrometer/bands':np.empty(1),
+                'spectrometer/features':np.empty(1),
+                'spectrometer/pixel_pointing/pixel_ra':np.empty(1),
+                'spectrometer/pixel_pointing/pixel_dec':np.empty(1),
+                'spectrometer/pixel_pointing/pixel_az':np.empty(1),
+                'spectrometer/pixel_pointing/pixel_el':np.empty(1)}
+
+        self.groups = list(self.data.keys())
     @property 
     def save_data(self):
         """Use full path that will be saved into the HDF5 file"""
-        data = {'spectrometer/MJD':self.mjd,
-                'spectrometer/feeds':self.feeds,
-                'spectrometer/bands':self.bands,
-                'spectrometer/features':self.features,
-                'spectrometer/pixel_pointing/pixel_ra':self.ra,
-                'spectrometer/pixel_pointing/pixel_dec':self.dec,
-                'spectrometer/pixel_pointing/pixel_az':self.az,
-                'spectrometer/pixel_pointing/pixel_el':self.el}
             
         attrs = {}
 
-        return data, attrs
+        return self.data, attrs
 
-    def __call__(self, data : HDF5Data) -> HDF5Data:
+    def __call__(self, data : HDF5Data, level2_data : COMAPLevel2):
         
-        self.mjd   = data['spectrometer/MJD']
-        self.feeds = data['spectrometer/feeds']
-        self.bands = data['spectrometer/bands']
-        self.features=data['spectrometer/features']
-        self.ra = data['spectrometer/pixel_pointing/pixel_ra']
-        self.dec= data['spectrometer/pixel_pointing/pixel_dec']
-        self.az = data['spectrometer/pixel_pointing/pixel_az']
-        self.el = data['spectrometer/pixel_pointing/pixel_el']
+        self.data['spectrometer/MJD']   = data['spectrometer/MJD']
+        self.data['spectrometer/feeds'] = data['spectrometer/feeds']
+        self.data['spectrometer/bands'] = data['spectrometer/bands']
+        self.data['spectrometer/features']=data['spectrometer/features']
+        self.data['spectrometer/pixel_pointing/pixel_ra'] = data['spectrometer/pixel_pointing/pixel_ra']
+        self.data['spectrometer/pixel_pointing/pixel_dec']= data['spectrometer/pixel_pointing/pixel_dec']
+        self.data['spectrometer/pixel_pointing/pixel_az'] = data['spectrometer/pixel_pointing/pixel_az']
+        self.data['spectrometer/pixel_pointing/pixel_el'] = data['spectrometer/pixel_pointing/pixel_el']
         
         return data
 
