@@ -25,8 +25,8 @@ logging.basicConfig(level=logging.DEBUG,
 @dataclass
 class PipelineFunction:
     """Template class implementing the minimum functions needed for a pipeline routine"""
-    
-    level2 : COMAPLevel2 = field(default_factory=COMAPLevel2()) 
+    STATE : bool = True 
+    level2 : COMAPLevel2 = field(default_factory=COMAPLevel2) 
 
     @property  
     def save_data(self):
@@ -41,7 +41,7 @@ class PipelineFunction:
 
     def __call__(self, data : HDF5Data) -> HDF5Data:
                         
-        return data
+        return self.STATE
 
     
 
@@ -51,8 +51,7 @@ class Runner:
     def __init__(self):
         
         self._filelist = []
-        self._processes= []
-        self.overwrites= []
+        self._processes= {}
 
         self.level2_data = None
         self.level2_data_dir = '.'
@@ -74,14 +73,13 @@ class Runner:
     def processes(self, processes : list):
         self._processes = processes
 
-    def __call__(self):
+    def run_tod(self):
         
         for filename in self._filelist:
             logging.info(f'PROCESSING {path.basename(filename)}')
 
-            self.level2_data = COMAPLevel2(filename=self.data_path(filename))
-            processes = [process(self.level2_data,overwrite=overwrite) for (process,overwrite) in zip(self.processes,
-                                                                                  self.overwrites)]
+            self.level2_data = COMAPLevel2(filename=self.data_path(filename))            
+            processes = [process(level2=self.level2_data,**kwargs) for (process,kwargs) in self.processes.items()]
 
             print('Loading level 1 data')
             data = COMAPLevel1(overwrite=False, large_datasets=['spectrometer/tod'])
@@ -94,6 +92,26 @@ class Runner:
                         break 
                     self.level2_data.update(process)
                     self.level2_data.write_data_file(f'{self.level2_data_dir}/Level2_{path.basename(filename)}')
+
+
+    def run_astro_cal(self):
+        """Astro cal functions only expect Level 2 file objects""" 
+        
+        for filename in self._filelist:
+            logging.info(f'PROCESSING {path.basename(filename)}')
+
+            processes = [process(**kwargs) for (process,kwargs) in self.processes.items()]
+
+            print('Loading level 2 data')
+            data = COMAPLevel2(filename=filename)
+            data.read_data_file(filename)
+            for process in processes:
+                logging.info(f'RUNNING {process.name}')
+                if not process(data): 
+                    logging.info(f'{process.name} has stopped processing file') 
+                    break 
+                data.update(process)
+                data.write_data_file(f'{filename}')
 
     def data_path(self, filename : str) -> str:
         """Get the path for the output level 2 data"""

@@ -254,6 +254,7 @@ class FitSource(PipelineFunction):
     name : str = 'FitSource'
     
     overwrite : bool = False
+    calibration : str = 'none' 
     STATE : bool = True 
     MEDIAN_FILTER_STEP : int = 1000
     NPARAMS : int = 7
@@ -264,19 +265,17 @@ class FitSource(PipelineFunction):
 
     def __post_init__(self):
         
-        self.source_name = 'none'
-        self.data = {'source_fit/fits':np.empty(1),
-                     'source_fit/errors':np.empty(1)}
+        self.data = {}
 
-        self.groups = list(self.data.keys())
+        self.groups = [f'{self.calibration}_source_fit/fits',
+                       f'{self.calibration}_source_fit/errors']
 
     @property 
     def save_data(self):
         """Use full path that will be saved into the HDF5 file"""
 
-        data = {f'{self.source_name}_{k}':v for k,v in self.data.items()}
 
-        return data, {}
+        return self.data, {}
     
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
                 
@@ -491,9 +490,8 @@ class FitSource(PipelineFunction):
         
         n_feeds, n_bands, n_tod = level2_data.tod_shape 
         
-        self.data['source_fit/fits'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
-        self.data['source_fit/errors'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
-
+        self.data[f'{self.calibration}_source_fit/fits'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
+        self.data[f'{self.calibration}_source_fit/errors'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
         # Perform the fit for each feed band 
         for ((ifeed, feed),iband) in tqdm(level2_data.tod_loop(bands=True), desc='Fitting Sources'):
             tod = level2_data.tod[ifeed,iband,level2_data.on_source]
@@ -520,8 +518,8 @@ class FitSource(PipelineFunction):
                         
             result, errors = self.fit(source_map)  
             
-            self.data['source_fit/fits'][ifeed,iband]  = result
-            self.data['source_fit/errors'][ifeed,iband]  = errors
+            self.data[f'{self.calibration}_source_fit/fits'][ifeed,iband]  = result
+            self.data[f'{self.calibration}_source_fit/errors'][ifeed,iband]  = errors
             logging.info(f'Feed {feed:02d} Band {iband:02d} A: {result[0]:.1f} pm {errors[0]:.1f}, x0: {result[2]:.1f} pm {errors[2]:.1f}')
 
         # return 

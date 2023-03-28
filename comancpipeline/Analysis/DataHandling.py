@@ -30,18 +30,29 @@ class HDF5Data:
     __hdf5_attributes : dict = field(default_factory=dict)
     
     def __del__(self):
-        if isinstance(self.hdf5_file, File):
+        if self.hdf5_file is not None:
+            # Close the HDF5 file, if it is open.
             self.hdf5_file.close()    
             
     def __setitem__(self, key, item):
+        # Set the item in the hdf5 data
         self.__hdf5_data[key] = item
 
     def __getitem__(self, key):
+        # Return the key from the hdf5 data
         return self.__hdf5_data[key]
     
-    def attrs(self, path, attribute_key):
-        return self.__hdf5_attributes[path][attribute_key] 
-    
+    def attrs(self, path, attribute_key=None):
+        if isinstance(attribute_key, type(None)):
+            return self.__hdf5_attributes[path]#[attribute_key] 
+        else:
+            return self.__hdf5_attributes[path][attribute_key] 
+    def set_attrs(self, path, attribute_key, value):
+        if not path in self.__hdf5_attributes:
+            self.__hdf5_attributes[path] = {}
+
+        self.__hdf5_attributes[path][attribute_key] = value
+
     def keys(self):
         #if attr:
         #    return self.__hdf5_attributes.keys()
@@ -74,25 +85,21 @@ class HDF5Data:
         
     def write_data_file(self, filename : str) -> None:
         """Implements file writing for this data_type"""
-        logging.info(f'{self.name}: WRITING {filename}')
-        
-        if os.path.exists(filename) & self.overwrite:
-            logging.info(f'{self.name}: Overwriting {filename}')
-            os.remove(filename)
-        elif os.path.exists(filename) & ~self.overwrite:
-            logging.info(f'{self.name}: {filename} already exists and overwrite={self.overwrite}')
-            raise FileExistsError(f'{filename} already exists and overwrite={self.overwrite}')
-            
+
+        # If the file already exists, open it in append mode
         if os.path.exists(filename):
             hdf5_output = File(filename,'a')
+        # If the file does not exist, open it in write mode
         else:
             hdf5_output = File(filename,'w')
 
+        # Write data to the file
         for data_path, data_value in self.__hdf5_data.items():
             if data_path in self.large_datasets: continue
             self.create_groups(hdf5_output, data_path)
             hdf5_output.create_dataset(data_path, data=data_value)
 
+        # Write attributes to the file
         for attr_path, attr_values in self.__hdf5_attributes.items():
             self.create_groups(hdf5_output, attr_path)
             for attr_name, attr_value in attr_values.items():
@@ -102,12 +109,26 @@ class HDF5Data:
     def create_groups(data_file : File, path : str):
         """create hdf5 groups iteratively"""
         
+        # split path by '/' to create array of groups
         groups = path.split('/')[:-1] 
+        
+        # if this an empty group (i.e. just has attributes) 
+        if len(groups) == 0: 
+            # if the group doesn't exist in the file
+            if not path in data_file:
+                # create the group
+                data_file.create_group(path) 
+            
+        # start at the top of the file
         grp = data_file
+        # for each group name in the array of groups
         for group_name in groups:
+            # if the group already exists
             if group_name in grp:
+                # move down to that group
                 grp = grp[group_name]
             else:
+                # if the group doesn't exist, create it
                 grp = grp.create_group(group_name)
                 
     def hdf5_visitor_function(self, name : str, node):       
@@ -179,6 +200,7 @@ class RepointEdges:
         - Iteratively finding the best current fraction may also be needed                                                                                      
         """
 
+        # Get scan edges
         edges = np.where(data.on_source)[0] 
         scan_edges = np.array([[int(min(edges))], [int(max(edges))]]).T
         return scan_edges
@@ -197,13 +219,6 @@ class COMAPLevel1(HDF5Data):
     
     VANE_HOT_TEMP_OFFSET : float = 273.15 # K
 
-
-    @property
-    def features(self):
-        f = self['spectrometer/features']*1
-        good = (f != 0)
-        f[good] = np.log(f[good])/np.log(2)
-        return f.astype(int)
     
     @property
     def on_source(self):
@@ -235,6 +250,13 @@ class COMAPLevel1(HDF5Data):
     def scan_edges(self):
         return RepointEdges.get_scan_positions(self)
     
+    @property
+    def features(self):
+        if 'spectrometer/features' in self.keys():
+            return self['spectrometer/features']
+        else:
+            raise KeyError('LEVEL 1 FILE CONTAINS NO: spectrometer/features') 
+            
     @property
     def ra(self):
         return self['spectrometer/pixel_pointing/pixel_ra'] 
@@ -328,8 +350,22 @@ class COMAPLevel2(HDF5Data):
             self[k] = v
             
         for k,v in attrs.items():
-            self.__hdf5_attributes[k] = v
+            for vk, vvalue in v.items():
+                self.set_attrs(k,vk,vvalue) 
 
+    @property 
+    def source_name(self):
+        source_split = self.attrs('comap','source').split(',')
+        if len(source_split) > 1:
+            source = [s for s in source_split if s not in self.bad_keywords]
+            if len(source) > 0:
+                source = source[0]
+            else:
+                source = ''
+        else:
+            source = source_split[0]
+
+        return source
 
     @property
     def features(self):
@@ -344,12 +380,22 @@ class COMAPLevel2(HDF5Data):
 
     @property 
     def scan_edges(self):
-        return RepointEdges.get_scan_positions(self)
-
+        if not 'averaged_tod/scan_edges' in self.keys():
+            return RepointEdges.get_scan_positions(self)
+        else:
+            return self['averaged_tod/scan_edges']
     @property
     def tod_shape(self):
         return self['averaged_tod/tod'].shape
     
+    @property
+    def nbands(self):
+        return self.tod_shape[1] 
+
+    @property
+    def feeds(self):
+        return self['spectrometer/feeds'] 
+
     @property
     def tod(self):
         return self['averaged_tod/tod'] 
@@ -409,8 +455,9 @@ class COMAPLevel2(HDF5Data):
     def tod_auto_rms(self, ifeed : int, iband : int):
         """Return the auto rms of the feed/band requested"""
         tod = self['averaged_tod/tod'][ifeed,iband] 
-        N = tod.size//2 * 2 
-        diff = tod[:N:2]-tod[1:N:2] 
+        _tod = tod[tod != 0 ]
+        N = _tod.size//2 * 2 
+        diff = _tod[:N:2]-_tod[1:N:2] 
         return np.nanstd(diff)/np.sqrt(2)
 
     def tod_loop(self,feeds=True, bands=True):

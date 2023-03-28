@@ -194,7 +194,10 @@ class CheckLevel1File(PipelineFunction):
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
         
         comment = data.attrs('comap','comment')
-        if 'sky dip' in comment: 
+        if 'sky dip' in comment.lower(): 
+            logging.info(f'Observation is a sky dip. (comment: {comment})')
+            self.STATE = False 
+        if 'sky nod' in comment.lower(): 
             logging.info(f'Observation is a sky dip. (comment: {comment})')
             self.STATE = False 
 
@@ -241,7 +244,7 @@ class Level1AveragingGainCorrection(Level1Averaging):
         N = tod.shape[-1]//2 * 2
         diff = tod[...,1:N:2] - tod[...,0:N:2]
         
-        return np.nanstd(diff,axis=-1)
+        return np.nanstd(diff,axis=-1)/np.sqrt(2) 
         
     def normalised_data(self, data : HDF5Data, tod : np.ndarray[float]):
         """ """ 
@@ -315,9 +318,11 @@ class Level1AveragingGainCorrection(Level1Averaging):
         """
         Model: y(t, nu) = dg(t) + dT(t) / Tsys(nu) + alpha(t) / Tsys(nu) (nu - nu_0) / nu_0, nu_0 = 30 GHz
         """
+        
+        def model_prior(P,x):
+            return P[1] * np.abs(x/1)**P[2]
+
         def gain_temp_sep(y, P, F, sigma0_g, fknee_g, alpha_g, samprate=50):
-            def model_prior(P,x):
-                return P[1] * np.abs(x/1)**P[2]
             
             freqs = np.fft.rfftfreq(len(y[0]), d=1.0/samprate)
             freqs[0] = freqs[1]
@@ -333,16 +338,35 @@ class Level1AveragingGainCorrection(Level1Averaging):
             RHS = np.fft.rfft(F.T.dot(Z).dot(y))
         
             z = F.T.dot(Z).dot(F)
-            a_bestfit_f = RHS/(z + sigma0_est**2/Cf)
+            a_bestfit_f = RHS/(z + 2*sigma0_est**2/Cf)
             a_bestfit = np.fft.irfft(a_bestfit_f, n=n_tod)
-        
+            from matplotlib import pyplot 
+            print(a_bestfit)
+            yz = y*1 
+            yz[yz ==0] = np.nan 
+            ym = np.nanmean(yz,axis=0)
+            yz = np.nanmedian(yz,axis=0) 
+            
+            pmdl= np.poly1d(np.polyfit(np.nanmean(F*a_bestfit,axis=0).flatten(), ym, 1) )
+            print(pmdl) 
+            pyplot.plot(yz) 
+            pyplot.plot(ym)
+            pyplot.plot(np.nanmean(yz - F*a_bestfit,axis=0).flatten()*pmdl[1]) 
+            pyplot.show()
             m_bestfit = np.linalg.inv(P.T.dot(P)).dot(P.T).dot(y - F*a_bestfit)
             
             return a_bestfit, m_bestfit   
         
         nsb, Nfreqs, Ntod = y_feed.shape
-        
-        
+        freqs = np.fft.rfftfreq(len(y_feed[0,30]), d=1.0/50.)
+        RHS = np.abs(np.fft.rfft(y_feed[0,30]))**2 
+        from matplotlib import pyplot
+        pyplot.plot(freqs, RHS)
+        pyplot.plot(freqs,model_prior([sigma0_prior**2, fknee_prior, alpha_prior], freqs))
+        pyplot.yscale('log')
+        pyplot.xscale('log')
+        pyplot.show()
+
 
         scaled_freqs = np.linspace(-4.0 / 30, 4.0 / 30, 4 * 1024)  # (nu - nu_0) / nu_0
         scaled_freqs = scaled_freqs.reshape((4, 1024))
@@ -416,7 +440,16 @@ class Level1AveragingGainCorrection(Level1Averaging):
                                                                               level2_data['atmosphere/fit_values'][iscan,ifeed,iband])
             
                 # The normalise the data 
-                tod_normed = self.normalised_data(data, tod_clean)
+                tod_normed = self.normalised_data(data, tod_clean)/np.sqrt(bandwidth/sample_rate)
+                
+                tod_std  = self.auto_rms(tod_clean) 
+                tsys = level2_data.system_temperature[0,ifeed,:,:].flatten()/np.sqrt(bandwidth/sample_rate)
+                gain = level2_data.system_gain[0,ifeed,:,:].flatten()
+                
+                print(tod_normed.shape,np.sqrt(bandwidth/sample_rate))
+                # There is a 3% difference between the Tsys and the auto_rms estimates
+                correction_ratio = np.nanmedian((tsys*gain)/tod_std.flatten())
+
                 if isinstance(tod_normed, type(None)):
                     logging.debug(f'{self.name}: {data.source_name} Feed {feed} no data in scan {iscan}') 
                     continue 
@@ -433,17 +466,41 @@ class Level1AveragingGainCorrection(Level1Averaging):
                     logging.debug(f'{self.name} Standard observation ({data.source_name}). Applying gain correction.')
                     dG, dT, alpha = self.fit_gain_fluctuations(tod_normed,
                                                                level2_data.system_temperature[0,ifeed], 
-                                                               np.sqrt(ps_fits[0]), ps_fits[1], ps_fits[2])
+                                                               np.sqrt(ps_fits[0]*2), ps_fits[1], ps_fits[2])
                 else:
                     logging.debug(f'{self.name} Calibrator observation ({data.source_name}). Not applying gain correction.')
                     dG = 0 
                       
                 weights = 1./level2_data.system_temperature[0,ifeed]**2 
                 weights[level2_data.system_temperature[0,ifeed] == 0] = 0 
+                
+                print(tod_normed.shape)
+                from matplotlib import pyplot
+                correction_ratio = 0.8
+                pyplot.subplot(141)
+                pyplot.imshow(tod_normed[0], aspect='auto',vmin=-0.7,vmax=0.7)
+                pyplot.subplot(142)
+                pyplot.imshow(dG[0]*correction_ratio, aspect='auto',vmin=-0.7,vmax=0.7)
+                pyplot.subplot(143)
+                pyplot.imshow(tod_normed[0] -  dG[0]*correction_ratio, aspect='auto',vmin=-0.7,vmax=0.7)
+                pyplot.subplot(144)
+                pyplot.plot(dT)
+
+                pyplot.show()
                 residual = (tod_normed - dG)*level2_data.system_temperature[0,ifeed,:,:,None]/np.sqrt(bandwidth/sample_rate)
                 residual = self.weighted_average_over_band(residual, weights) 
                 tod_normed = tod_normed*level2_data.system_temperature[0,ifeed,:,:,None]/np.sqrt(bandwidth/sample_rate)
                 tod_normed = self.weighted_average_over_band(tod_normed, weights) 
+                
+                ps_clean = np.abs(np.fft.fft(residual[0]))**2
+                ps_origi = np.abs(np.fft.fft(tod_normed[0]))**2
+                nu = np.fft.fftfreq(tod_normed.shape[1], d=1./50.)
+                from matplotlib import pyplot
+                pyplot.plot(nu, ps_clean)
+                pyplot.plot(nu, ps_origi)
+                pyplot.xscale('log')
+                pyplot.yscale('log')
+                pyplot.show()
 
                 self.tod_cleaned[ifeed,:,start:end]  = residual
                 self.tod_original[ifeed,:,start:end] = tod_normed

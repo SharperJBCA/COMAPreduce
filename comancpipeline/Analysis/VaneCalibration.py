@@ -77,11 +77,22 @@ class MeasureSystemTemperature(PipelineFunction):
         return tsys, gain 
         
         
+    # Find the hot and cold samples of the vane event using the TOD
     def find_hot_cold_from_tod(self, tod : np.ndarray) -> (np.ndarray, np.ndarray):
         """Find the hot and cold samples of the vane event using the TOD"""
         
+        # This code searches for the indices of the vane position
+        # that are within 1 sigma of the median value of the vane
+        # position.  The vane position is the values of the
+        # vane_tod array.  The function find_indices takes
+        # the vane_tod array and the rms of the vane position
+        # and returns the indices of the vane position that are
+        # within 1 sigma of the median value of the vane position.
+        # The function find_indices also returns the number of
+        # jumps in the vane position.
+
         def find_indices(vane_tod : np.ndarray, rms : float,
-                         command: str='<', jump_size : int=50):
+                        command: str='<', jump_size : int=50):
             """ """
             
             match command:
@@ -97,15 +108,16 @@ class MeasureSystemTemperature(PipelineFunction):
             
             vane_tod = tod[(tod_argsort[vane_group])]
             X =  np.abs((vane_tod - np.median(vane_tod))/rms) < 1
-            if np.sum(X) == 0:
-                raise RuntimeError('No vane data found')
 
             id_vane = np.sort((tod_argsort[vane_group])[X])
             
             diff_cold = id_vane[1:] - id_vane[:-1]
             jumps = np.where((diff_cold > jump_size))[0]
             njumps = len(jumps)
+            if njumps == 0:
+                return id_vane, njumps
             
+            id_vane = id_vane[:jumps[0]+1]
             return id_vane, njumps
         
         rms = auto_rms(tod[:,None]).flatten()
@@ -120,7 +132,8 @@ class MeasureSystemTemperature(PipelineFunction):
 
     def measure_system_temperature(self, data : HDF5Data):
         """Main loop over feeds/bands/channels"""
-        
+
+        # Find the start and end indices for each vane event.
         vane_indices, n_vanes = self.find_vane_samples(data)
         
         # Setup the system temperature and gain data
@@ -135,7 +148,10 @@ class MeasureSystemTemperature(PipelineFunction):
                 band_average = data['spectrometer/band_average'][ifeed,iband,start:end]
 
                 try: 
+                    # Find the hot and cold samples from the band average.
                     hot_samples, cold_samples = self.find_hot_cold_from_tod(band_average)
+                    
+                    # Calculate the system temperature and gain for each channel.
                     tsys, gain = self.system_temperature_from_tod(data.vane_temperature, tod, hot_samples, cold_samples) 
                     self.system_temperature[ivane,ifeed,iband,:] = tsys
                     self.system_gain[ivane,ifeed,iband,:] = gain

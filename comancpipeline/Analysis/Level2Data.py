@@ -21,7 +21,7 @@ class AssignLevel1Data(PipelineFunction):
     
     overwrite : bool = False
 
-    level2 : COMAPLevel2 = field(default_factory=COMAPLevel2()) 
+    level2 : COMAPLevel2 = field(default_factory=COMAPLevel2) 
 
     def __post_init__(self):
         
@@ -33,7 +33,7 @@ class AssignLevel1Data(PipelineFunction):
                 'spectrometer/pixel_pointing/pixel_dec':np.empty(1),
                 'spectrometer/pixel_pointing/pixel_az':np.empty(1),
                 'spectrometer/pixel_pointing/pixel_el':np.empty(1)}
-
+        self.attrs = {} 
         self.groups = list(self.data.keys())
     @property 
     def save_data(self):
@@ -41,25 +41,27 @@ class AssignLevel1Data(PipelineFunction):
             
         attrs = {}
 
-        return self.data, attrs
+        return self.data, self.attrs
 
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2):
         
         self.data['spectrometer/MJD']   = data['spectrometer/MJD']
         self.data['spectrometer/feeds'] = data['spectrometer/feeds']
         self.data['spectrometer/bands'] = data['spectrometer/bands']
-        self.data['spectrometer/features']=data['spectrometer/features']
+        self.data['spectrometer/features']=data.features 
         self.data['spectrometer/pixel_pointing/pixel_ra'] = data['spectrometer/pixel_pointing/pixel_ra']
         self.data['spectrometer/pixel_pointing/pixel_dec']= data['spectrometer/pixel_pointing/pixel_dec']
         self.data['spectrometer/pixel_pointing/pixel_az'] = data['spectrometer/pixel_pointing/pixel_az']
         self.data['spectrometer/pixel_pointing/pixel_el'] = data['spectrometer/pixel_pointing/pixel_el']
         
-        return data
+        self.attrs['comap'] = {k:v for k,v in data.attrs('comap').items()}
+        
+        return self.STATE
 
 @dataclass 
 class WriteLevel2Data(PipelineFunction):
     
-    level2 : COMAPLevel2 = field(default_factory=COMAPLevel2()) 
+    level2 : COMAPLevel2 = field(default_factory=COMAPLevel2) 
 
     @property 
     def save_data(self):
