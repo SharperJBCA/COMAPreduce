@@ -295,7 +295,7 @@ class ApplyCalibration(PipelineFunction):
         """Assigns the nearest good calibration factor""" 
         
         level2_mjd = level2_data.mjd[0] 
-        
+        print(level2_data.filename)
         nfeeds, nbands, nsamples = level2_data.tod_shape 
         
         cal_factors = np.zeros((nfeeds, nbands))

@@ -8,6 +8,7 @@ Created on Wed Jan 25 15:52:15 2023
 from os import path
 from dataclasses import dataclass, field
 from .DataHandling import HDF5Data, COMAPLevel1, COMAPLevel2
+import time 
 
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
@@ -38,6 +39,10 @@ class PipelineFunction:
         attrs = {}
 
         return data, attrs
+
+    def bad_data(self):
+        """Check if data is bad"""
+        return False
 
     def __call__(self, data : HDF5Data) -> HDF5Data:
                         
@@ -77,7 +82,7 @@ class Runner:
         
         for filename in self._filelist:
             logging.info(f'PROCESSING {path.basename(filename)}')
-
+            time.sleep(rank*5)
             self.level2_data = COMAPLevel2(filename=self.data_path(filename))            
             processes = [process(level2=self.level2_data,**kwargs) for (process,kwargs) in self.processes.items()]
 
@@ -85,8 +90,11 @@ class Runner:
             data = COMAPLevel1(overwrite=False, large_datasets=['spectrometer/tod'])
             data.read_data_file(filename)
             for process in processes:
-                logging.info(f'RUNNING {process.name}')
-                if (not self.level2_data.contains(process)) | process.overwrite:
+                logging.info(f'INITIALISING {process.name}')
+                print(process.name, not self.level2_data.contains(process), process.overwrite, process.bad_data())
+                if (not self.level2_data.contains(process)) | process.overwrite | process.bad_data():
+                    logging.info(f'RUNNING {process.name}')
+                    print(f'Running process {process.name}')
                     if not process(data, self.level2_data): 
                         logging.info(f'{process.name} has stopped processing file') 
                         break 

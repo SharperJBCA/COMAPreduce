@@ -52,7 +52,7 @@ class MeasureSystemTemperature(PipelineFunction):
         """Find the vane calibration start/end samples"""
         
         vane_flag = data.vane_flag
-        
+
         vane_indices = np.nonzero(np.diff(vane_flag))[0] + 1
         vane_indices = vane_indices.reshape((vane_indices.size//2,2))
         n_vanes = vane_indices.shape[0]
@@ -91,7 +91,7 @@ class MeasureSystemTemperature(PipelineFunction):
         # The function find_indices also returns the number of
         # jumps in the vane position.
 
-        def find_indices(vane_tod : np.ndarray, rms : float,
+        def find_indices(tod : np.ndarray, _rms : float,
                         command: str='<', jump_size : int=50):
             """ """
             
@@ -101,32 +101,38 @@ class MeasureSystemTemperature(PipelineFunction):
                 case '<':
                     func = np.less
                 
+            vane_tod = tod*1. 
+            range_val = np.nanmax(vane_tod)-np.nanmin(vane_tod)
+            vane_tod /= range_val
+            rms = _rms/range_val
+
             mid_val = (np.nanmax(vane_tod)+np.nanmin(vane_tod))/2.
             tod_argsort = np.argsort(vane_tod)
-            tod_sort    = np.sort(vane_tod)
-            vane_group  = func(tod_sort-mid_val, rms)
-            
-            vane_tod = tod[(tod_argsort[vane_group])]
-            X =  np.abs((vane_tod - np.median(vane_tod))/rms) < 1
 
-            id_vane = np.sort((tod_argsort[vane_group])[X])
-            
-            diff_cold = id_vane[1:] - id_vane[:-1]
-            jumps = np.where((diff_cold > jump_size))[0]
-            njumps = len(jumps)
+            vane_group  = func(vane_tod-mid_val, 15*rms) & (np.abs(np.gradient(vane_tod)) < 2e-3)
+            indices = np.arange(vane_tod.size, dtype=int)
+            id_vane = indices[vane_group]
+            njumps = len(id_vane)
+
             if njumps == 0:
                 return id_vane, njumps
             
-            id_vane = id_vane[:jumps[0]+1]
             return id_vane, njumps
         
         rms = auto_rms(tod[:,None]).flatten()
         hot_id, hot_njumps  = find_indices(tod, rms, command='>')
-        cold_id,cold_njumps = find_indices(tod, rms, command='<')
+        cold_id,cold_njumps = find_indices(tod, rms, command='<') 
+
+
+        if len(hot_id) == 0:
+            return None, None 
+        if len(cold_id) == 0:
+            return None, None
 
         hot_id  = np.sort(hot_id)
         cold_id = np.sort(cold_id)
-        cold_id = cold_id[cold_id > min(hot_id)]
+
+        cold_id = cold_id[cold_id > hot_id[-1]]
         
         return hot_id, cold_id
 
@@ -141,7 +147,6 @@ class MeasureSystemTemperature(PipelineFunction):
 
         self.system_temperature = np.zeros((n_vanes, n_feeds, n_bands, n_channels))
         self.system_gain = np.zeros((n_vanes, n_feeds, n_bands, n_channels))
-
         for ivane, (start, end) in enumerate(vane_indices):
             for (ifeed, feed), iband in tqdm(data.tod_loop(channels=False), desc='System Temperature Loop'):
                 tod = data['spectrometer/tod'][ifeed,iband,:,start:end]
@@ -150,6 +155,8 @@ class MeasureSystemTemperature(PipelineFunction):
                 try: 
                     # Find the hot and cold samples from the band average.
                     hot_samples, cold_samples = self.find_hot_cold_from_tod(band_average)
+                    if isinstance(hot_samples, type(None)) or isinstance(cold_samples, type(None)):
+                        raise RuntimeError
                     
                     # Calculate the system temperature and gain for each channel.
                     tsys, gain = self.system_temperature_from_tod(data.vane_temperature, tod, hot_samples, cold_samples) 

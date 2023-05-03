@@ -17,6 +17,22 @@ from scipy.interpolate import interp1d
 import logging
 
 from comancpipeline.Tools import Coordinates
+import glob
+
+def find_file(x, data_dir):
+    search_pattern = f"/{data_dir}/comap-{x:07d}-????-??-??-??????.hd5"
+    matching_files = glob.glob(search_pattern)
+
+    if not matching_files:
+        print(f"No files found for obsid {x:07d}.")
+        return None
+    else:
+        for match in matching_files:
+            if os.path.exists(match):
+                print(f"Found file: {match}")
+                return match
+        print(f"No existing files found for obsid {x:07d}.")
+        return None
     
 @dataclass 
 class HDF5Data:
@@ -42,6 +58,11 @@ class HDF5Data:
         # Return the key from the hdf5 data
         return self.__hdf5_data[key]
     
+    @property 
+    def filename(self):
+        """ """ 
+        return self.hdf5_file.filename
+
     def attrs(self, path, attribute_key=None):
         if isinstance(attribute_key, type(None)):
             return self.__hdf5_attributes[path]#[attribute_key] 
@@ -85,6 +106,10 @@ class HDF5Data:
         
     def write_data_file(self, filename : str) -> None:
         """Implements file writing for this data_type"""
+        logging.info(f'{self.name}: WRITING {filename}')
+
+        if self.hdf5_file is not None:
+            self.hdf5_file.close() # Close the file if it is open 
 
         # If the file already exists, open it in append mode
         if os.path.exists(filename):
@@ -97,6 +122,8 @@ class HDF5Data:
         for data_path, data_value in self.__hdf5_data.items():
             if data_path in self.large_datasets: continue
             self.create_groups(hdf5_output, data_path)
+            if data_path in hdf5_output:
+                del hdf5_output[data_path] # Delete the dataset if it already exists
             hdf5_output.create_dataset(data_path, data=data_value)
 
         # Write attributes to the file
@@ -104,6 +131,9 @@ class HDF5Data:
             self.create_groups(hdf5_output, attr_path)
             for attr_name, attr_value in attr_values.items():
                 hdf5_output[attr_path].attrs[attr_name] = attr_value
+
+        hdf5_output.close()
+        self.hdf5_file = File(filename,'r') 
 
     @staticmethod
     def create_groups(data_file : File, path : str):
@@ -219,7 +249,38 @@ class COMAPLevel1(HDF5Data):
     
     VANE_HOT_TEMP_OFFSET : float = 273.15 # K
 
+    def read_data_file_by_obsid(self, obsid, data_directory : str = './'):
+        """Reads in a data file by obsid"""
+                   
+        filename = find_file(obsid, data_directory)
+        self.read_data_file(filename)
     
+    @property 
+    def obsid(self):
+        obsid = int(self.attrs('comap','obsid'))
+
+        return obsid
+
+    @property 
+    def comment(self):
+        comment = self.attrs('comap','comment')
+
+        return comment
+
+    @property 
+    def source_name(self):
+        source_split = self.attrs('comap','source').split(',')
+        if len(source_split) > 1:
+            source = [s for s in source_split if s not in self.bad_keywords]
+            if len(source) > 0:
+                source = source[0]
+            else:
+                source = ''
+        else:
+            source = source_split[0]
+
+        return source
+
     @property
     def on_source(self):
         return (self.features != 13) & (self.features != 0)
@@ -227,12 +288,13 @@ class COMAPLevel1(HDF5Data):
     @property
     def vane_flag(self):
         """Gets the vane flag using the features register"""
-        
-        features = self['spectrometer/features']
-        non_zero_features = (features != 0)
-        features[non_zero_features]  = np.floor(np.log(features[non_zero_features])/np.log(2)).astype(int)
+        features = self.features
         vane_flags = (features == self.vane_bit_flag)
-        
+        from matplotlib import pyplot
+        fig = pyplot.figure(figsize=(10,10))
+        pyplot.plot(features)
+        pyplot.savefig('features.png')
+        pyplot.close(fig)
         return vane_flags
     
     @property
@@ -246,6 +308,10 @@ class COMAPLevel1(HDF5Data):
         """Get the shape of the spectrometer data"""
         return self['spectrometer/tod'].shape
     
+    @property
+    def frequency(self):
+        return self['spectrometer/frequency']
+
     @property 
     def scan_edges(self):
         return RepointEdges.get_scan_positions(self)
@@ -253,7 +319,10 @@ class COMAPLevel1(HDF5Data):
     @property
     def features(self):
         if 'spectrometer/features' in self.keys():
-            return self['spectrometer/features']
+            f = self['spectrometer/features']*1
+            good = (f != 0)
+            f[good] = np.log(f[good])/np.log(2)
+            return f.astype(int)
         else:
             raise KeyError('LEVEL 1 FILE CONTAINS NO: spectrometer/features') 
             
@@ -329,6 +398,7 @@ class COMAPLevel2(HDF5Data):
 
     name : str = 'COMAPLevel2'
     filename : str = 'pipeline_output.hdf5'
+    vane_bit_flag : int = 13
 
     def __post_init__(self):
         """Define the expected structure for the Level 2 File"""
@@ -347,7 +417,8 @@ class COMAPLevel2(HDF5Data):
         """Update data"""
         data, attrs = pipeline_function.save_data
         for k,v in data.items():
-            self[k] = v
+            if not isinstance(v, type(None)):
+                self[k] = v
             
         for k,v in attrs.items():
             for vk, vvalue in v.items():
@@ -366,6 +437,15 @@ class COMAPLevel2(HDF5Data):
             source = source_split[0]
 
         return source
+
+    @property
+    def vane_flag(self):
+        """Gets the vane flag using the features register"""
+        
+        features = self.features
+        vane_flags = (features == self.vane_bit_flag)
+
+        return vane_flags
 
     @property
     def features(self):
@@ -428,7 +508,15 @@ class COMAPLevel2(HDF5Data):
     def el(self):
         return self['spectrometer/pixel_pointing/pixel_el'] 
 
+    @property
+    def system_temperature_el(self):
+        vane_flag = self.vane_flag
         
+        vane_indices = np.nonzero(np.diff(vane_flag))[0] + 1
+        vane_indices = vane_indices.reshape((vane_indices.size//2,2))
+        n_vanes = vane_indices.shape[0]
+
+        return [np.nanmean(self.el[:,v],axis=1) for v in vane_indices]
     @property
     def system_temperature(self):
         return self['vane/system_temperature'] 

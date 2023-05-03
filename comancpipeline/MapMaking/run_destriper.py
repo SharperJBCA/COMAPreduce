@@ -64,6 +64,22 @@ def main(filelistname,
 
     filelist = np.loadtxt(filelistname,dtype=str,ndmin=1)
 
+    # import h5py
+    # for filename in filelist:
+    #     h = h5py.File(filename,'r')
+    #     print(h['averaged_tod/frequency_power_spectra_fits'][0,:,0,2])
+    #     feeds = h['spectrometer/feeds'][:] 
+    #     diff = (feeds-6)
+    #     idx = np.argmin(diff**2)
+    #     if diff[idx]**2 > 0:
+    #         continue
+
+    #     pyplot.plot(h['averaged_tod/frequency_power_spectra'][0,idx,0,:,0].flatten(),
+    #                 h['averaged_tod/frequency_power_spectra'][0,idx,0,:,1].flatten(),label=filename.split('/')[-1])
+    #     h.close()
+    # pyplot.legend(prop={'size':6})
+    # pyplot.show()
+    
     if isinstance(crval[0],str):
         crval = [Coordinates.sex2deg(c,hours=f) for c,f in zip(crval,[True,False])]
 
@@ -88,16 +104,14 @@ def main(filelistname,
         hi = filelist.size
 
     filelist = filelist[lo:hi]
-    print(lo,hi)
 
-    for iband in range(0,8):
+    for iband in range(0,4):
         tod, weights, pointing, az, el ,feedid, obsids = COMAPData.read_comap_data(filelist,map_info,
                                                                                    feed_weights=feed_weights,
                                                                                    offset_length=offset_length,
                                                                                    iband=iband,
                                                                                    feeds=feeds)
 
-        print(tod.size, weights.size, pointing.size, az.size, el.size, feedid.size, obsids.size)
         maps = Destriper.run_destriper(pointing,
                                        tod,
                                        weights,
@@ -111,6 +125,7 @@ def main(filelistname,
                                        chi2_cutoff=20)
 
         if rank == 0:
+            print('ABOUT TO WRITE MAPS',flush=True)
             write_map(prefix,maps,map_info,output_dir,iband,postfix='')
         comm.Barrier()
 
