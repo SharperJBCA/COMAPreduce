@@ -207,9 +207,13 @@ class Level2FitPowerSpectrum(PipelineFunction):
 
 
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
+        if data.source_name in Coordinates.CalibratorList: 
+            return self.STATE
+        
         self._full_figure_directory = f'{self.figure_directory}/{data.obsid}'
         if not os.path.exists(self._full_figure_directory):
             os.makedirs(self._full_figure_directory)
+
         self.run(data, level2_data)
 
         return self.STATE

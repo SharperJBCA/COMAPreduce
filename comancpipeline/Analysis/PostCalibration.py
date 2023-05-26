@@ -226,7 +226,6 @@ class ApplyCalibration(PipelineFunction):
             taua[feeds] = data['TauA_source_fit']['fits'][...]
             err = np.zeros((20, 4, 7)) 
             err[feeds] = data['TauA_source_fit']['errors'][...]
-    
             mjd = data['spectrometer/MJD'][0]
             taua_all += [taua]
             err_all += [err]
@@ -242,7 +241,7 @@ class ApplyCalibration(PipelineFunction):
         
         return output 
     
-    def create_source_mask(self, flux, flux_err, radius, radius_err,
+    def create_source_mask(self, flux, flux_err, radius, radius_err, cali_factor, max_cali_factor=10.8,
                            min_flux = 10,
                            max_flux=1000,
                            max_flux_err = 10, 
@@ -250,7 +249,7 @@ class ApplyCalibration(PipelineFunction):
                            max_geo_radius_diff=1e-3):
         """Calculate the mask for the bad TauA fits"""
         mask = (flux_err > max_flux_err) | ~np.isfinite(flux) | (flux< min_flux) | (flux > max_flux) |\
-            ~np.isfinite(flux_err) |(flux_err < min_flux_err) 
+            ~np.isfinite(flux_err) |(flux_err < min_flux_err) | (cali_factor > max_cali_factor)
             
         mean_size = np.nanmedian(radius[~mask])
         mask = mask | (np.abs(radius - mean_size) > max_geo_radius_diff)
@@ -270,7 +269,7 @@ class ApplyCalibration(PipelineFunction):
                                              data['errors'][:,0,iband,:])
             radius_feed1, radius_err_feed1 = self.get_source_geometric_radius(data['fits'][:,0,iband,:],
                                                              data['errors'][:,0,iband,:])
-            mask_feed1 = self.create_source_mask(flux_feed1, flux_err_feed1, radius_feed1, radius_err_feed1)
+            mask_feed1 = self.create_source_mask(flux_feed1, flux_err_feed1, radius_feed1, radius_err_feed1, flux_model(frequency, data['MJD'][:])/flux_feed1)
     
             for ifeed in range(20):
     
@@ -279,7 +278,7 @@ class ApplyCalibration(PipelineFunction):
                                                  data['errors'][:,ifeed,iband,:])
                 radius, radius_err = self.get_source_geometric_radius(data['fits'][:,ifeed,iband,:],
                                                                  data['errors'][:,ifeed,iband,:])
-                mask = self.create_source_mask(flux, flux_err, radius, radius_err,
+                mask = self.create_source_mask(flux, flux_err, radius, radius_err,flux_model(frequency, data['MJD'][:])/flux,
                                           max_flux_err = 10)
     
                 mask = mask | mask_feed1 
@@ -288,7 +287,16 @@ class ApplyCalibration(PipelineFunction):
                                        'cal_factors': flux[~mask]/flux_model(frequency, data['MJD'][~mask]),
                                        'cal_errors': flux_err[~mask]/flux_model(frequency, data['MJD'][~mask])}
                 
-    
+        from matplotlib import pyplot
+        from astropy.time import Time
+        date = Time(cal_data[(0,0)]['MJD'], format='mjd')
+        pyplot.plot(date.datetime, 1./cal_data[(0,0)]['cal_factors'],'o')
+        pyplot.xlabel('Date')
+        pyplot.ylabel('Calibration Factor')
+        pyplot.title('Feed 1, Band 1')
+        pyplot.gcf().autofmt_xdate()
+        pyplot.savefig('cal_factors.png')
+        pyplot.close()
         return cal_data 
     
     def assign_calibration_factors(self, level2_data : COMAPLevel2, cal_data : dict):

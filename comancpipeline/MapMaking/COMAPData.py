@@ -94,14 +94,14 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
 
     d = h5py.File(filename,'r')
     dset     = d['averaged_tod/tod']
-    dset_og  = d['averaged_tod/tod_original']
+    #dset  = d['averaged_tod/tod_original']
     az_dset  = d['spectrometer/pixel_pointing/pixel_az']
     el_dset  = d['spectrometer/pixel_pointing/pixel_el']
     wei_dset = d['averaged_tod/weights']
     spike_dset = d['spikes/spike_mask'][...]
     file_feeds = d['spectrometer/feeds'][...]
     scan_edges = d['averaged_tod/scan_edges'][...]
-    cal_factors = d['astro_calibration/cal_factors'][...] 
+    cal_factors = d['astro_calibration/cal_factors'][...] # np.ones((dset.shape[0],dset.shape[1])) #
     
     file_feed_index, output_feed_index = GetFeeds(file_feeds, selected_feeds) # Length of nfeeds in file 
 
@@ -117,8 +117,10 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
 
     # Read in data from each feed
     for file_feed, output_feed in zip(file_feed_index, output_feed_index):
-
+        print(f'Calibration factors {output_feed} {cal_factors[file_feed,iband]}')
         tod_file = dset[file_feed,iband,:]/cal_factors[file_feed,iband] 
+
+
         weights_file = wei_dset[file_feed,iband,:]*cal_factors[file_feed,iband]**2
         spikes_file  = spike_dset[file_feed,iband,:]
         az_file      = az_dset[file_feed,:]
@@ -131,13 +133,14 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
         last = 0
         for iscan,(start,end) in enumerate(scan_edges):
 
-            if ~np.isfinite(fnoise[file_feed,iband,iscan]) | \
-               (fnoise[file_feed,iband,iscan] > 10):
-                   continue # i.e., set the weight to zero
+            #if ~np.isfinite(fnoise[file_feed,iband,iscan]) | \
+            #   (fnoise[file_feed,iband,iscan] > 10):
+            #    print('Skipping scan %d for feed %d because of bad noise estimate'%(iscan,file_feeds[file_feed]))
+            #    continue # i.e., set the weight to zero
                         
             N = int((end-start)//offset_length * offset_length)
 
-            tod_file[start:start+N] -= median_filter(tod_file[start:start+N],int(60./0.02))
+            #tod_file[start:start+N] -= median_filter(tod_file[start:start+N],int(60./0.02))
             
             tod[output_feed,last:last+N]     = tod_file[start:start+N]
             weights[output_feed,last:last+N] = weights_file[start:start+N] # w#/feed_weights[index]
@@ -146,6 +149,7 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
             last += N
                 
     d.close()
+
     return tod.flatten(), weights.flatten(),az.flatten(), el.flatten(), feedid.flatten().astype(int)
 
 
@@ -263,5 +267,7 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50
     el = el[cut_empty_offsets]
     feedid = feedid[cut_empty_offsets] 
     obsids = obsids[cut_empty_offsets] 
+    weights[~np.isfinite(weights)] = 0
+
 
     return tod, weights, pointing, az, el, feedid, obsids

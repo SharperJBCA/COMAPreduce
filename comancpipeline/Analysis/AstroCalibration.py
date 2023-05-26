@@ -19,6 +19,8 @@ import logging
 from comancpipeline.Tools.median_filter import medfilt
 from comancpipeline.Tools import Coordinates, binFuncs
 
+from matplotlib import pyplot
+import os 
 from astropy.wcs import WCS
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
@@ -249,6 +251,153 @@ class SourcePosition:
     def set_mask(self, mask : np.ndarray[bool]):
         self.mask = mask 
         
+
+def dA(P0, source_map):
+    A, B, x0, y0, sigma_x, sigma_y, theta = P0 
+    
+    x,y = source_map.world_flat
+    x[x > 180] -= 360
+    dx = (x - x0)
+    dy = (y - y0)
+    
+    X = dx*np.cos(theta)/sigma_x +\
+        dy*np.sin(theta)/sigma_x
+    Y = -dx*np.sin(theta)/sigma_y +\
+            dy*np.cos(theta)/sigma_y  
+            
+    mdl = np.exp(-X**2 - Y**2)
+    return mdl 
+def dB(P0, source_map):
+    A, B, x0, y0, sigma_x, sigma_y, theta = P0 
+    x,y = source_map.world_flat                 
+    mdl = np.ones(x.size)
+    return mdl 
+def dx0(P0, source_map):
+    A, B, x0, y0, sigma_x, sigma_y, theta = P0 
+    x,y = source_map.world_flat
+    x[x > 180] -= 360
+    dx = (x - x0)
+    dy = (y - y0)
+    
+
+    X = dx*np.cos(theta)/sigma_x +\
+        dy*np.sin(theta)/sigma_x
+    Y = -dx*np.sin(theta)/sigma_y +\
+            dy*np.cos(theta)/sigma_y  
+
+    part1 = 2*(sigma_x - sigma_y)*(sigma_x + sigma_y) * np.sin(theta)*np.cos(theta)*(y-y0)/(sigma_x*sigma_y)**2 
+    part2 = 2 * np.cos(theta)**2*(x - x0)/sigma_x**2 
+    part3 = 2 * np.sin(theta)**2*(x - x0)/sigma_y**2 
+    dZdx0 = part1 - part2 - part3 
+
+    # Z = X**2 + Y**2
+    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    return mdl 
+def dy0(P0, source_map):
+    A, B, x0, y0, sigma_x, sigma_y, theta = P0 
+    x,y = source_map.world_flat
+    x[x > 180] -= 360
+    dx = (x - x0)
+    dy = (y - y0)
+    
+
+    X = dx*np.cos(theta)/sigma_x +\
+        dy*np.sin(theta)/sigma_x
+    Y = -dx*np.sin(theta)/sigma_y +\
+            dy*np.cos(theta)/sigma_y  
+
+    
+    part1 = 2*(sigma_x - sigma_y)*(sigma_x + sigma_y) * np.sin(theta)*np.cos(theta)*(x-x0)/(sigma_x*sigma_y)**2 
+    part2 = 2 * np.sin(theta)**2*(y - y0)/sigma_x**2 
+    part3 = 2 * np.cos(theta)**2*(y - y0)/sigma_y**2 
+    dZdx0 = part1 - part2 - part3 
+    # Z = X**2 + Y**2
+    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    return mdl 
+def dsigmax(P0, source_map):
+    A, B, x0, y0, sigma_x, sigma_y, theta = P0 
+    x,y = source_map.world_flat
+    x[x > 180] -= 360
+    dx = (x - x0)
+    dy = (y - y0)
+    
+
+    X = dx*np.cos(theta)/sigma_x +\
+        dy*np.sin(theta)/sigma_x
+    Y = -dx*np.sin(theta)/sigma_y +\
+            dy*np.cos(theta)/sigma_y  
+
+    dZdx0 = -2 * (np.cos(theta)*(x-x0) + np.sin(theta)*(y-y0))**2/sigma_x**3 
+
+    # Z = X**2 + Y**2
+    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    return mdl 
+def dsigmay(P0, source_map):
+    A, B, x0, y0, sigma_x, sigma_y, theta = P0 
+    x,y = source_map.world_flat
+    x[x > 180] -= 360
+    dx = (x - x0)
+    dy = (y - y0)
+    
+
+    X = dx*np.cos(theta)/sigma_x +\
+        dy*np.sin(theta)/sigma_x
+    Y = -dx*np.sin(theta)/sigma_y +\
+            dy*np.cos(theta)/sigma_y  
+
+    dZdx0 = -2 * (np.sin(theta)*(x-x0) + np.cos(theta)*(y-y0))**2/sigma_y**3 
+
+    # Z = X**2 + Y**2
+    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    return mdl 
+def dtheta(P0, source_map):
+    A, B, x0, y0, sigma_x, sigma_y, theta = P0 
+    x,y = source_map.world_flat
+    x[x > 180] -= 360
+    dx = (x - x0)
+    dy = (y - y0)
+    
+
+    X = dx*np.cos(theta)/sigma_x +\
+        dy*np.sin(theta)/sigma_x
+    Y = -dx*np.sin(theta)/sigma_y +\
+            dy*np.cos(theta)/sigma_y  
+
+    dZdx0 = -2*(sigma_x**2 - sigma_y**2) * (np.sin(theta)*dx + np.cos(theta)*dy) *\
+        (np.cos(theta)*dx + np.sin(theta)*dy)/(sigma_x*sigma_y)**2
+
+    # Z = X**2 + Y**2
+    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    return mdl 
+
+def jacobian(P0:list, source_map : SkyMap):
+    """Return a list of jacobian vectors"""
+    
+    j = np.array([j(P0, source_map) for j in [dA, dB, dx0, dy0, dsigmax, dsigmay, dtheta]]) 
+    return j
+
+def general_model(P0:list, x,y):
+    A, B, x0, y0, sigma_x, sigma_y, theta = P0 
+    dx = (x - x0)
+    dy = (y - y0)
+    
+
+    X = dx*np.cos(theta)/sigma_x +\
+        dy*np.sin(theta)/sigma_x
+    Y = -dx*np.sin(theta)/sigma_y +\
+            dy*np.cos(theta)/sigma_y  
+            
+    mdl = A*np.exp(-X**2 - Y**2) + B
+    return mdl
+
+def model(P0:list, source_map : SkyMap):
+    x,y = source_map.world_flat
+    x[x > 180] -= 360
+    return general_model(P0, x,y)
+
+def error(P0 : list, source_map : SkyMap):
+    return np.sum((source_map.m_flat - model(P0, source_map))**2*source_map.weights_flat)
+
 @dataclass 
 class FitSource(PipelineFunction):
     name : str = 'FitSource'
@@ -260,7 +409,9 @@ class FitSource(PipelineFunction):
     NPARAMS : int = 7
     NXPIX : int = 100
     NYPIX : int = 100 
-    
+    figure_directory : str = 'figures'     
+    _full_figure_directory : str = 'figures' # Appends observation id in __call__ function
+
     source_position : SourcePosition = field(default_factory=lambda : None )
 
     def __post_init__(self):
@@ -278,6 +429,9 @@ class FitSource(PipelineFunction):
         return self.data, {}
     
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
+        self._full_figure_directory = f'{self.figure_directory}/{data.obsid}'
+        if not os.path.exists(self._full_figure_directory):
+            os.makedirs(self._full_figure_directory)
                 
         self.fit_source(data, level2_data)
         
@@ -309,150 +463,6 @@ class FitSource(PipelineFunction):
     def fit(self, 
             source_map : SkyMap):
         
-        def dA(P0, source_map):
-            A, B, x0, y0, sigma_x, sigma_y, theta = P0 
-            
-            x,y = source_map.world_flat
-            x[x > 180] -= 360
-            dx = (x - x0)
-            dy = (y - y0)
-            
-            X = dx*np.cos(theta)/sigma_x +\
-                dy*np.sin(theta)/sigma_x
-            Y = -dx*np.sin(theta)/sigma_y +\
-                 dy*np.cos(theta)/sigma_y  
-                 
-            mdl = np.exp(-X**2 - Y**2)
-            return mdl 
-        def dB(P0, source_map):
-            A, B, x0, y0, sigma_x, sigma_y, theta = P0 
-            x,y = source_map.world_flat                 
-            mdl = np.ones(x.size)
-            return mdl 
-        def dx0(P0, source_map):
-            A, B, x0, y0, sigma_x, sigma_y, theta = P0 
-            x,y = source_map.world_flat
-            x[x > 180] -= 360
-            dx = (x - x0)
-            dy = (y - y0)
-            
-
-            X = dx*np.cos(theta)/sigma_x +\
-                dy*np.sin(theta)/sigma_x
-            Y = -dx*np.sin(theta)/sigma_y +\
-                 dy*np.cos(theta)/sigma_y  
-
-            part1 = 2*(sigma_x - sigma_y)*(sigma_x + sigma_y) * np.sin(theta)*np.cos(theta)*(y-y0)/(sigma_x*sigma_y)**2 
-            part2 = 2 * np.cos(theta)**2*(x - x0)/sigma_x**2 
-            part3 = 2 * np.sin(theta)**2*(x - x0)/sigma_y**2 
-            dZdx0 = part1 - part2 - part3 
-
-            # Z = X**2 + Y**2
-            mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
-            return mdl 
-        def dy0(P0, source_map):
-            A, B, x0, y0, sigma_x, sigma_y, theta = P0 
-            x,y = source_map.world_flat
-            x[x > 180] -= 360
-            dx = (x - x0)
-            dy = (y - y0)
-            
-
-            X = dx*np.cos(theta)/sigma_x +\
-                dy*np.sin(theta)/sigma_x
-            Y = -dx*np.sin(theta)/sigma_y +\
-                 dy*np.cos(theta)/sigma_y  
-
-            
-            part1 = 2*(sigma_x - sigma_y)*(sigma_x + sigma_y) * np.sin(theta)*np.cos(theta)*(x-x0)/(sigma_x*sigma_y)**2 
-            part2 = 2 * np.sin(theta)**2*(y - y0)/sigma_x**2 
-            part3 = 2 * np.cos(theta)**2*(y - y0)/sigma_y**2 
-            dZdx0 = part1 - part2 - part3 
-            # Z = X**2 + Y**2
-            mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
-            return mdl 
-        def dsigmax(P0, source_map):
-            A, B, x0, y0, sigma_x, sigma_y, theta = P0 
-            x,y = source_map.world_flat
-            x[x > 180] -= 360
-            dx = (x - x0)
-            dy = (y - y0)
-            
-
-            X = dx*np.cos(theta)/sigma_x +\
-                dy*np.sin(theta)/sigma_x
-            Y = -dx*np.sin(theta)/sigma_y +\
-                 dy*np.cos(theta)/sigma_y  
-
-            dZdx0 = -2 * (np.cos(theta)*(x-x0) + np.sin(theta)*(y-y0))**2/sigma_x**3 
-
-            # Z = X**2 + Y**2
-            mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
-            return mdl 
-        def dsigmay(P0, source_map):
-            A, B, x0, y0, sigma_x, sigma_y, theta = P0 
-            x,y = source_map.world_flat
-            x[x > 180] -= 360
-            dx = (x - x0)
-            dy = (y - y0)
-            
-
-            X = dx*np.cos(theta)/sigma_x +\
-                dy*np.sin(theta)/sigma_x
-            Y = -dx*np.sin(theta)/sigma_y +\
-                 dy*np.cos(theta)/sigma_y  
-
-            dZdx0 = -2 * (np.sin(theta)*(x-x0) + np.cos(theta)*(y-y0))**2/sigma_y**3 
-
-            # Z = X**2 + Y**2
-            mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
-            return mdl 
-        def dtheta(P0, source_map):
-            A, B, x0, y0, sigma_x, sigma_y, theta = P0 
-            x,y = source_map.world_flat
-            x[x > 180] -= 360
-            dx = (x - x0)
-            dy = (y - y0)
-            
-
-            X = dx*np.cos(theta)/sigma_x +\
-                dy*np.sin(theta)/sigma_x
-            Y = -dx*np.sin(theta)/sigma_y +\
-                 dy*np.cos(theta)/sigma_y  
-
-            dZdx0 = -2*(sigma_x**2 - sigma_y**2) * (np.sin(theta)*dx + np.cos(theta)*dy) *\
-                (np.cos(theta)*dx + np.sin(theta)*dy)/(sigma_x*sigma_y)**2
-
-            # Z = X**2 + Y**2
-            mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
-            return mdl 
-        
-        def jacobian(P0:list, source_map : SkyMap):
-            """Return a list of jacobian vectors"""
-            
-            j = np.array([j(P0, source_map) for j in [dA, dB, dx0, dy0, dsigmax, dsigmay, dtheta]]) 
-            return j
-        
-        def model(P0:list, source_map : SkyMap):
-            
-            A, B, x0, y0, sigma_x, sigma_y, theta = P0 
-            
-            x,y = source_map.world_flat
-            x[x > 180] -= 360
-            dx = (x - x0)
-            dy = (y - y0)
-            
-
-            X = dx*np.cos(theta)/sigma_x +\
-                dy*np.sin(theta)/sigma_x
-            Y = -dx*np.sin(theta)/sigma_y +\
-                 dy*np.cos(theta)/sigma_y  
-                 
-            mdl = A*np.exp(-X**2 - Y**2) + B
-            return mdl 
-        
-        def error(P0 : list, source_map : SkyMap):
-            return np.sum((source_map.m_flat - model(P0, source_map))**2*source_map.weights_flat)
         
         
         beam = 4.5/60./2.355
@@ -517,6 +527,19 @@ class FitSource(PipelineFunction):
                                 weights=weights)
                         
             result, errors = self.fit(source_map)  
+
+            fig = pyplot.figure(figsize=(10,10))
+            ax = fig.add_subplot(111)
+            pyplot.plot(tod, label='TOD')
+            mdl = general_model(result, relative_source_position.ra,relative_source_position.dec)
+            idx = np.argmax(mdl) 
+            pyplot.plot(mdl, label='Model')
+            pyplot.plot(tod-mdl, label='Residual')
+            pyplot.xlim(idx-100,idx+100)
+            pyplot.ylim(result[1]-0.05*result[0], result[1]+result[0]*1.05)
+            pyplot.legend()
+            pyplot.savefig(f'{self._full_figure_directory}/{self.source}_feed{feed:02d}_band{iband:02d}.png')
+            pyplot.show()
             
             self.data[f'{self.calibration}_source_fit/fits'][ifeed,iband]  = result
             self.data[f'{self.calibration}_source_fit/errors'][ifeed,iband]  = errors

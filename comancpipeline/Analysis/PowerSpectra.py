@@ -143,7 +143,7 @@ class FitPowerSpectrum:
 
         self.nu_bin, self.P_bin = self.bin_power_spectrum(freqs, data, errors, min_freq=min_freq, max_freq=max_freq) 
 
-        if len(nu_bin) < 3:
+        if len(self.nu_bin) < 3:
             self.result = None
 
         if isinstance(P0, type(None)):

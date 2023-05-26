@@ -1,5 +1,5 @@
 import matplotlib
-matplotlib.use('agg')
+matplotlib.use('tkagg')
 
 from comancpipeline.Analysis.Running import Runner
 from comancpipeline.Analysis.VaneCalibration import MeasureSystemTemperature
@@ -28,10 +28,10 @@ def create_tod_processing(filelist_name : str):
     processes = {
         CheckLevel1File: {'overwrite': True},
         AssignLevel1Data: {'overwrite': False},
-        MeasureSystemTemperature: {'overwrite': True},
+        MeasureSystemTemperature: {'overwrite': False},
         SkyDip: {'overwrite': False},
         AtmosphereRemoval: {'overwrite': False},
-        Level1AveragingGainCorrection: {'overwrite': True},
+        Level1AveragingGainCorrection: {'overwrite': False},
         Level2FitPowerSpectrum: {'overwrite': False},
         FitSource: {'overwrite': True, 'calibration': 'TauA'},
         Spikes: {'overwrite': False},
@@ -55,7 +55,7 @@ def create_astro_cal(targets, cal_files, source='TauA'):
     cal_filelist = np.loadtxt(cal_files,dtype=str, ndmin=1)
         
     cal_processing = Runner()
-    processes = {ApplyCalibration:{'calibrator_filelist':cal_filelist}}
+    processes = {ApplyCalibration:{'calibrator_filelist':cal_filelist,'overwrite_calibrator_file':False}}
 
     cal_processing.level2_data_dir = '/scratch/nas_comap3/sharper/COMAP/level2_2023/'
     cal_processing.filelist  = filelist
@@ -95,14 +95,14 @@ def create_plot_processing(level2_data_dir, source, output_dir):
 def main():
     #plot_processing = create_plot_processing('/scratch/nas_core/sharper/COMAP/level2_2023/', 'fg9', '/scratch/nas_core/sharper/COMAP/level2_figures/')
 
-    tod_processing = create_tod_processing('Filelists/TauA.txt')
+    #tod_processing = create_tod_processing('Filelists/TauA.txt')
 
-    tod_processing.run_tod()
+    #tod_processing.run_tod()
     
-    #astro_processing = create_astro_cal(targets='Filelists/fg9_level2_fully_processed.txt',
-    #                                   cal_files = 'Filelists/TauA_level2.txt',
-    #                                   source='TauA') 
-    #astro_processing.run_astro_cal() 
+    astro_processing = create_astro_cal(targets='Filelists/fg9_level2_fully_processed.txt',
+                                       cal_files = 'Filelists/TauA_level2.txt',
+                                       source='TauA') 
+    astro_processing.run_astro_cal() 
 
 if __name__ == "__main__": 
     main()

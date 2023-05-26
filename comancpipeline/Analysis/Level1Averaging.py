@@ -493,11 +493,11 @@ class Level1AveragingGainCorrection(Level1Averaging):
 
     def bad_data(self):
         """Check if tod average is nan"""
-        if 'averaged_tod/tod' in self.level2.keys():
-            tod = self.level2['averaged_tod/tod']
-            good_tod = [np.isfinite(np.sum(d)) & (np.sum(d) != 0) for d in tod]
-            if not all(good_tod):
-                return True
+        #if 'averaged_tod/tod' in self.level2.keys():
+        #    tod = self.level2['averaged_tod/tod']
+        #    good_tod = [np.isfinite(np.sum(d)) & (np.sum(d) != 0) for d in tod]
+        #    if not all(good_tod):
+        #        return True
         return False
     def auto_rms(self, tod : np.ndarray[float]):
         """ Calculate rms from differences of adjacent samples """ 
@@ -955,7 +955,7 @@ class Level1Plotting(PipelineFunction):
 
     def __call__(self, data : HDF5Data) -> HDF5Data:
                 
-        self._full_figure_directory = f'{self.figure_directory}/{data.observation_id}'
+        self._full_figure_directory = f'{self.figure_directory}/{data.obsid}'
         if not os.path.exists(self._full_figure_directory):
             os.makedirs(self._full_figure_directory)
 
