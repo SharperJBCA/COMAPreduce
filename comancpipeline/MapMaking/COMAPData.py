@@ -87,7 +87,7 @@ def countDataSize(filename, Nfeeds, offset_length,level3='.'):
     return info
 
 
-def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1,iband=0,level3='.'):
+def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1,iband=0,level3='.',calibration=False):
     """
     Want to select each feed and average the data over some frequency range
     """
@@ -101,7 +101,10 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
     spike_dset = d['spikes/spike_mask'][...]
     file_feeds = d['spectrometer/feeds'][...]
     scan_edges = d['averaged_tod/scan_edges'][...]
-    cal_factors = d['astro_calibration/cal_factors'][...] # np.ones((dset.shape[0],dset.shape[1])) #
+    if calibration:
+        cal_factors = d['astro_calibration/cal_factors'][...]
+    else:
+        cal_factors = np.ones((dset.shape[0],dset.shape[1])) #
     
     file_feed_index, output_feed_index = GetFeeds(file_feeds, selected_feeds) # Length of nfeeds in file 
 
@@ -117,7 +120,7 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
 
     # Read in data from each feed
     for file_feed, output_feed in zip(file_feed_index, output_feed_index):
-        print(f'Calibration factors {output_feed} {cal_factors[file_feed,iband]}')
+        #print(f'Calibration factors {output_feed} {cal_factors[file_feed,iband]}')
         tod_file = dset[file_feed,iband,:]/cal_factors[file_feed,iband] 
 
 
@@ -195,7 +198,7 @@ def read_pixels(filename,datasize,offset_length,selected_feeds,map_info,level3='
     d.close()
     return pixels 
 
-def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50,feeds=[i+1 for i in range(19)]):
+def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50,feeds=[i+1 for i in range(19)], calibration=False):
     """
     """
     Nfeeds = len(feeds)
@@ -233,7 +236,7 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50
                                              offset_length=offset_length,
                                              selected_feeds=feeds,
                                                  feed_weights=feed_weights,
-                                             iband=iband)
+                                             iband=iband, calibration=calibration)
         _pointing = read_pixels(filename,
                                all_info['datasize'][ifile],
                                offset_length,

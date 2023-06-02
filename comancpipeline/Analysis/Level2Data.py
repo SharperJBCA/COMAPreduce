@@ -10,6 +10,7 @@ import numpy as np
 from tqdm import tqdm
 from astropy.time import Time 
 import os
+from matplotlib import pyplot 
 
 from dataclasses import dataclass, field 
 
@@ -17,6 +18,8 @@ from .Running import PipelineFunction
 from .PowerSpectra import FitPowerSpectrum
 from .DataHandling import HDF5Data , COMAPLevel2
 from comancpipeline.Tools.stats import auto_rms
+from comancpipeline.Tools import Coordinates
+from scipy.signal import find_peaks, peak_widths
 
 @dataclass 
 class AssignLevel1Data(PipelineFunction):
@@ -110,7 +113,7 @@ class Level2Timelines(PipelineFunction):
     N_CHANNELS : int = 1024
     STATE : bool = True 
 
-    def __call__(self, filelist : list[str]):
+    def __call__(self, filelist : list):
                 
         self._full_figure_directory = f'{self.figure_directory}/{data.obsid}'
         if not os.path.exists(self._full_figure_directory):
@@ -227,15 +230,27 @@ class Level2FitPowerSpectrum(PipelineFunction):
             tod = level2_data['averaged_tod/tod'][ifeed,iband]
             power_spectrum = np.abs(np.fft.fft(tod))**2
             freqs = np.fft.fftfreq(len(tod), d=1./self.SAMPLE_RATE) 
-            power_specturm = power_spectrum[freqs > 0]
+            power_spectrum = power_spectrum[freqs > 0]
             freqs = freqs[freqs > 0]
 
+            mask = np.ones(freqs.size, dtype=bool)
+            mad = np.median(np.abs(power_spectrum[freqs > 1] - np.median(power_spectrum[freqs > 1])))*1.4826
+            niter = 3
+            indices = np.arange(freqs.size, dtype=int)
+            for istep in range(niter):
+                select = mask & (freqs > 0.5)
+                peak_idx, properties = find_peaks(power_spectrum[select], height=mad*50, distance=100)
+                peak_idx = (indices[select])[peak_idx]
+                widths, width_heights, left_ips, right_ips = peak_widths(power_spectrum, peak_idx, rel_height=0.85)
+                for i in range(len(peak_idx)):
+                    mask[int(left_ips[i]):int(right_ips[i])] = False
+
             ps = FitPowerSpectrum(nbins=30) 
-            ps(freqs, power_specturm, 
+            ps(freqs[mask], power_spectrum[mask], 
                 errors=None, 
                 model=ps.red_noise_model, 
                 error_func=ps.log_error, P0=None,
-                min_freq=0.5)
+                min_freq=0.05)
 
             if not isinstance(ps.result, type(None)):
                 ps.plot_fit(fig_dir=self._full_figure_directory, prefix = f'feed_{ifeed:02d}_band_{iband:02d}_')

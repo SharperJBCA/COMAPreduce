@@ -30,6 +30,7 @@ class FitPowerSpectrum:
             min_freq = np.min(freqs)
         if isinstance(max_freq, type(None)):
             max_freq = np.max(freqs)
+
         # Bin the power spectrum
         nu_edges = np.logspace(np.log10(min_freq),np.log10(max_freq),self.nbins+1)
         top = np.histogram(freqs,nu_edges,weights=power_spectrum)[0]

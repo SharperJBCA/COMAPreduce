@@ -219,7 +219,7 @@ class SkyDip(PipelineFunction):
         previous_obsid = this_obsid - 1
 
         # Search for the previous observation
-        previous_data = COMAPLevel1() 
+        previous_data = COMAPLevel1(overwrite=False, large_datasets=['spectrometer/tod']) 
         data_dir = os.path.dirname(data.filename)
         previous_data.read_data_file_by_obsid(previous_obsid, data_dir)
 
@@ -234,8 +234,7 @@ class SkyDip(PipelineFunction):
         n_feeds, n_bands, n_channels, n_tod = previous_data.tod_shape 
         
         features = previous_data.features
-        scan = np.where((features == 256))[0]
-
+        scan = np.where((features == 8))[0]
         A = previous_data.airmass[:,scan]
         el = previous_data.el[:,scan]
 
@@ -260,10 +259,10 @@ class SkyDip(PipelineFunction):
                 print('##########################################')
                 raise IndexError('Gain not found')
             select = np.where((el[ifeed] > 40) & (el[ifeed] < 55))[0]
+
             for iband in range(n_bands):
                 for ichannel in range(n_channels):
                     fits = np.polyfit(A[ifeed,select], tod[iband,ichannel,select], 1)
-                    
                     self.fit_values[ifeed, iband, ichannel] = fits
             fig, ax = pyplot.subplots(2,1, sharex=True)
 
@@ -809,7 +808,6 @@ class Level1AveragingGainCorrection(Level1Averaging):
         # First plot the tod as an image
         frequencies = data.frequency[0,:]
         rms=  np.nanstd(tod,axis=1) 
-        tsys = self.level2.system_temperature[0,0,0,:] 
         tsys_norm = tsys/np.nanmedian(tsys)
         rms_norm = rms/np.nanmedian(rms)
         fig, ax = pyplot.subplots(1,1,figsize=(10,10))
@@ -927,7 +925,6 @@ class Level1AveragingGainCorrection(Level1Averaging):
                     ### Plot some diagnostics
                     self.plot_gain_examples(data, clean_tod[0], avg_tod[0], dG, level2_data, iscan, feed,level2_data.system_temperature[0,ifeed,0,:,None])
                     ### 
-
                 clean_tod = clean_tod*level2_data.system_temperature[0,ifeed,:,:,None]
                 avg_tod = self.weighted_average_over_band(clean_tod, weights) 
 

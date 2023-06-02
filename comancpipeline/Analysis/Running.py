@@ -82,7 +82,7 @@ class Runner:
         
         for filename in self._filelist:
             logging.info(f'PROCESSING {path.basename(filename)}')
-            time.sleep(rank*5)
+            time.sleep(rank*15)
             self.level2_data = COMAPLevel2(filename=self.data_path(filename))            
             processes = [process(level2=self.level2_data,**kwargs) for (process,kwargs) in self.processes.items()]
 

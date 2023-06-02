@@ -60,7 +60,8 @@ def main(filelistname,
                   Coordinates.sex2deg('+12:30:28.0')], # fg9
          crpix=[ 240,240],
          ctype = ['RA---CAR', 'DEC--CAR'],
-         cdelt=[-0.016666,0.016666]):
+         cdelt=[-0.016666,0.016666],
+         calibration=True):
 
     filelist = np.loadtxt(filelistname,dtype=str,ndmin=1)
 
@@ -110,7 +111,8 @@ def main(filelistname,
                                                                                    feed_weights=feed_weights,
                                                                                    offset_length=offset_length,
                                                                                    iband=iband,
-                                                                                   feeds=feeds)
+                                                                                   feeds=feeds,
+                                                                                   calibration=calibration)
 
         maps = Destriper.run_destriper(pointing,
                                        tod,
@@ -144,4 +146,5 @@ if __name__ == "__main__":
          crval=params['crval'],
          crpix=params['crpix'],
          ctype=params['ctype'],
-         cdelt=params['cdelt'])
+         cdelt=params['cdelt'],
+         calibration=p['ReadData']['calibration'])
