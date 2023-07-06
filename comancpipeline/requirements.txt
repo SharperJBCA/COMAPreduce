@@ -3,7 +3,7 @@ numpy==1.19.5
 matplotlib==3.3.3
 tqdm==4.48.2
 mpi4py==3.0.3
-scipy==1.5.3
+scipy==1.10.0
 emcee==0.0.0
 astroplan==0.8
 click==8.0.1
