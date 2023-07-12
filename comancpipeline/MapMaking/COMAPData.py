@@ -167,7 +167,7 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
 
     # Read in data from each feed
     for file_feed, output_feed in zip(file_feed_index, output_feed_index):
-        print(f'Calibration factors {file_feeds[file_feed]} {cal_factors[file_feed,iband]}')
+        #print(f'Calibration factors {file_feeds[file_feed]} {cal_factors[file_feed,iband]}')
         tod_file = dset[file_feed,iband,:]/cal_factors[file_feed,iband]
         weights_file = wei_dset[file_feed,iband,:]*cal_factors[file_feed,iband]**2
 
