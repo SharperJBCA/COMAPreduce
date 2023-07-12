@@ -69,6 +69,7 @@ class AMatrix:
         if not np.isfinite(np.sum(C)):
             logging.debug('C matrix is not finite')
             logging.debug('Nansum templates: {}'.format(np.nansum(template)))
+            raise ValueError('C matrix is not finite in AMatrix.z_operation')
         TT = np.linalg.inv(C)
 
         d_sub = template.dot(TT.dot(template.T @ data)) 
@@ -161,6 +162,9 @@ class AMatrix:
         ZPg = self.z_operation(Pg, self.templates[:,:N_templates-1]) # subtract weighted mean off each time step 
         PtZPg = self.p_transpose_operation(ZPg, self.templates[:,N_templates-1]) # bin data into vector of length time, sum over frequency 
 
+        if np.isnan(np.sum(PtZPg)):
+            raise ValueError('PtZPg is not finite in AMatrix.__call__') 
+        
         if self.use_prior:
             Cg = self.covariance_operation(g, self.white_noise, self.fknee, self.alpha)[0]
             return PtZPg + Cg
@@ -182,7 +186,11 @@ def solve_gain_solution(d, templates, white_noise, fknee, alpha, tau=1./50., use
     matvec = AMatrix(templates, white_noise, fknee, alpha, tau, use_prior=use_prior)
     A = LinearOperator((n, n), matvec=matvec, dtype=np.float64)
     b = matvec.create_b(d)
-    g, info = cg(A, b)
+    try:
+        g, info = cg(A, b)
+    except ValueError: 
+        g = np.zeros(n)
+        info = 1
     return g 
 
 
@@ -195,6 +203,7 @@ class SkyDip(PipelineFunction):
     groups : list = field(default_factory=lambda: ['skydip'])
     overwrite : bool = False
     STATE : bool = True
+    figure_directory : str = 'figures'
 
     fit_values : dict = field(default_factory=lambda: None)
     @property
@@ -221,10 +230,11 @@ class SkyDip(PipelineFunction):
         # Search for the previous observation
         previous_data = COMAPLevel1(overwrite=False, large_datasets=['spectrometer/tod']) 
         data_dir = os.path.dirname(data.filename)
-        previous_data.read_data_file_by_obsid(previous_obsid, data_dir)
+        if not previous_data.read_data_file_by_obsid(previous_obsid, data_dir): # If the file doesn't exist, return
+            return 
 
         if 'sky nod' in previous_data.comment.lower():
-            self.fit_skydip(data, previous_data)
+            self.fit_skydip(data, previous_data,figure_path=self.figure_directory)
         
     def fit_skydip(self, data, previous_data, figure_path='figures/'):
         figure_directory = f'{figure_path}/{data.obsid}/'
@@ -237,6 +247,9 @@ class SkyDip(PipelineFunction):
         scan = np.where((features == 8))[0]
         A = previous_data.airmass[:,scan]
         el = previous_data.el[:,scan]
+        if len(scan) == 0:
+            self.STATE = False
+            return
 
         tsys = self.level2.system_temperature
         gain = self.level2.system_gain
@@ -259,11 +272,17 @@ class SkyDip(PipelineFunction):
                 print('##########################################')
                 raise IndexError('Gain not found')
             select = np.where((el[ifeed] > 40) & (el[ifeed] < 55))[0]
+            print('MIN EL', np.min(el[ifeed]), 'MAX EL', np.max(el[ifeed])) 
+            logging.debug(f'{self.name}: MIN EL/MAX EL FOR FEED {feed:02d} is {np.min(el[ifeed]):.2f}/{np.max(el[ifeed]):.2f}')
 
             for iband in range(n_bands):
                 for ichannel in range(n_channels):
-                    fits = np.polyfit(A[ifeed,select], tod[iband,ichannel,select], 1)
-                    self.fit_values[ifeed, iband, ichannel] = fits
+                    try:
+                        fits = np.polyfit(A[ifeed,select], tod[iband,ichannel,select], 1)
+                        self.fit_values[ifeed, iband, ichannel] = fits
+                    except (np.linalg.LinAlgError, TypeError):
+                        self.fit_values[ifeed, iband, ichannel] = np.nan
+
             fig, ax = pyplot.subplots(2,1, sharex=True)
 
             nu = previous_data.frequency.flatten()
@@ -277,7 +296,7 @@ class SkyDip(PipelineFunction):
             ax[1].set_xlim(26, 34)
 
             ax[0].set_ylim(0,100)
-            ax[1].set_ylim(10,30)
+            ax[1].set_ylim(0,30)
 
             pyplot.tight_layout()
             pyplot.suptitle(f'Feed {feed:02d}')
@@ -317,23 +336,31 @@ class AtmosphereRemoval(PipelineFunction):
         Z = block_diag([Z]*Nfreq)
         return tod -  np.reshape(Z.dot(fit_values.T.flatten()[:,None]),tod.shape)
 
-    def fit_atmosphere(self, A, tod, lowf=10,highf=1024-10):
+    def fit_atmosphere(self, A, tod, lowf=10,highf=1024-10,MINIMUM_CHUNK_SIZE=100):
         """Fit for the atmosphere"""
-        
-        Nfreq = highf - lowf
-        Zmasked = np.ones((A.size, 2))
-        Zmasked[:,1] = A
-        Zmasked = block_diag([Zmasked]*Nfreq)
 
-        d = tod[lowf:highf,:].flatten()[:,None]
+        # Nfreq = highf - lowf
+        select = np.arange(lowf,highf,dtype=int) 
+        select = np.delete(select, np.arange(select.size//2-2,select.size//2+3,dtype=int))
+        Nfreq = select.size
+        select_time = np.isfinite(np.sum(tod[select],axis=0))
+        Acut = A[select_time]
         
+        if Acut.size < MINIMUM_CHUNK_SIZE:
+            return np.zeros(1024) + np.nan, np.zeros(1024) + np.nan
+        Zmasked = np.ones((Acut.size, 2))
+        Zmasked[:,1] = Acut
+        Zmasked = block_diag([Zmasked]*Nfreq)
+        d = tod[select] 
+        d = d[:,select_time].flatten()[:,None]
+
         b = Zmasked.T.dot(d)
         M = (Zmasked.T.dot(Zmasked))
         fit_values = linalg.spsolve(M,b)
         offset = np.zeros(1024) + np.nan
         atmos = np.zeros(1024) + np.nan
-        offset[lowf:highf] = fit_values[::2] 
-        atmos[lowf:highf] = fit_values[1::2]
+        offset[select] = fit_values[::2] 
+        atmos[select] = fit_values[1::2]
 
         return offset, atmos
     
@@ -350,6 +377,9 @@ class AtmosphereRemoval(PipelineFunction):
             for iband in range(n_bands):
                 tod = _tod[iband]
                 for iscan, (start, end) in enumerate(data.scan_edges):
+                    if all(data.features[start:end] == 9): # ignore constant elevation scans
+                        self.fit_values[iscan,ifeed,iband,0] = np.nanmedian(tod[...,start:end],axis=-1)
+                        continue 
                     self.fit_values[iscan,ifeed,iband] = self.fit_atmosphere(A[ifeed,start:end], tod[...,start:end])
                     logging.debug(f'{self.name}: MEAN ATMOS FIT FOR FEED {feed:02d} in SCAN {iscan:02d} is {np.nanmean(self.fit_values[iscan,ifeed,iband,1]):.1f}')
 
@@ -466,7 +496,8 @@ class CheckLevel1File(PipelineFunction):
 class Level1AveragingGainCorrection(Level1Averaging):
     name : str = 'Level1AveragingGainCorrection'
     groups : list = field(default_factory=lambda: ['averaged_tod']) 
-    
+    figure_directory : str = 'figures'
+
     overwrite : bool = False
     STATE : bool = True 
 
@@ -688,6 +719,7 @@ class Level1AveragingGainCorrection(Level1Averaging):
 
         # Prepare the data and mask bad channels 
         n_bands, n_channels, n_tod = data_normed.shape
+
         templates = np.ones((n_bands, n_channels, 3))
         n_templates = templates.shape[-1]
         v = np.linspace(-1,1,1024*4).reshape((4,1024))
@@ -696,21 +728,22 @@ class Level1AveragingGainCorrection(Level1Averaging):
         end_cut = 20
 
         # Remove edge frequencies and the bad middle frequency
+        bad_values = np.isnan(system_temperature)
         templates[:, :end_cut ,:] = 0
         templates[:, -end_cut:,:] = 0
-        templates[:, 512 ,:] = 0
+        templates[:, 512-5:512+5 ,:] = 0
+        templates[bad_values,:] = 0
         data_normed[:, :end_cut ,:] = 0
         data_normed[:, -end_cut:,:] = 0
-        data_normed[:, 512 ,:] = 0
+        data_normed[:, 512-5:512+5 ,:] = 0
+        data_normed[bad_values,:] = 0 
 
-        print('Template Sum:', np.sum(templates))
         templates = templates.reshape((n_bands * n_channels, n_templates)) 
         data_reshape = data_normed.reshape((n_bands * n_channels, n_tod))
+        if np.sum(bad_values) == bad_values.size:
+            return np.zeros(data_reshape.T.flatten().shape)
 
-        import time 
-        t0 = time.time()
         dG = solve_gain_solution(data_reshape.T.flatten(), templates, *ps_fits, tau=1./50., use_prior=False)
-        print("Time taken for gain subtraction: {}".format(time.time() - t0))
         return dG
 
     def frequency_spectra_per_band(self, tod):
@@ -762,7 +795,8 @@ class Level1AveragingGainCorrection(Level1Averaging):
         index_2 = np.arange(2,N4,4)
         diff = tod[...,index_1] - tod[...,index_2] 
         rms = np.nanstd(diff, axis=-1)/np.sqrt(2) * np.sqrt(dv * tau) 
-        return tod/rms[...,np.newaxis] #(system_temperature[...,np.newaxis] * gains[...,np.newaxis])
+
+        return tod/rms[...,np.newaxis], rms[...,np.newaxis] 
 
     def median_filter(self, tod, medfilt_stepsize : int):
         """
@@ -770,23 +804,32 @@ class Level1AveragingGainCorrection(Level1Averaging):
         """
         n_bands, n_channels, n_tod = tod.shape
         filtered_tod = np.zeros((n_bands, n_channels, n_tod))
-        for iband in range(n_bands):
-            for ichan in tqdm(range(n_channels)):
-                if not np.isfinite(np.sum(tod[iband,ichan])):
-                    tod[iband,ichan] = 0
-                    continue
-                
-                pad_tod = np.zeros(n_tod*3) 
-                pad_tod[:n_tod] = tod[iband,ichan,::-1]
-                pad_tod[n_tod:2*n_tod] = tod[iband,ichan]
-                pad_tod[2*n_tod:] = tod[iband,ichan,::-1] 
-                filtered_tod[iband,ichan] = tod[iband,ichan] - medfilt.medfilt(pad_tod*1, medfilt_stepsize)[n_tod:2*n_tod]
+        for iband in tqdm(range(n_bands)):
+            index = np.arange(1024,dtype=int)
+            index = index[10:-10]
+            index = index[(index < 512-5) | (index > 512+5)]
+            masked_tod = tod[iband,index,:]
+            mean_tod = np.nanmean(masked_tod,axis=0)
+            if np.nansum(np.isfinite(mean_tod)) < medfilt_stepsize*2:
+                continue 
+
+            pad_tod = np.zeros(n_tod*3) 
+            pad_tod[:n_tod] = mean_tod[::-1]
+            pad_tod[n_tod:2*n_tod] = mean_tod
+            pad_tod[2*n_tod:] = mean_tod[::-1] 
+            median_filter_tod = medfilt.medfilt(pad_tod.astype(np.float64), medfilt_stepsize)[n_tod:2*n_tod]
+            A = np.ones((n_tod,2))
+            A[:,1] = median_filter_tod 
+            x = np.linalg.solve(np.dot(A.T,A), np.dot(A.T,masked_tod.T)) 
+
+            filtered_tod[iband,index] = masked_tod - (A.dot(x)).T
+
         
         return filtered_tod
 
     def gain_subtraction(self,data, tod, system_temperature):
         ps_fits = self.fit_power_spectrum(data, tod[0]) 
-        print(ps_fits)
+
         if not data.source_name in Coordinates.CalibratorList: 
             dG = self.gain_subtraction_fit(tod, system_temperature, ps_fits) 
         else:
@@ -857,8 +900,7 @@ class Level1AveragingGainCorrection(Level1Averaging):
         pyplot.tight_layout()
         fig.savefig(f'{figure_directory}/tod_scan_{iscan:02d}_feed_{ifeed:02d}_avg.png')
         pyplot.close(fig)
-
-
+            
 
     def average_tod(self, data : HDF5Data, level2_data : COMAPLevel2) -> HDF5Data:
         """Average the time ordered data in frequency"""
@@ -881,6 +923,7 @@ class Level1AveragingGainCorrection(Level1Averaging):
             if (feed > 19):
                 continue
             tod = data['spectrometer/tod'][ifeed, ...]
+
             for iscan, (start, end) in enumerate(self.scan_edges): 
                 logging.debug(f'{self.name}: Averaging level 1 {iscan:02d} in Feed {feed:02d}')
 
@@ -901,12 +944,24 @@ class Level1AveragingGainCorrection(Level1Averaging):
                     else:
                         dG = np.load(f'temp_files/{data.obsid}_temp_dG.npy', allow_pickle=True).flatten()
                 else:
-                    clean_tod = self.remove_atmosphere(data.airmass[ifeed,start:end], tod[...,start:end], level2_data['atmosphere/fit_values'][iscan,ifeed,:])
-                    clean_tod = self.normalise_data(clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:], level2_data['vane/system_gain'][0,ifeed,:,:]) 
-                    clean_tod = self.median_filter(clean_tod, int(50*120))
-                    frequency_power_spectra = self.frequency_spectra_per_band(clean_tod)
-                    dG = self.gain_subtraction(data, clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:]) 
+                    # Fix NaNs, assign NaNs to nearest next good value along the time axis
+                    data_reshape = tod[...,start:end].reshape((n_bands*n_channels, end-start))
+                    nan_tod = np.isnan(data_reshape) 
+                    ones = np.ones(data_reshape.shape)*np.nanmedian(data_reshape,axis=1)[:,None] 
+                    data_reshape[nan_tod] = ones[nan_tod]
 
+                    tod[...,start:end] = data_reshape.reshape((n_bands, n_channels, end-start))
+                    if data.source_name in Coordinates.CalibratorList: 
+                        clean_tod = tod[...,start:end] - np.nanmedian(tod[...,start:end],axis=-1)[...,None]
+                    else:
+                        clean_tod = self.remove_atmosphere(data.airmass[ifeed,start:end], tod[...,start:end], level2_data['atmosphere/fit_values'][iscan,ifeed,:])
+                    clean_tod, normalisation_factor = self.normalise_data(clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:], level2_data['vane/system_gain'][0,ifeed,:,:]) 
+                    clean_tod = self.median_filter(clean_tod, int(50*120))
+                    #frequency_power_spectra = self.frequency_spectra_per_band(clean_tod)
+                    try:
+                        dG = self.gain_subtraction(data, clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:]) 
+                    except (ValueError, IndexError): 
+                        dG = None
                 weights = 1./level2_data.system_temperature[0,ifeed]**2 
                 weights[level2_data.system_temperature[0,ifeed] == 0] = 0
                 weights[:,:10] = 0
@@ -914,16 +969,17 @@ class Level1AveragingGainCorrection(Level1Averaging):
                 weights[:,510:515] = 0
                 
                 if not isinstance(dG, type(None)):
-                    residual = (clean_tod - dG[None,None,:])*level2_data.system_temperature[0,ifeed,:,:,None]
+                    residual = (clean_tod - dG[None,None,:])*normalisation_factor/level2_data['vane/system_gain'][0,ifeed,:,:,None]
                 else:
-                    residual = clean_tod*level2_data.system_temperature[0,ifeed,:,:,None] 
+                    residual = clean_tod*normalisation_factor/level2_data['vane/system_gain'][0,ifeed,:,:,None]
 
                 residual = self.weighted_average_over_band(residual, weights) 
-
+                
                 if (iscan == 0) & (not isinstance(dG, type(None))):
                     avg_tod = self.weighted_average_over_band(clean_tod, weights) 
                     ### Plot some diagnostics
-                    self.plot_gain_examples(data, clean_tod[0], avg_tod[0], dG, level2_data, iscan, feed,level2_data.system_temperature[0,ifeed,0,:,None])
+                    self.plot_gain_examples(data, clean_tod[0], avg_tod[0], dG, level2_data, iscan, feed,
+                            level2_data.system_temperature[0,ifeed,0,:,None],figure_path=self.figure_directory)
                     ### 
                 clean_tod = clean_tod*level2_data.system_temperature[0,ifeed,:,:,None]
                 avg_tod = self.weighted_average_over_band(clean_tod, weights) 
@@ -932,10 +988,10 @@ class Level1AveragingGainCorrection(Level1Averaging):
                 self.tod_original[ifeed,:,start:end] = avg_tod
                 self.tod_weights[ifeed,:,start:end]  = 1./self.auto_rms(residual)[:,None]**2
 
-                for iband in range(n_bands):
-                    self.freq_power_spectra[iscan,ifeed, iband, :,1] = frequency_power_spectra[iband].P_bin 
-                    self.freq_power_spectra[iscan,ifeed, iband, :,0] = frequency_power_spectra[iband].nu_bin 
-                    self.freq_power_spectra_fits[iscan,ifeed, iband, :] = frequency_power_spectra[iband].result.x
+                #for iband in range(n_bands):
+                #    self.freq_power_spectra[iscan,ifeed, iband, :,1] = frequency_power_spectra[iband].P_bin 
+                #    self.freq_power_spectra[iscan,ifeed, iband, :,0] = frequency_power_spectra[iband].nu_bin 
+                #    self.freq_power_spectra_fits[iscan,ifeed, iband, :] = frequency_power_spectra[iband].result.x
 
 @dataclass 
 class Level1Plotting(PipelineFunction):    

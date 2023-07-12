@@ -118,7 +118,7 @@ def mpi_share_map(m):
     return m
 
 
-def cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b,x0 = None,niter=100,threshold=1e-5,verbose=False, offset_length=50):
+def cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b,x0 = None,niter=100,threshold=1e-2,verbose=False, offset_length=50):
     """
     Biconjugate CGM implementation from Numerical Recipes 2nd, pg 83-85
     
@@ -214,7 +214,6 @@ def bin_offset_map(pointing,
     return m, h
 
 def share_map(m,w):
-
     if rank == 0:
         sum_map = np.zeros((size, m.size))
         wei_map = np.zeros((size, m.size))
@@ -402,9 +401,9 @@ def run_destriper(_pointing,
                   feedid,
                   obsids,
                   obsid_cuts,
-                  chi2_cutoff=100,special_weight=None):
+                  chi2_cutoff=100,special_weight=None,healpix=False):
 
-    maps,result = destriper_iteration(_pointing,
+    _maps,result = destriper_iteration(_pointing,
                                       _tod,
                                       _weights,
                                       offset_length,
@@ -416,116 +415,26 @@ def run_destriper(_pointing,
     # Here we will check Chi^2 contributions of each datum to each pixel.
     # Data that exceeds the chi2_cutoff are weighted to zero 
     # Share maps to all nodes
-    for k in maps.keys():
-        maps[k] = comm.bcast(maps[k],root=0)
+    #for k in maps.keys():
+    #    maps[k] = comm.bcast(maps[k],root=0)
 
-    residual = (_tod-np.repeat(result,offset_length)-maps['map'][_pointing])
-    chi2 = residual**2*_weights
-    _weights[chi2 > chi2_cutoff] = 0
-
-    # residual = (_tod-np.repeat(result,offset_length))
-    # hpix = hp.ang2pix(1024,(90-el)*np.pi/180., az*np.pi/180.)
-    # hedges = np.arange(12*1024**2+1)
-    # top = np.histogram(hpix, hedges, weights=residual*_weights)[0]
-    # bot = np.histogram(hpix, hedges, weights=_weights)[0]
-    # top = mpi_sum_vector(top)
-    # bot = mpi_sum_vector(bot)
-
-    # mdl = top/bot
-    # gd = np.isfinite(mdl)
-    # mdl[~gd] = 0
-    # if rank == 0:
-    #     hp.write_map('maps/azel_map.fits',mdl,overwrite=True)
-
-    # _tod -= mdl[hpix]
-
-    # residual = (_tod-np.repeat(result,offset_length))
-
-    # d_el = gaussian_filter(np.gradient(el,1),11)
-    # gd = (residual != 0)
-    # nbins = 90
-
-    # el_min = 
-
-    # theta_edges = np.linspace(np.min(d_el[gd]),np.max(d_el[gd]),nbins+1)
-    # theta_mids = (theta_edges[1:]+theta_edges[:-1])/2.
-    # top = np.histogram(d_el[gd],theta_edges,weights=residual[gd])[0]
-    # bot = np.histogram(d_el[gd],theta_edges)[0]
-
-    # if rank ==0:
-    #     pyplot.plot(theta_mids, top/bot)
-    #     pyplot.show()
-    # top = mpi_sum_vector(top)
-    # bot = mpi_sum_vector(bot)
-
-    # mdl = top/bot
-    # gd = np.isfinite(mdl)
-    # mdl_tod = np.interp(d_el, theta_mids[gd], mdl[gd])
-    # _tod -= mdl_tod
-
-    #_maps,result = destriper_iteration(_pointing,_tod,_weights,offset_length,pixel_edges)
-    _maps,result = destriper_iteration(_pointing,
-                                      _tod,
-                                      _weights,
-                                      offset_length,
-                                      pixel_edges,
-                                      feedid,
-                                      obsids,
-                                      special_weight=None)
-
-    # hpix = hp.ang2pix(1024,(90-el)*np.pi/180., az*np.pi/180.)
-    # hedges = np.arange(12*1024**2+1)
-    # top = np.histogram(hpix, hedges, weights=residual*_weights)[0]
-    # bot = np.histogram(hpix, hedges, weights=_weights)[0]
-    # top = mpi_sum_vector(top)
-    # bot = mpi_sum_vector(bot)
+    #residual = (_tod-np.repeat(result,offset_length)-maps['map'][_pointing])
+    #chi2 = residual**2*_weights
+    #_weights[chi2 > chi2_cutoff] = 0
+    #_maps,result = destriper_iteration(_pointing,
+    #                                  _tod,
+    #                                  _weights,
+    #                                  offset_length,
+    #                                  pixel_edges,
+    #                                  feedid,
+    #                                  obsids,
+    #                                  special_weight=None)
 
 
-    # mdl = top/bot
-    # gd = np.isfinite(mdl)
-    # mdl[~gd] = 0
-    # if rank == 0:
-    #     hp.write_map('maps/azel_map_it2.fits',mdl,overwrite=True)
-    # _tod -= mdl[hpix]
-
-
-    # m,h = bin_offset_map(_pointing,
-    #                      np.repeat(result,offset_length),
-    #                      _weights,
-    #                      offset_length,
-    #                      pixel_edges,extend=False)
-
-    # n,h = bin_offset_map(_pointing,
-    #                      _tod,
-    #                      _weights,
-    #                      offset_length,
-    #                      pixel_edges,extend=False)
-    # d2,h = bin_offset_map(_pointing,
-    #                      (_tod-np.repeat(result,offset_length))**2,
-    #                      _weights,
-    #                      offset_length,
-    #                      pixel_edges,extend=False)
-
-    # m = mpi_share_map(m)
-    # h = mpi_share_map(h)
-    # n = mpi_share_map(n)
-    # d2 = mpi_share_map(d2)
-
-    # if rank == 0:
-    #     m[h!=0] /= h[h!=0]
-    #     n[h!=0] /= h[h!=0]
-    #     d2[h!=0] /= h[h!=0]
-
-    #     _maps = {'map':n-m,'naive':n, 'weight':h,'map2':d2}
-    # else:
-    #     _maps = {'map':None,'naive':None,'weight':None,'map2':None}
-
-
-    if rank == 0:
-        print('HELLO',flush=True)
+    #if rank == 0:
+    #    print('HELLO',flush=True)
 
     maps = {'All':_maps}
-    residual = (_tod-np.repeat(result,offset_length))
     # now make each individual feed map
     # ufeeds = np.unique(feedid)
     # for feed in ufeeds:

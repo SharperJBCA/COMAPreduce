@@ -223,35 +223,64 @@ class Level2FitPowerSpectrum(PipelineFunction):
 
     def run(self, data : HDF5Data, level2_data : COMAPLevel2):
 
-        self.data = {'fnoise_fits/fnoise_fit_parameters':np.zeros((self.N_FEEDS, self.N_BANDS, 3))}
+        N_SCANS = len(data.scan_edges)
+        self.data = {'fnoise_fits/fnoise_fit_parameters':np.zeros((self.N_FEEDS, self.N_BANDS, N_SCANS, 3)),
+                     'fnoise_fits/auto_rms':np.zeros((self.N_FEEDS, self.N_BANDS, N_SCANS))}
         for ((ifeed, feed),iband) in tqdm(level2_data.tod_loop(bands=True)):
             if (feed > 19):
                 continue
-            tod = level2_data['averaged_tod/tod'][ifeed,iband]
-            power_spectrum = np.abs(np.fft.fft(tod))**2
-            freqs = np.fft.fftfreq(len(tod), d=1./self.SAMPLE_RATE) 
-            power_spectrum = power_spectrum[freqs > 0]
-            freqs = freqs[freqs > 0]
+            _tod = level2_data['averaged_tod/tod'][ifeed,iband]
 
-            mask = np.ones(freqs.size, dtype=bool)
-            mad = np.median(np.abs(power_spectrum[freqs > 1] - np.median(power_spectrum[freqs > 1])))*1.4826
-            niter = 3
-            indices = np.arange(freqs.size, dtype=int)
-            for istep in range(niter):
-                select = mask & (freqs > 0.5)
-                peak_idx, properties = find_peaks(power_spectrum[select], height=mad*50, distance=100)
-                peak_idx = (indices[select])[peak_idx]
-                widths, width_heights, left_ips, right_ips = peak_widths(power_spectrum, peak_idx, rel_height=0.85)
-                for i in range(len(peak_idx)):
-                    mask[int(left_ips[i]):int(right_ips[i])] = False
+            for iscan, (start, end) in enumerate(data.scan_edges): 
+                tod = _tod[start:end] 
+                if np.nansum(tod) == 0:
+                    continue
+                power_spectrum = np.abs(np.fft.fft(tod))**2/tod.size 
+                freqs = np.fft.fftfreq(len(tod), d=1./self.SAMPLE_RATE) 
+                power_spectrum = power_spectrum[freqs > 0]
+                freqs = freqs[freqs > 0]
+                diff_tod = np.diff(tod)
+                auto_rms = np.nanstd(diff_tod)/np.sqrt(2) 
+    
+                mask = np.ones(freqs.size, dtype=bool)
+                mad = np.median(np.abs(power_spectrum[freqs > 1] - np.median(power_spectrum[freqs > 1])))*1.4826
+                niter = 3
+                indices = np.arange(freqs.size, dtype=int)
+                for istep in range(niter):
+                    select = mask & (freqs > 0.5)
+                    peak_idx, properties = find_peaks(power_spectrum[select], height=auto_rms**2*100, distance=100)
+                    peak_idx = (indices[select])[peak_idx]
+                    widths, width_heights, left_ips, right_ips = peak_widths(power_spectrum, peak_idx, rel_height=0.85)
+                    for i in range(len(peak_idx)):
+                        mask[int(left_ips[i]):int(right_ips[i])] = False
 
-            ps = FitPowerSpectrum(nbins=30) 
-            ps(freqs[mask], power_spectrum[mask], 
-                errors=None, 
-                model=ps.red_noise_model, 
-                error_func=ps.log_error, P0=None,
-                min_freq=0.05)
+                # plot the power spectrum
+                try:
+                    fig, ax = pyplot.subplots(1,1, figsize=(12,8))
+                    ax.plot(freqs, power_spectrum)
+                    ax.plot(freqs[~mask], power_spectrum[~mask], '.',color='red')
+                    ax.axhline(auto_rms**2, color='k', linestyle='--')
+                    ax.axhline(100*auto_rms**2, color='k', linestyle=':')
+                    ax.set_title(f'Feed: {ifeed:02d} Band: {iband:02d}')
+                    ax.set_xlabel('Frequency [Hz]')
+                    ax.set_ylabel('Power Spectrum')
+                    pyplot.yscale('log')
+                    pyplot.xscale('log')
+                    fig.tight_layout()
+                    fig.savefig(f'{self._full_figure_directory}/feed_{feed:02d}_band_{iband:02d}_scan_{iscan:02d}_power_spectrum_full.png')
+                    pyplot.close(fig)
+                except ValueError:
+                    print('\n#####',data.obsid,tod.shape,np.nansum(tod),np.nansum(power_spectrum), ifeed, iband,'######\n')
+                    raise(ValueError)
 
-            if not isinstance(ps.result, type(None)):
-                ps.plot_fit(fig_dir=self._full_figure_directory, prefix = f'feed_{ifeed:02d}_band_{iband:02d}_')
-                self.data['fnoise_fits/fnoise_fit_parameters'][ifeed,iband] = ps.result.x
+                ps = FitPowerSpectrum(nbins=30) 
+                ps(freqs[mask], power_spectrum[mask], 
+                    errors=None, 
+                    model=ps.red_noise_model, 
+                    error_func=ps.log_error, P0=None,
+                    min_freq=0.05)
+
+                if not isinstance(ps.result, type(None)):
+                    ps.plot_fit(fig_dir=self._full_figure_directory, prefix = f'feed_{feed:02d}_band_{iband:02d}_scan_{iscan:02d}')
+                    self.data['fnoise_fits/fnoise_fit_parameters'][ifeed,iband,iscan] = ps.result.x
+                    self.data['fnoise_fits/auto_rms'][ifeed,iband,iscan] = auto_rms

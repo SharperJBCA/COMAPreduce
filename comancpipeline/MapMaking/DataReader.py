@@ -349,6 +349,57 @@ class ReadDataLevel2:
         self.edge_mask[self.chunks[i][0]:self.chunks[i][1]] = speed_mask.flatten()
         d.close()
 
+    def readPixelsHealpix(self, i, filename, nside=4096):
+        """
+        Creates pixels for healpix map 
+        """
+
+
+        d = h5py.File(filename,'r')
+
+        # --- Feed position indices can change
+        self.FeedIndex = GetFeeds(d['spectrometer/feeds'][...], self.Feeds)
+
+        # We store all the pointing information
+        x  = d['spectrometer/pixel_pointing/pixel_ra'][self.FeedIndex,:]
+        y  = d['spectrometer/pixel_pointing/pixel_dec'][self.FeedIndex,:]
+        az = d['spectrometer/pixel_pointing/pixel_az'][self.FeedIndex,:]
+        el = d['spectrometer/pixel_pointing/pixel_el'][self.FeedIndex,:]
+        dt = 1./50.
+
+        scan_edges = d['averaged_tod/scan_edges'][...]
+        pixels = np.zeros((x.shape[0], self.datasizes[i]))
+        speed_mask = np.zeros((x.shape[0], self.datasizes[i]),dtype=bool)
+        last = 0
+
+        for iscan, (start,end) in enumerate(scan_edges):
+            N = int((end-start)//self.offset_length * self.offset_length)
+            end = start+N
+            xc = x[:,start:end]
+            yc = y[:,start:end]
+            azc= az[:,start:end]
+            elc= el[:,start:end]
+            x_veloc = np.gradient(azc[0],dt)*np.cos(np.nanmean(elc)*np.pi/180.)
+            y_veloc = np.gradient(elc[0],dt)
+            veloc = np.sqrt(x_veloc**2 + y_veloc**2)
+
+            speed_mask[:,last:last+N] = ( np.abs(veloc) > 0.45 ) | (np.abs(veloc) < 0.1) # deg/s
+            yshape = yc.shape
+            # convert to Galactic
+            if 'GLON' in self.naive.wcs.wcs.ctype[0]:
+                rot    = hp.rotator.Rotator(coord=['C','G'])
+                gb, gl = rot((90-yc.flatten())*np.pi/180., xc.flatten()*np.pi/180.)
+                xc, yc = gl*180./np.pi, (np.pi/2-gb)*180./np.pi
+
+            pixels[:,last:last+N] = hp.ang2pix(nside, (90-yc)*np.pi/180.,xc*np.pi/180).reshape(yshape)
+            last += N
+
+
+        self.pixels[self.chunks[i][0]:self.chunks[i][1]] = pixels.flatten()
+        self.edge_mask[self.chunks[i][0]:self.chunks[i][1]] = speed_mask.flatten()
+        d.close()
+
+
     def readData(self, i, filename):
         """
         Reads data

@@ -9,7 +9,7 @@ Routines for applying the TauA/CasA/Jupiter calibration to the TODs
 """
 import numpy as np
 
-from comancpipeline.Tools.CaliModels import TauAFluxModel 
+from comancpipeline.Tools.CaliModels import TauAFluxModel, JupiterFluxModel, CasAFluxModel
 from tqdm import tqdm 
 import h5py 
 import os
@@ -28,6 +28,10 @@ class ApplyCalibration(PipelineFunction):
     temp_calibrator_file : str = 'scripts/calibrator_temp_info.npy' 
     overwrite_calibrator_file : bool = False 
     calibrator_source : str = 'undefined' 
+    calibrator_models : dict = field(default_factory=lambda:{'TauA':TauAFluxModel(), 'CasA':CasAFluxModel(), 'jupiter':JupiterFluxModel()})
+    figure_directory : str = 'figures'
+    nowrite : bool = False 
+
     def __post_init__(self):
         
         self.data = {}
@@ -160,19 +164,17 @@ class ApplyCalibration(PipelineFunction):
           mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
           return mdl 
     
-    def flux_error(self, fits, errors): 
+    def flux_error(self, fits, error, frequency): 
         
         diffs = [self.dA,self.dsigmax,self.dsigmay] 
-        
-        sigma_out = 0 
-        for idiff, diff in enumerate(diffs):
-            sigma_out += diff(fits)**2 * errors[idiff]**2 
-              
-        beam = 2*np.pi * fits[4]*fits[5]*(np.pi/180.)**2 
-        pixel_size = (1./60.*np.pi/180. )**2 
-        N = beam/pixel_size
-        
-        return sigma_out**0.5/np.sqrt(N)  
+        kb = 1.38e-23 
+        c  = 2.99792458e8
+        conv = 2*kb * (frequency/c)**2 * 1e26 * (np.pi/180.)**2    
+        beam = 2*np.pi * fits[1]*fits[2]*conv
+        flux = fits[0] * beam 
+        sigma_out =  flux**2 * ((error[0]/fits[0])**2 +(error[1]/fits[1])**2 + (error[2]/fits[2])**2)
+
+        return sigma_out**0.5
     
     def get_source_flux(self,frequency : float, 
                         fits : np.ndarray[float,float], 
@@ -181,14 +183,15 @@ class ApplyCalibration(PipelineFunction):
         
         kb = 1.38e-23 
         nu = frequency * 1e9
-        c  = 3e8 
+        c  = 2.99792458e8
         conv = 2*kb * (nu/c)**2 * 1e26 * (np.pi/180.)**2 
         flux = 2*np.pi*fits[:,0]*fits[:,4]*fits[:,5] * conv 
-            
-        flux_errs = np.array([self.flux_error(fits[i],errors[i,[0,4,5]]) if fits[i,4] !=0 else 0 for i in range(flux.size)]) 
-            
-        flux_errs *= conv 
-        
+        print('AMPLITUDE', nu*1e-9, np.nanmedian(fits[:,0]))
+        print('FLUX',np.nanmedian(flux))
+        print('BEAM AREA', np.nanmedian(2*np.pi*fits[:,4]*fits[:,5]) * (np.pi/180.)**2)
+        print('WIDTHS', np.nanmedian(fits[:,4])*60*2.355, np.nanmedian(fits[:,5])*60*2.355)
+        flux_errs = np.array([self.flux_error(fits[i,[0,4,5]],errors[i,[0,4,5]], nu) if fits[i,4] !=0 else 0 for i in range(flux.size)]) 
+                    
         return flux, flux_errs 
     
     def get_source_geometric_radius(self, fits : np.ndarray[float,float], 
@@ -206,71 +209,63 @@ class ApplyCalibration(PipelineFunction):
     def read_data(self, filelist, save_file, overwrite=False): 
         
         if os.path.exists(save_file) and not overwrite:
-            return np.load(save_file, allow_pickle=True).flatten()[0] 
+            return np.load(save_file, allow_pickle=True).flatten()[0], None
         
-        taua_all = [] 
+        src_all = [] 
         err_all = [] 
-    
         mjd_all = [] 
+        el_all = []
+        if len(filelist) == 0:
+            raise FileExistsError("Filelist is empty")
+        
         for filename in tqdm(filelist): 
             
             data = h5py.File(filename,'r')
             if not 'comap' in data:
                 continue 
             
-            if not ('TauA_source_fit' in data): continue 
+            if not (f'{self.calibrator_source}_source_fit' in data): continue 
         
     
             feeds = data['spectrometer/feeds'][...]-1
-            taua = np.zeros((20, 4, 7)) 
-            taua[feeds] = data['TauA_source_fit']['fits'][...]
+            src = np.zeros((20, 4, 7)) 
+            src[feeds] = data[f'{self.calibrator_source}_source_fit']['fits'][...]
             err = np.zeros((20, 4, 7)) 
-            err[feeds] = data['TauA_source_fit']['errors'][...]
+            err[feeds] = data[f'{self.calibrator_source}_source_fit']['errors'][...]
+            el  = np.zeros((20)) 
+            el[feeds] = np.nanmedian(data['spectrometer/pixel_pointing/pixel_el'][...],axis=-1)
             mjd = data['spectrometer/MJD'][0]
-            taua_all += [taua]
+            src_all += [src]
             err_all += [err]
+            el_all += [el]
     
             mjd_all += [mjd]
             data.close()
     
-        taua_all = np.array(taua_all) 
+        src_all = np.array(src_all) 
         mjd_all = np.array(mjd_all) 
         err_all = np.array(err_all) 
-        output =  {'fits':taua_all, 'MJD':mjd_all, 'errors':err_all}
-        np.save(save_file, output) 
-        
-        return output 
-    
-    def create_source_mask(self, flux, flux_err, radius, radius_err, cali_factor, max_cali_factor=10.8,
-                           min_flux = 10,
-                           max_flux=1000,
-                           max_flux_err = 10, 
-                           min_flux_err = 0.5,
-                           max_geo_radius_diff=1e-3):
-        """Calculate the mask for the bad TauA fits"""
-        mask = (flux_err > max_flux_err) | ~np.isfinite(flux) | (flux< min_flux) | (flux > max_flux) |\
-            ~np.isfinite(flux_err) |(flux_err < min_flux_err) | (cali_factor > max_cali_factor)
-            
-        mean_size = np.nanmedian(radius[~mask])
-        mask = mask | (np.abs(radius - mean_size) > max_geo_radius_diff)
-    
-        return mask 
-    
-    def calculate_calibration_factors(self, filelist, temp_save_file='scripts/taua_fits.npy',
-                                      temp_file_overwrite=False):
-        """Calculate the calibration factors for the COMAP feeds""" 
-        data = self.read_data(filelist, temp_save_file, overwrite=temp_file_overwrite)
-        flux_model = TauAFluxModel()
-    
+        el_all  = np.array(el_all)
+        print(el_all.shape)
+        data =  {'fits':src_all, 'MJD':mjd_all, 'errors':err_all, 'el':el_all}
+
+        flux_model = self.calibrator_models[self.calibrator_source]
         cal_data = {} 
+        unmasked_cal_data = {}
         for iband,frequency in zip([0,1,2,3],[27,29,31,33]):
             flux_feed1, flux_err_feed1 = self.get_source_flux(frequency, 
                                              data['fits'][:,0,iband,:],
                                              data['errors'][:,0,iband,:])
             radius_feed1, radius_err_feed1 = self.get_source_geometric_radius(data['fits'][:,0,iband,:],
                                                              data['errors'][:,0,iband,:])
-            mask_feed1 = self.create_source_mask(flux_feed1, flux_err_feed1, radius_feed1, radius_err_feed1, flux_model(frequency, data['MJD'][:])/flux_feed1)
+            mask_feed1 = self.create_source_mask(flux_feed1, flux_err_feed1, radius_feed1, radius_err_feed1, flux_feed1/flux_model(frequency, data['MJD'][:]))
     
+            #mask_flux = flux_feed1[~mask_feed1]/flux_model(frequency, data['MJD'][~mask_feed1])
+            #mask_filelist = np.array(filelist)[~mask_feed1] 
+            #idx = np.argsort(mask_flux)
+            
+            #print(mask_flux[idx[:10]])
+            #print(np.sort(mask_filelist[idx[:10]]))
             for ifeed in range(20):
     
                 flux, flux_err = self.get_source_flux(frequency, 
@@ -278,25 +273,93 @@ class ApplyCalibration(PipelineFunction):
                                                  data['errors'][:,ifeed,iband,:])
                 radius, radius_err = self.get_source_geometric_radius(data['fits'][:,ifeed,iband,:],
                                                                  data['errors'][:,ifeed,iband,:])
-                mask = self.create_source_mask(flux, flux_err, radius, radius_err,flux_model(frequency, data['MJD'][:])/flux,
-                                          max_flux_err = 10)
+                mask = self.create_source_mask(flux, flux_err, radius, radius_err,flux/flux_model(frequency, data['MJD'][:]),
+                                          max_flux_err = 2)
     
                 mask = mask | mask_feed1 
                 
+                #print('FLUX MODEL',np.nanmedian(flux_model(frequency, data['MJD'])),np.nanmedian(flux), np.nanmedian(flux_err), np.nanmedian(flux)/np.nanmedian(flux_model(frequency, data['MJD'])))
+
                 cal_data[(ifeed,iband)] = {'MJD': data['MJD'][~mask],
+                                           'EL': data['el'][~mask,ifeed],
                                        'cal_factors': flux[~mask]/flux_model(frequency, data['MJD'][~mask]),
                                        'cal_errors': flux_err[~mask]/flux_model(frequency, data['MJD'][~mask])}
-                
-        from matplotlib import pyplot
-        from astropy.time import Time
-        date = Time(cal_data[(0,0)]['MJD'], format='mjd')
-        pyplot.plot(date.datetime, 1./cal_data[(0,0)]['cal_factors'],'o')
-        pyplot.xlabel('Date')
-        pyplot.ylabel('Calibration Factor')
-        pyplot.title('Feed 1, Band 1')
-        pyplot.gcf().autofmt_xdate()
-        pyplot.savefig('cal_factors.png')
-        pyplot.close()
+                unmasked_cal_data[(ifeed,iband)] = {'MJD': data['MJD'],
+                                           'EL': data['el'][~mask,ifeed],
+                                       'cal_factors': flux/flux_model(frequency, data['MJD']),
+                                       'cal_errors': flux_err/flux_model(frequency, data['MJD'])}
+
+        np.save(save_file, cal_data) 
+
+        return cal_data,unmasked_cal_data
+    
+    def create_source_mask(self, flux, flux_err, radius, radius_err, cali_factor, 
+                           max_cali_factor=1,
+                           min_cali_factor=0.5,
+                           min_flux = 10,
+                           max_flux=1000,
+                           max_flux_err = 10, 
+                           min_flux_err = 0.5,
+                           max_geo_radius_diff=1e-3):
+        """Calculate the mask for the bad SOURCE fits"""
+        mask = (flux_err > max_flux_err) | ~np.isfinite(flux) |\
+                ~np.isfinite(flux_err) |\
+                (cali_factor > max_cali_factor) |\
+                (cali_factor < min_cali_factor)
+            
+        mean_size = np.nanmedian(radius[~mask])
+        #mask = mask | (np.abs(radius - mean_size) > max_geo_radius_diff) # (flux< min_flux) | (flux > max_flux) |\ # (flux_err < min_flux_err) |\
+    
+        return mask 
+    
+    def calculate_calibration_factors(self, filelist, temp_save_file=None,
+                                      temp_file_overwrite=False):
+        """Calculate the calibration factors for the COMAP feeds""" 
+        if isinstance(temp_save_file, type(None)):
+            temp_save_file = f'scripts/{self.calibrator_source}_fits.npy'
+
+        import time 
+        t0 = time.time()
+        cal_data,unmasked_cal_data = self.read_data(filelist, temp_save_file, overwrite=temp_file_overwrite)
+
+        t1 = time.time() 
+        t2 = time.time()
+        print(f'Time to read data: {t1-t0} s')
+        print(f'Time to calculate calibration factors: {t2-t1} s')
+        if temp_file_overwrite:
+            from matplotlib import pyplot
+            from astropy.time import Time
+            for ifeed in range(19):
+                for iband in range(4):
+                    date = Time(unmasked_cal_data[(ifeed,iband)]['MJD'], format='mjd')
+                    pyplot.errorbar(date.datetime, unmasked_cal_data[(ifeed,iband)]['cal_factors'],fmt='.',yerr=unmasked_cal_data[(ifeed,iband)]['cal_errors'])
+                    date = Time(cal_data[(ifeed,iband)]['MJD'], format='mjd')
+                    pyplot.errorbar(date.datetime, cal_data[(ifeed,iband)]['cal_factors'],fmt='.',yerr=cal_data[(ifeed,iband)]['cal_errors'])
+
+                    pyplot.xlabel('Date')
+                    pyplot.ylabel('Calibration Factor')
+                    pyplot.title(f'Feed {ifeed+1}, Band {iband+1}')
+                    pyplot.gcf().autofmt_xdate()
+                    pyplot.ylim(0,2)
+                    pyplot.xlim(Time('2019-01-01').datetime, Time('2023-01-01').datetime)
+                    pyplot.grid()
+                    pyplot.savefig(f'{self.figure_directory}/cal_factors_{self.calibrator_source}_feed{ifeed+1}_band{iband+1}.png')
+                    pyplot.close()
+
+            # Plot Elevation dependence 
+            for ifeed in range(19):
+                for iband in range(4):
+                    pyplot.errorbar(cal_data[(ifeed,iband)]['EL'], cal_data[(ifeed,iband)]['cal_factors'],fmt='.',yerr=cal_data[(ifeed,iband)]['cal_errors'])
+
+                    pyplot.xlabel('Elevation [degrees]')
+                    pyplot.ylabel('Calibration Factor')
+                    pyplot.title(f'Feed {ifeed+1}, Band {iband+1}')
+                    pyplot.ylim(0.5,1)
+                    pyplot.xlim(0,90)
+                    pyplot.grid()
+                    pyplot.savefig(f'{self.figure_directory}/cal_factors_vs_elevation_{self.calibrator_source}_feed{ifeed+1}_band{iband+1}.png')
+                    pyplot.close()
+
         return cal_data 
     
     def assign_calibration_factors(self, level2_data : COMAPLevel2, cal_data : dict):
@@ -319,20 +382,18 @@ class ApplyCalibration(PipelineFunction):
                     cal_errors[ifeed,iband] = cal_data[(feed-1,iband)]['cal_errors'][idx]
                     cal_mjd[ifeed,iband] = cal_data[(feed-1,iband)]['MJD'][idx]
 
-        self.data['astro_calibration/cal_factors'] = cal_factors
-        self.data['astro_calibration/cal_errors'] = cal_errors
-        self.data['astro_calibration/cal_mjd'] = cal_mjd
-
-        self.attrs['astro_calibration'] = {'calibrator':self.calibrator_source} 
+        self.data[f'astro_calibration/{self.calibrator_source}_cal_factors'] = cal_factors
+        self.data[f'astro_calibration/{self.calibrator_source}_cal_errors'] = cal_errors
+        self.data[f'astro_calibration/{self.calibrator_source}_cal_mjd'] = cal_mjd
         
     def __call__(self, level2_data : COMAPLevel2):
         """ """ 
         cal_data = self.calculate_calibration_factors(self.calibrator_filelist, 
                                                       self.temp_calibrator_file,
                                                       self.overwrite_calibrator_file) 
-
-        self.assign_calibration_factors(level2_data, cal_data)
-        
+        if not self.nowrite:
+            print('hello')
+            self.assign_calibration_factors(level2_data, cal_data)
         return self.STATE 
 if __name__ == "__main__": 
     

@@ -18,6 +18,8 @@ import logging
 
 from comancpipeline.Tools.median_filter import medfilt
 from comancpipeline.Tools import Coordinates, binFuncs
+from astropy.modeling.models import Polynomial2D
+from astropy.modeling.fitting import LinearLSQFitter
 
 from matplotlib import pyplot
 import os 
@@ -100,6 +102,20 @@ class SkyMap:
         i,j = self.wcs.world_to_array_index_values(0,0)
         rows, columns = self.wcs.world_to_array_index_values(x,y)
 
+        # m = self.m 
+        # ny, nx = m.shape
+        # y, x = np.indices((ny, nx))
+        # fitter = LinearLSQFitter() 
+        # mdl = Polynomial2D(4) 
+        # mask = (m != 0) & np.isfinite(m)
+        # idx_x,idx_y = np.unravel_index(np.argmax(m), m.shape) 
+        # mask[idx_x-10:idx_x+10,idx_y-10:idx_y+10] = False
+        # mdl_fit = fitter(mdl, x[mask], y[mask], m[mask])
+        # bkgd = mdl_fit(x,y) 
+        # m -= bkgd 
+        # self._sky_sum = m.flatten() * self._wei_sum 
+
+
     @property 
     def world_flat(self):
         ypix,xpix = np.meshgrid(np.arange(self.y_npix),
@@ -107,7 +123,7 @@ class SkyMap:
     
         x, y = self.wcs.array_index_to_world_values(ypix.flatten(),
                                                     xpix.flatten())
-        
+        x[x > 180] -= 360
         return x, y
 
     @property 
@@ -152,6 +168,9 @@ class SkyMap:
         
         return self.weights_flat.reshape((self.y_npix,self.x_npix)).T
 
+from astropy.time import Time
+from astropy.coordinates import solar_system_ephemeris, EarthLocation
+from astropy.coordinates import get_body_barycentric, get_body
 @dataclass 
 class SourcePosition:
     
@@ -165,10 +184,20 @@ class SourcePosition:
     mask :np.ndarray= field(default_factory=lambda : None)
     
     def __post_init__(self):
-        self.az, self.el, self.ra, self.dec = Coordinates.sourcePosition(self.source, 
-                                                                         self.mjd, 
-                                                                         Coordinates.comap_longitude, 
-                                                                         Coordinates.comap_latitude)
+        if self.source == 'jupiter':
+            time0 = Time(self.mjd[0], format='mjd', scale='utc')
+            time1 = Time(self.mjd[-1], format='mjd', scale='utc')
+            loc = EarthLocation.from_geodetic(Coordinates.comap_longitude,Coordinates.comap_latitude) 
+            with solar_system_ephemeris.set('builtin'):
+                jup0 = get_body('jupiter', time0, loc)
+                jup1 = get_body('jupiter', time1, loc)
+            self._ra = np.linspace(jup0.ra.deg, jup1.ra.deg, self.mjd.size)
+            self._dec = np.linspace(jup0.dec.deg, jup1.dec.deg, self.mjd.size)
+        else:
+            self.az, self.el, self.ra, self.dec = Coordinates.sourcePosition(self.source, 
+                                                                            self.mjd, 
+                                                                            Coordinates.comap_longitude, 
+                                                                            Coordinates.comap_latitude)
 
     
     @property
@@ -256,7 +285,6 @@ def dA(P0, source_map):
     A, B, x0, y0, sigma_x, sigma_y, theta = P0 
     
     x,y = source_map.world_flat
-    x[x > 180] -= 360
     dx = (x - x0)
     dy = (y - y0)
     
@@ -265,7 +293,7 @@ def dA(P0, source_map):
     Y = -dx*np.sin(theta)/sigma_y +\
             dy*np.cos(theta)/sigma_y  
             
-    mdl = np.exp(-X**2 - Y**2)
+    mdl = np.exp(-0.5*X**2 - 0.5*Y**2)
     return mdl 
 def dB(P0, source_map):
     A, B, x0, y0, sigma_x, sigma_y, theta = P0 
@@ -275,7 +303,6 @@ def dB(P0, source_map):
 def dx0(P0, source_map):
     A, B, x0, y0, sigma_x, sigma_y, theta = P0 
     x,y = source_map.world_flat
-    x[x > 180] -= 360
     dx = (x - x0)
     dy = (y - y0)
     
@@ -291,12 +318,11 @@ def dx0(P0, source_map):
     dZdx0 = part1 - part2 - part3 
 
     # Z = X**2 + Y**2
-    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    mdl = -A*np.exp(-0.5*X**2 - 0.5*Y**2) * dZdx0 
     return mdl 
 def dy0(P0, source_map):
     A, B, x0, y0, sigma_x, sigma_y, theta = P0 
     x,y = source_map.world_flat
-    x[x > 180] -= 360
     dx = (x - x0)
     dy = (y - y0)
     
@@ -312,12 +338,11 @@ def dy0(P0, source_map):
     part3 = 2 * np.cos(theta)**2*(y - y0)/sigma_y**2 
     dZdx0 = part1 - part2 - part3 
     # Z = X**2 + Y**2
-    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    mdl = -A*np.exp(-0.5*X**2 - 0.5*Y**2) * dZdx0 
     return mdl 
 def dsigmax(P0, source_map):
     A, B, x0, y0, sigma_x, sigma_y, theta = P0 
     x,y = source_map.world_flat
-    x[x > 180] -= 360
     dx = (x - x0)
     dy = (y - y0)
     
@@ -330,12 +355,11 @@ def dsigmax(P0, source_map):
     dZdx0 = -2 * (np.cos(theta)*(x-x0) + np.sin(theta)*(y-y0))**2/sigma_x**3 
 
     # Z = X**2 + Y**2
-    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    mdl = -A*np.exp(-0.5*X**2 - 0.5*Y**2) * dZdx0 
     return mdl 
 def dsigmay(P0, source_map):
     A, B, x0, y0, sigma_x, sigma_y, theta = P0 
     x,y = source_map.world_flat
-    x[x > 180] -= 360
     dx = (x - x0)
     dy = (y - y0)
     
@@ -348,12 +372,11 @@ def dsigmay(P0, source_map):
     dZdx0 = -2 * (np.sin(theta)*(x-x0) + np.cos(theta)*(y-y0))**2/sigma_y**3 
 
     # Z = X**2 + Y**2
-    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    mdl = -A*np.exp(-0.5*X**2 - 0.5*Y**2) * dZdx0 
     return mdl 
 def dtheta(P0, source_map):
     A, B, x0, y0, sigma_x, sigma_y, theta = P0 
     x,y = source_map.world_flat
-    x[x > 180] -= 360
     dx = (x - x0)
     dy = (y - y0)
     
@@ -367,7 +390,7 @@ def dtheta(P0, source_map):
         (np.cos(theta)*dx + np.sin(theta)*dy)/(sigma_x*sigma_y)**2
 
     # Z = X**2 + Y**2
-    mdl = -A*np.exp(-X**2 - Y**2) * dZdx0 
+    mdl = -A*np.exp(-0.5*X**2 - 0.5*Y**2) * dZdx0 
     return mdl 
 
 def jacobian(P0:list, source_map : SkyMap):
@@ -387,16 +410,24 @@ def general_model(P0:list, x,y):
     Y = -dx*np.sin(theta)/sigma_y +\
             dy*np.cos(theta)/sigma_y  
             
-    mdl = A*np.exp(-X**2 - Y**2) + B
+    mdl = A*np.exp(-0.5*X**2 - 0.5*Y**2) + B
     return mdl
 
 def model(P0:list, source_map : SkyMap):
     x,y = source_map.world_flat
-    x[x > 180] -= 360
     return general_model(P0, x,y)
 
-def error(P0 : list, source_map : SkyMap):
-    return np.sum((source_map.m_flat - model(P0, source_map))**2*source_map.weights_flat)
+def error(P0 : list, source_map : SkyMap, select : np.ndarray):
+    x,y = source_map.world_flat
+    return np.sum((source_map.m_flat[select] - general_model(P0,  x[select],y[select]))**2*source_map.weights_flat[select])
+
+def expand_false(array, N):
+    kernel = np.ones(2*N + 1, dtype=int) 
+
+    convolved = np.convolve(array, kernel, mode='same')
+
+    expanded = np.where(convolved < np.sum(kernel), 0, array)
+    return expanded 
 
 @dataclass 
 class FitSource(PipelineFunction):
@@ -405,10 +436,10 @@ class FitSource(PipelineFunction):
     overwrite : bool = False
     calibration : str = 'none' 
     STATE : bool = True 
-    MEDIAN_FILTER_STEP : int = 1000
+    MEDIAN_FILTER_STEP : int = 200
     NPARAMS : int = 7
-    NXPIX : int = 100
-    NYPIX : int = 100 
+    NXPIX : int = 200
+    NYPIX : int = 200 
     figure_directory : str = 'figures'     
     _full_figure_directory : str = 'figures' # Appends observation id in __call__ function
 
@@ -419,7 +450,9 @@ class FitSource(PipelineFunction):
         self.data = {}
 
         self.groups = [f'{self.calibration}_source_fit/fits',
-                       f'{self.calibration}_source_fit/errors']
+                       f'{self.calibration}_source_fit/errors',
+                       f'{self.calibration}_source_fit/chi2']    
+
 
     @property 
     def save_data(self):
@@ -463,28 +496,34 @@ class FitSource(PipelineFunction):
     def fit(self, 
             source_map : SkyMap):
         
-        
-        
+
+        x,y = source_map.world_flat
+        r = np.sqrt(x**2 + y**2) 
+        select = (r < 8./60.) & (source_map.m_flat != 0)
+
         beam = 4.5/60./2.355
         P0 = [np.max(source_map.m_flat), 0, 0, 0, beam, beam, 0]
-        result = minimize(error, P0, args=(source_map),
+        result = minimize(error, P0, args=(source_map, select),
                           bounds=[[0,None], #A 
                                   [None,None], #B
                                   [None,None], #x0 
                                   [None,None], #y0
-                                  [0,None], # sigmax
-                                  [0,None], # sigmay
+                                  [0.1/60,10./60.], # sigmax
+                                  [0.1/60.,10./60.], # sigmay
                                   [-np.pi,np.pi]]) # theta
-        
+
+        N = np.sum(select)
+        nparams = 7
+        chi2 = np.sum(error(result.x, source_map, select)**2)/(N - nparams)
         J = jacobian(result.x, source_map) 
         C_data = np.diag(source_map.variance_flat)
         try:
             JJ_inv = np.linalg.inv(J.dot(J.T))
             C_parameters = JJ_inv.dot(J.dot(C_data.dot(J.T.dot(JJ_inv)))) 
         
-            return result.x, np.diag(C_parameters)**0.5
+            return result.x, np.diag(C_parameters)**0.5, chi2
         except np.linalg.LinAlgError: 
-            return result.x, np.zeros(result.x.size)+np.nan
+            return result.x, np.zeros(result.x.size)+np.nan, chi2
 
     
     def fit_source(self, data : HDF5Data, level2_data : COMAPLevel2):
@@ -502,47 +541,85 @@ class FitSource(PipelineFunction):
         
         self.data[f'{self.calibration}_source_fit/fits'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
         self.data[f'{self.calibration}_source_fit/errors'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
+        self.data[f'{self.calibration}_source_fit/chi2'] = np.zeros((n_feeds,n_bands, ))
+
+
+        def gaussian2d(x, y, A, B, x0, y0, sigmax, sigmay):
+            """ This is here to inject sources for simulation purposes """
+            X = (x-x0)/sigmax 
+            Y = (y-y0)/sigmay
+
+            return A + B*np.exp(-0.5*(X**2 + Y**2))
+        
         # Perform the fit for each feed band 
         for ((ifeed, feed),iband) in tqdm(level2_data.tod_loop(bands=True), desc='Fitting Sources'):
-            tod = level2_data.tod[ifeed,iband,level2_data.on_source]
+
+            mask = level2_data.on_source
+            tod = level2_data.tod[ifeed,iband,mask]
             tod_clean = tod - self.median_filter(tod, self.MEDIAN_FILTER_STEP)
             rms = level2_data.tod_auto_rms(ifeed, iband)
-            weights = np.ones(tod_clean.size)/rms**2 
-            
+        
 
-            self.source_position.set_mask(level2_data.on_source)
-            relative_source_position = self.source_position.rotate_ra(level2_data.ra[ifeed,level2_data.on_source],
-                                                                      level2_data.dec[ifeed,level2_data.on_source])
+            short_mask = mask[mask]
+            short_mask = expand_false(short_mask, 100)
+            short_mask[:1000] = False
+            short_mask[-2000:] = False
+            mask[mask] = short_mask
+            tod = level2_data.tod[ifeed,iband,mask]
+            tod_clean = tod - self.median_filter(tod, self.MEDIAN_FILTER_STEP)
+            weights = np.ones(tod_clean.size)/rms**2 
+            self.source_position.set_mask(mask)
+            relative_source_position = self.source_position.rotate_ra(level2_data.ra[ifeed,mask],
+                                                                      level2_data.dec[ifeed,mask])
+
             
             source_map = SkyMap()
             source_map.set_map_info(self.NXPIX,self.NYPIX, 
                                     crval=[0,0],
                                     crpix=[self.NXPIX//2, self.NYPIX//2],
                                     ctype=['RA---TAN','DEC--TAN'],
-                                    cdelt=[-1./60,1./60.]
+                                    cdelt=[-0.5/60,0.5/60.]
                                     )
             source_map.bin_data(tod_clean,
                                 relative_source_position.ra, 
                                 relative_source_position.dec,
                                 weights=weights)
                         
-            result, errors = self.fit(source_map)  
+                    
+            result, errors, chi2= self.fit(source_map)  
+            mdl = general_model(result, *source_map.world_flat).reshape(source_map.m.shape).T
+            mdl[source_map.m == 0] = 0
+            fig = pyplot.figure(figsize=(15,10))
+            ax = fig.add_subplot(121)
+            pyplot.imshow(source_map.m, origin='lower',extent=[-self.NXPIX/2,self.NXPIX/2,-self.NYPIX/2,self.NYPIX/2])
+            imgs = ax.get_images()
+            vmin,vmax = imgs[0].get_clim()
+            pyplot.xlabel(r'$\Delta \alpha$ (arcmin)')
+            pyplot.ylabel(r'$\Delta \delta$ (arcmin)')
+            ax = fig.add_subplot(122)
+            pyplot.imshow(source_map.m-mdl, origin='lower',vmin=vmin,vmax=vmax,
+                          extent=[-self.NXPIX/2,self.NXPIX/2,-self.NYPIX/2,self.NYPIX/2])
+            pyplot.xlabel(r'$\Delta \alpha$ (arcmin)')
+            pyplot.ylabel(r'$\Delta \delta$ (arcmin)')
+            pyplot.savefig(f'{self._full_figure_directory}/{self.source}_feed{feed:02d}_band{iband:02d}_imshow.png')
+            pyplot.close()
 
+            mdl = general_model(result, relative_source_position.ra,relative_source_position.dec)
             fig = pyplot.figure(figsize=(10,10))
             ax = fig.add_subplot(111)
-            pyplot.plot(tod, label='TOD')
-            mdl = general_model(result, relative_source_position.ra,relative_source_position.dec)
+            pyplot.plot(tod_clean, label='TOD')
             idx = np.argmax(mdl) 
             pyplot.plot(mdl, label='Model')
-            pyplot.plot(tod-mdl, label='Residual')
+            pyplot.plot(tod_clean-mdl, label='Residual')
             pyplot.xlim(idx-100,idx+100)
-            pyplot.ylim(result[1]-0.05*result[0], result[1]+result[0]*1.05)
+            pyplot.ylim(result[1]-0.1*result[0], result[1]+result[0]*1.1)
             pyplot.legend()
             pyplot.savefig(f'{self._full_figure_directory}/{self.source}_feed{feed:02d}_band{iband:02d}.png')
-            pyplot.show()
+            pyplot.close()
             
             self.data[f'{self.calibration}_source_fit/fits'][ifeed,iband]  = result
             self.data[f'{self.calibration}_source_fit/errors'][ifeed,iband]  = errors
+            self.data[f'{self.calibration}_source_fit/chi2'][ifeed,iband]  = chi2
             logging.info(f'Feed {feed:02d} Band {iband:02d} A: {result[0]:.1f} pm {errors[0]:.1f}, x0: {result[2]:.1f} pm {errors[2]:.1f}')
 
         # return 

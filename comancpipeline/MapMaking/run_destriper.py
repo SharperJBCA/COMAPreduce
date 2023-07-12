@@ -6,6 +6,7 @@ from astropy.wcs import WCS
 from matplotlib import pyplot
 from astropy.io import fits
 import os
+import healpy as hp
 
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
@@ -27,16 +28,17 @@ def write_map(prefix,maps,map_info,output_dir,iband,postfix=''):
         hdu = fits.PrimaryHDU(np.reshape(v['map'],(nxpix,nypix)),
                               header=wcs.to_header())
         hdulist += [hdu]
-
+        columns = ['map']
         if 'naive' in v:
             naive = fits.ImageHDU(np.reshape(v['naive'],(nxpix,nypix)),
                                   name='Naive',header=wcs.to_header())
             hdulist += [naive]
+            columns += ['naive']
         if 'weight' in v:
             cov = fits.ImageHDU(np.reshape(np.sqrt(1./v['weight']),(nxpix,nypix)),
                                 name='Noise',header=wcs.to_header())
             hdulist += [cov]
-
+            columns += ['rms']
         if 'map2' in v:
             std = fits.ImageHDU(np.reshape(np.sqrt(v['map2']-v['map']**2),(nxpix,nypix)),
                                 name='NoiseSTD',
@@ -46,6 +48,33 @@ def write_map(prefix,maps,map_info,output_dir,iband,postfix=''):
         fname = '{}/{}_{}_Band{:02d}.fits'.format(output_dir,k,prefix,iband)
         hdul.writeto(fname,overwrite=True)
 
+
+def write_map_healpix(prefix,maps,remapping_array, map_info,output_dir,iband,postfix='', nside=4096):
+
+    
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    for k,v in maps.items():
+        print(v['map'].shape,remapping_array.shape)
+        hdulist = []
+        m = np.zeros((3,12*nside**2)) + hp.UNSEEN
+        m[0,remapping_array] = v['map']
+        m[1,remapping_array] = v['naive']
+        m[2,remapping_array] = np.sqrt(1./v['weight'])
+        # hdulist += [m]
+        # columns = ['map']
+        # if 'naive' in v:
+        #     naive = np.zeros(12*nside**2)
+        #     naive[remapping_array] = v['naive']
+        #     hdulist += [naive]
+        #     columns += ['naive']
+        # if 'weight' in v:
+        #     cov = np.zeros(12*nside**2)
+        #     cov[remapping_array] = np.sqrt(1./v['weight'])
+        #     hdulist += [cov]
+        #     columns += ['rms']
+        fname = '{}/{}_{}_Band{:02d}.fits'.format(output_dir,k,prefix,iband)
+        hp.write_map(fname,m, overwrite=True,  partial=True)
 
 def main(filelistname,
          offset_length = 50,
@@ -61,7 +90,9 @@ def main(filelistname,
          crpix=[ 240,240],
          ctype = ['RA---CAR', 'DEC--CAR'],
          cdelt=[-0.016666,0.016666],
-         calibration=True):
+         calibration=True,
+         calibrator='TauA', 
+         healpix=False):
 
     filelist = np.loadtxt(filelistname,dtype=str,ndmin=1)
 
@@ -96,7 +127,6 @@ def main(filelistname,
                 'nxpix':nxpix,
                 'nypix':nypix}
 
-    pixel_edges = np.arange(nxpix*nypix)
     
     step = filelist.size//size
     lo = step*rank
@@ -104,15 +134,30 @@ def main(filelistname,
     if hi > filelist.size:
         hi = filelist.size
 
+    
     filelist = filelist[lo:hi]
 
+    print(f'Rank {rank} working on {filelist.size} files',flush=True )
+
     for iband in range(0,4):
-        tod, weights, pointing, az, el ,feedid, obsids = COMAPData.read_comap_data(filelist,map_info,
+        tod, weights, pointing, remapping_array, az, el ,feedid, obsids = COMAPData.read_comap_data(filelist,map_info,
                                                                                    feed_weights=feed_weights,
                                                                                    offset_length=offset_length,
                                                                                    iband=iband,
                                                                                    feeds=feeds,
-                                                                                   calibration=calibration)
+                                                                                   calibration=calibration,
+                                                                                   calibrator=calibrator,
+                                                                                   healpix=healpix)
+        print('RANK {} READ DATA: DATA LENGTH {}'.format(rank, tod.shape),flush=True)
+        #comm.Barrier()
+        #sys.exit() 
+        if healpix: 
+            # get the max pointing value from all nodes 
+            max_pointing = comm.allreduce(np.max(pointing),op=MPI.MAX)
+            pixel_edges = np.arange(max_pointing+1,dtype=int)
+        else:
+            pixel_edges = np.arange(nxpix*nypix)
+
 
         maps = Destriper.run_destriper(pointing,
                                        tod,
@@ -128,7 +173,10 @@ def main(filelistname,
 
         if rank == 0:
             print('ABOUT TO WRITE MAPS',flush=True)
-            write_map(prefix,maps,map_info,output_dir,iband,postfix='')
+            if healpix:
+                write_map_healpix(prefix,maps,remapping_array, map_info,output_dir,iband,postfix='') 
+            else:
+                write_map(prefix,maps,map_info,output_dir,iband,postfix='')
         comm.Barrier()
 
 if __name__ == "__main__":
@@ -147,4 +195,6 @@ if __name__ == "__main__":
          crpix=params['crpix'],
          ctype=params['ctype'],
          cdelt=params['cdelt'],
-         calibration=p['ReadData']['calibration'])
+         calibration=p['ReadData']['calibration'],
+         calibrator=p['ReadData']['calibrator'],
+         healpix=params['healpix'])

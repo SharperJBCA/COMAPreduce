@@ -21,24 +21,10 @@ filters = Extension(name = 'comancpipeline.Tools.filters',
 
 pysla = Extension(name = 'comancpipeline.Tools.pysla', 
                   sources = ['comancpipeline/Tools/pysla.f90','comancpipeline/Tools/sla.f'],
-                  #libraries=['sla'],
-                  #library_dirs =['{}'.format(slalib_path)],
                   f2py_options = [])
-                 # extra_link_args=['-Wl,-rpath,{}'.format(slalib_path)])
-#'Iglibc_fix.h',
                                       
-ffuncs = Extension(name = 'comancpipeline.Tools.ffuncs', 
+ffuncs = Extension(name = 'comancpipeline.Tools.ffuncs',
                   sources = ['comancpipeline/Tools/ffuncs.f90'])
-
-# alglib = Extension('comancpipeline.Tools.alglib_optimize',
-#                    ['comancpipeline/Tools/alglib_optimize.pyx'],
-#                    library_dirs=["/local/scratch/sharper/etc/lib"],
-#                    include_dirs=["/local/scratch/sharper/etc/lib"],
-#                    language="c++",
-#                    extra_compile_args=['-fopenmp'],
-#                    extra_link_args=['-fopenmp']
-#                )
-#'-lAlglib',
 
 filters = Extension(name = 'comancpipeline.Tools.median_filter.medfilt', 
                     include_dirs=[np.get_include()],
@@ -63,7 +49,7 @@ config = {'name':'comancpipeline',
                       'comancpipeline.MapMaking'],
           'package_data':{'':["*.dat","gains.hd5"]},
           'include_package_data':True,
-          'ext_modules':cythonize([ffuncs,pysla, filters,binFuncs],
+          'ext_modules':cythonize([filters,binFuncs],
                                   compiler_directives={'language_level':"3"})}
 
 

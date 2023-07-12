@@ -15,6 +15,8 @@ import itertools
 from typing import Callable
 from scipy.interpolate import interp1d
 import logging
+from astropy.time import Time
+from datetime import datetime
 
 from comancpipeline.Tools import Coordinates
 import glob
@@ -211,10 +213,15 @@ class RepointEdges:
         scan_utc    = data['hk/antenna0/deTracker/utc'][...]
         scan_status_interp = interp1d(scan_utc,scan_status,kind='previous',bounds_error=False,
                                       fill_value='extrapolate')(data['spectrometer/MJD'][...])
-        scans = np.where((scan_status_interp == scan_status_code))[0]
-        diff_scans = np.diff(scans)
-        edges = scans[np.concatenate(([0],np.where((diff_scans > 1))[0], [scans.size-1]))]
-        scan_edges = np.array([edges[:-1],edges[1:]]).T
+        if np.sum(scan_status) == 0:
+            # instead use the feature bits as we probably have 1 scan 
+            select = np.where((data.features == 9))[0] 
+            scan_edges = np.array([select[0],select[-1]]).reshape(1,2)
+        else:
+            scans = np.where((scan_status_interp == scan_status_code))[0]
+            diff_scans = np.diff(scans)
+            edges = scans[np.concatenate(([0],np.where((diff_scans > 1))[0], [scans.size-1]))]
+            scan_edges = np.array([edges[:-1],edges[1:]]).T
 
         return scan_edges
 
@@ -243,7 +250,7 @@ class COMAPLevel1(HDF5Data):
     name : str = 'COMAPLevel1'
     
     vane_bit_flag : int = 13
-    
+    bad_keywords : list = field(default_factory=list)
     OBSID_MINIMUM : int = 7_000
     OBSID_MAXIMUM : int = 1_000_000 
     
@@ -253,23 +260,34 @@ class COMAPLevel1(HDF5Data):
         """Reads in a data file by obsid"""
                    
         filename = find_file(obsid, data_directory)
+        if isinstance(filename, type(None)):
+            return False 
         self.read_data_file(filename)
+        return True 
     
     @property 
     def obsid(self):
-        obsid = int(self.attrs('comap','obsid'))
+        try:
+            obsid = int(self.attrs('comap','obsid'))
+        except KeyError:
+            obsid = -1 
 
         return obsid
 
     @property 
     def comment(self):
-        comment = self.attrs('comap','comment')
-
+        try:
+            comment = self.attrs('comap','comment')
+        except KeyError:
+            comment = ''
         return comment
 
     @property 
     def source_name(self):
-        source_split = self.attrs('comap','source').split(',')
+        try:
+            source_split = self.attrs('comap','source').split(',')
+        except KeyError:
+            source_split = ['']
         if len(source_split) > 1:
             source = [s for s in source_split if s not in self.bad_keywords]
             if len(source) > 0:
@@ -283,25 +301,27 @@ class COMAPLevel1(HDF5Data):
 
     @property
     def on_source(self):
-        return (self.features != 13) & (self.features != 0)
+        """ 13 = vane, 0 = off source, 16 = source stare (which we want to ignore)"""
+        return (self.features != 13) & (self.features != 0) & (self.features != 16)
 
     @property
     def vane_flag(self):
         """Gets the vane flag using the features register"""
         features = self.features
         vane_flags = (features == self.vane_bit_flag)
-        from matplotlib import pyplot
-        fig = pyplot.figure(figsize=(10,10))
-        pyplot.plot(features)
-        pyplot.savefig('features.png')
-        pyplot.close(fig)
         return vane_flags
     
     @property
     def vane_temperature(self):
         """Get the vane temperature"""
         
-        return np.nanmean(self['hk/antenna0/vane/Tvane'][:])/100. + self.VANE_HOT_TEMP_OFFSET
+        date = Time(self['spectrometer/MJD'][0],format='mjd').datetime 
+        if date < datetime(2022, 2, 1):
+            tsys = np.nanmean(self['hk/antenna0/vane/Tvane'][:])/100. + self.VANE_HOT_TEMP_OFFSET
+        else:
+            tshroud = np.nanmean(self['hk/antenna0/vane/Tshroud'][:])/100. + self.VANE_HOT_TEMP_OFFSET
+            tsys = 0.2702*tshroud+ 213 # Fitted from date pre 2022-01-01
+        return tsys 
     
     @property
     def tod_shape(self):
@@ -399,6 +419,7 @@ class COMAPLevel2(HDF5Data):
     name : str = 'COMAPLevel2'
     filename : str = 'pipeline_output.hdf5'
     vane_bit_flag : int = 13
+    bad_keywords : list = field(default_factory=list)
 
     def __post_init__(self):
         """Define the expected structure for the Level 2 File"""

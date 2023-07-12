@@ -15,6 +15,8 @@ from .Running import PipelineFunction
 from .DataHandling import HDF5Data , COMAPLevel2
 from comancpipeline.Tools.stats import auto_rms
 import logging
+import os 
+from matplotlib import pyplot
 
 @dataclass 
 class MeasureSystemTemperature(PipelineFunction):
@@ -34,6 +36,7 @@ class MeasureSystemTemperature(PipelineFunction):
     
     overwrite : bool = False
     STATE : bool = True 
+    figure_directory : str = 'figures'
 
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2):
         self.measure_system_temperature(data)
@@ -141,6 +144,11 @@ class MeasureSystemTemperature(PipelineFunction):
 
         # Find the start and end indices for each vane event.
         vane_indices, n_vanes = self.find_vane_samples(data)
+
+        if n_vanes == 0:
+            logging.info(f'{self.name}: NO VANE FEATURES FOUND... SKIPPING OBSERVATION')
+            self.STATE = False
+            return
         
         # Setup the system temperature and gain data
         n_feeds, n_bands, n_channels, n_tod = data.tod_shape
@@ -160,6 +168,26 @@ class MeasureSystemTemperature(PipelineFunction):
                     
                     # Calculate the system temperature and gain for each channel.
                     tsys, gain = self.system_temperature_from_tod(data.vane_temperature, tod, hot_samples, cold_samples) 
+
+                    # Plot the fit for the system temperature
+                    full_figure_directory = f'{self.figure_directory}/{data.obsid}/'
+                    if not os.path.exists(full_figure_directory):
+                        os.makedirs(full_figure_directory)
+                    fig = pyplot.figure(figsize=(12,8))
+                    min_channel, max_channel = 10, 1014
+                    select = np.arange(min_channel, max_channel, dtype=int)
+                    mean_tod = np.nanmean(tod[select,:], axis=0)
+                    time = np.arange(mean_tod.size)
+                    pyplot.plot(time, mean_tod, 'k')
+                    pyplot.plot(time[hot_samples], mean_tod[hot_samples], 'r', label='Hot Samples')
+                    pyplot.plot(time[cold_samples], mean_tod[cold_samples], 'b', label='Cold Samples')
+                    pyplot.legend()
+                    pyplot.xlabel('Time [Samples]')
+                    pyplot.ylabel('TOD [DU]')
+                    pyplot.text(0.05, 0.95, f'mean_tsys = {np.nanmedian(tsys):.2f} K\nmean_gain = {np.nanmedian(gain):.2f} DU/K', transform=pyplot.gca().transAxes, va='top', ha='left')
+                    pyplot.savefig(f'{full_figure_directory}/vane_fit_{feed:02d}_{iband:02d}_{ivane:02d}.png')
+                    pyplot.close(fig) 
+
                     self.system_temperature[ivane,ifeed,iband,:] = tsys
                     self.system_gain[ivane,ifeed,iband,:] = gain
                     logging.debug(f'{self.name}: Average Gain for Event {ivane:02d} in Feed {feed:02d} BAND {iband:02d}: {np.nanmean(gain):.2f}')

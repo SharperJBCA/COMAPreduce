@@ -42,7 +42,6 @@ Tjkarim2014 = [151.013,
                141.757]
 
 jupfit  = np.poly1d(np.polyfit(np.log10(nujkarim2014/30.), np.log10(Tjkarim2014), 1))
-print(jupfit[0],jupfit[1],jupfit)
 jupAng0 = 2.481e-8 # sr
 
 def JupiterFlux(nu, mjd, lon=0, lat=0, source='jupiter',allpos=False,return_jansky=False):
@@ -142,6 +141,15 @@ class JupiterFluxModel:
         self.ref_year = None
         # Setup parameters
         self.model(0)
+
+    def __call__(self, nu, mjd, **kwargs):
+        """
+        """
+
+        self.model = getattr(self,self.flux_model_name)
+
+        F = self.model(nu,mjd, allpos=True, return_jansky=True, **kwargs)
+        return F
 
     def karim2014(self,nu,mjd=51544, lon=0, lat=0, source='jupiter',allpos=False,return_jansky=False,**kwargs):
         """

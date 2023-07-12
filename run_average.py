@@ -1,6 +1,7 @@
 import matplotlib
-matplotlib.use('tkagg')
+matplotlib.use('agg')
 
+import os
 from comancpipeline.Analysis.Running import Runner
 from comancpipeline.Analysis.VaneCalibration import MeasureSystemTemperature
 from comancpipeline.Analysis.Level1Averaging import CheckLevel1File,Level1Averaging, AtmosphereRemoval,Level1AveragingGainCorrection, SkyDip
@@ -17,8 +18,16 @@ rank = comm.Get_rank()
 size = comm.Get_size()
 import numpy as np 
 
-def create_tod_processing(filelist_name : str):
+def create_tod_processing(filelist_name, figure_directory='figures', level2_directory='level2'):
     """This is the tod processing loop"""
+    if rank == 0:
+        if not os.path.exists(figure_directory):
+            os.makedirs(figure_directory)
+    if rank == 0:
+        if not os.path.exists(level2_directory):
+            os.makedirs(level2_directory)
+    comm.Barrier() 
+
     filelist =np.loadtxt(filelist_name,dtype=str, ndmin=1)
     
     idx = np.sort(np.mod(np.arange(filelist.size),size)) 
@@ -28,23 +37,22 @@ def create_tod_processing(filelist_name : str):
     processes = {
         CheckLevel1File: {'overwrite': True},
         AssignLevel1Data: {'overwrite': False},
-        MeasureSystemTemperature: {'overwrite': False},
-        SkyDip: {'overwrite': False},
+        MeasureSystemTemperature: {'overwrite': False,'figure_directory':figure_directory},
+        SkyDip: {'overwrite': False,'figure_directory':figure_directory},
         AtmosphereRemoval: {'overwrite': False},
-        Level1AveragingGainCorrection: {'overwrite': False},
-        Level2FitPowerSpectrum: {'overwrite': False},
-        FitSource: {'overwrite': True, 'calibration': 'TauA'},
-        Spikes: {'overwrite': False},
-        NoiseStatistics: {'overwrite': False}
+        Level1AveragingGainCorrection: {'overwrite': False,'figure_directory':figure_directory},
+        Level2FitPowerSpectrum: {'overwrite': False, 'figure_directory':figure_directory},
+        FitSource: {'overwrite': True, 'calibration': 'CasA','figure_directory':figure_directory},
+        Spikes: {'overwrite': False}
     }
 
-    tod_processing.level2_data_dir = '/scratch/nas_core/sharper/COMAP/level2_2023'
+    tod_processing.level2_data_dir = level2_directory# '/mn/stornext/d22/cmbco/comap/continuum/COMAPreduce/level2_jupiter'
     tod_processing.filelist  : List[str]= filelist[idx]
     tod_processing.processes : Dict[str, Dict[str, bool]] = processes
 
     return tod_processing 
 
-def create_astro_cal(targets, cal_files, source='TauA'):
+def create_astro_cal(targets, cal_files, source='TauA', level2_directory='level2',figure_directory='figures'):
     """ 
     1) Assign dates to the target files and cal_files
     1a) If check_calibrators:  
@@ -55,9 +63,10 @@ def create_astro_cal(targets, cal_files, source='TauA'):
     cal_filelist = np.loadtxt(cal_files,dtype=str, ndmin=1)
         
     cal_processing = Runner()
-    processes = {ApplyCalibration:{'calibrator_filelist':cal_filelist,'overwrite_calibrator_file':False}}
+    processes = {ApplyCalibration:{'calibrator_filelist':cal_filelist,'overwrite_calibrator_file':False,'calibrator_source':source,
+                                   'figure_directory':figure_directory,'nowrite':False}}
 
-    cal_processing.level2_data_dir = '/scratch/nas_comap3/sharper/COMAP/level2_2023/'
+    cal_processing.level2_data_dir = level2_directory
     cal_processing.filelist  = filelist
     cal_processing.processes = processes
 
@@ -93,16 +102,21 @@ def create_plot_processing(level2_data_dir, source, output_dir):
     return plot_processing
 
 def main():
-    #plot_processing = create_plot_processing('/scratch/nas_core/sharper/COMAP/level2_2023/', 'fg9', '/scratch/nas_core/sharper/COMAP/level2_figures/')
+    import sys
+    if False:
+        filelist_name = sys.argv[1] 
+        figure_directory_name = sys.argv[2]
+        level2_directory_name = sys.argv[3]
+        tod_processing = create_tod_processing(filelist_name, figure_directory=figure_directory_name,
+                                                level2_directory=level2_directory_name)
 
-    #tod_processing = create_tod_processing('Filelists/TauA.txt')
-
-    #tod_processing.run_tod()
+        tod_processing.run_tod()
     
-    astro_processing = create_astro_cal(targets='Filelists/fg9_level2_fully_processed.txt',
-                                       cal_files = 'Filelists/TauA_level2.txt',
-                                       source='TauA') 
-    astro_processing.run_astro_cal() 
+    if True:
+        astro_processing = create_astro_cal(targets='processed_runlists/level2_fg9.txt',
+                                        source='CasA',figure_directory='figures_CasA',
+                                        cal_files = 'processed_runlists/level2_CasA.txt')
+        astro_processing.run_astro_cal() 
 
 if __name__ == "__main__": 
     main()

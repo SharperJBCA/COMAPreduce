@@ -9,6 +9,12 @@ from os import path
 from dataclasses import dataclass, field
 from .DataHandling import HDF5Data, COMAPLevel1, COMAPLevel2
 import time 
+import socket 
+import os
+from datetime import datetime
+
+current_time = datetime.now()
+formatted_time = current_time.strftime("%Y-%m-%d-%H-%M-%S")
 
 from mpi4py import MPI 
 comm = MPI.COMM_WORLD
@@ -20,7 +26,7 @@ import logging
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
                     datefmt='%m-%d %H:%M',
-                    filename=f'logs/log_rank{rank:02d}.log',
+                    filename=f'logs/log_{formatted_time}_{socket.gethostname()}_PID{os.getpid()}_rank{rank:02d}.log',
                     filemode='w')
 
 @dataclass
