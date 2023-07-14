@@ -14,6 +14,8 @@ Refs:
 Sutton et al. 2011 
 
 """
+import matplotlib 
+matplotlib.use('Agg')
 import numpy as np
 from matplotlib import pyplot
 from scipy.sparse.linalg import LinearOperator
@@ -118,7 +120,7 @@ def mpi_share_map(m):
     return m
 
 
-def cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b,x0 = None,niter=100,threshold=1e-2,verbose=False, offset_length=50):
+def cgm(pointing, pixel_edges, tod, weights, obsids, A,b,x0 = None,niter=100,threshold=1e-3,verbose=False, offset_length=50):
     """
     Biconjugate CGM implementation from Numerical Recipes 2nd, pg 83-85
     
@@ -272,8 +274,8 @@ class op_Ax:
                                                 self.pixel_edges,extend=False)
         else:
             m_offset, w_offset = bin_offset_map(self.pointing,
-                                                tod/self.special_weight,
-                                                self.weights*self.special_weight**2,
+                                                tod*self.special_weight[0],
+                                                self.weights/self.special_weight[0]**2,
                                                 self.offset_length,
                                                 self.pixel_edges,extend=False)
 
@@ -281,17 +283,19 @@ class op_Ax:
 
         diff = op_Z(self.pointing, 
                     tod, 
-                    m_offset,special_weight=self.special_weight)
+                    m_offset,special_weight=self.special_weight[0])
 
         #print(size,rank, np.sum(diff))
 
-
-        sum_diff = np.sum(np.reshape(diff*self.weights,(tod.size//self.offset_length, self.offset_length)),axis=1)
+        if not isinstance(self.special_weight,type(None)):
+            sum_diff = np.sum(np.reshape(diff*self.weights/self.special_weight[0]**2,(tod.size//self.offset_length, self.offset_length)),axis=1)
+        else:
+            sum_diff = np.sum(np.reshape(diff*self.weights,(tod.size//self.offset_length, self.offset_length)),axis=1)
 
     
         return sum_diff
 
-def run(pointing,tod,weights,offset_length,pixel_edges,feedid, obsids, special_weight=None):
+def run(pointing,tod,weights,offset_length,pixel_edges, obsids, special_weight=None):
 
     i_op_Ax = op_Ax(pointing,weights,offset_length,pixel_edges,
                     special_weight=special_weight)
@@ -303,7 +307,10 @@ def run(pointing,tod,weights,offset_length,pixel_edges,feedid, obsids, special_w
 
     if rank == 0:
         print('Starting CG',flush=True)
-    x = cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b, offset_length=offset_length)
+    if True:
+        x = cgm(pointing, pixel_edges, tod, weights, obsids, A,b, offset_length=offset_length)
+    else:
+        x= np.zeros(b.size)
     if rank == 0:
         print('Done',flush=True)
     return x
@@ -354,21 +361,23 @@ def destriper_iteration(_pointing,
                         _weights,
                         offset_length,
                         pixel_edges,
-                        feedid,
                         obsids,
                         special_weight=None):
+    if isinstance(special_weight,type(None)):
+        special_weight = np.ones(_tod.size)
+
     result = run(_pointing,_tod,_weights,offset_length,pixel_edges,
-                 feedid, obsids,
-                 special_weight=None)
+                 obsids,
+                 special_weight=special_weight)
     m,h = bin_offset_map(_pointing,
-                         np.repeat(result,offset_length),
-                         _weights,
+                         (_tod-np.repeat(result,offset_length))*special_weight[0],
+                         _weights/special_weight[0]**2,
                          offset_length,
                          pixel_edges,extend=False)
 
     n,h = bin_offset_map(_pointing,
-                         _tod,
-                         _weights,
+                         _tod*special_weight[0],
+                         _weights/special_weight[0]**2,
                          offset_length,
                          pixel_edges,extend=False)
     d2,h = bin_offset_map(_pointing,
@@ -387,7 +396,7 @@ def destriper_iteration(_pointing,
         n[h!=0] /= h[h!=0]
         d2[h!=0] /= h[h!=0]
 
-        return {'map':n-m,'naive':n, 'weight':h,'map2':d2}, result
+        return {'map':m,'naive':n, 'weight':h,'map2':d2}, result
     else:
         return {'map':None,'naive':None,'weight':None,'map2':None}  , result
 
@@ -396,11 +405,7 @@ def run_destriper(_pointing,
                   _weights,
                   offset_length,
                   pixel_edges,
-                  az,
-                  el,
-                  feedid,
                   obsids,
-                  obsid_cuts,
                   chi2_cutoff=100,special_weight=None,healpix=False):
 
     _maps,result = destriper_iteration(_pointing,
@@ -408,9 +413,8 @@ def run_destriper(_pointing,
                                       _weights,
                                       offset_length,
                                       pixel_edges,
-                                      feedid,
                                       obsids,
-                                      special_weight=None)
+                                      special_weight=special_weight)
 
     # Here we will check Chi^2 contributions of each datum to each pixel.
     # Data that exceeds the chi2_cutoff are weighted to zero 
@@ -435,6 +439,7 @@ def run_destriper(_pointing,
     #    print('HELLO',flush=True)
 
     maps = {'All':_maps}
+    offsets = {'All':np.repeat(result,offset_length)}
     # now make each individual feed map
     # ufeeds = np.unique(feedid)
     # for feed in ufeeds:
@@ -486,7 +491,7 @@ def run_destriper(_pointing,
     #         else:           
     #             maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':None,'weight':None}
 
-    return maps
+    return maps, offsets 
 
 def test():
     """
@@ -671,7 +676,8 @@ def testpol():
         pyplot.imshow(np.reshape(q,(npix,npix)))
         pyplot.subplot(122)
         pyplot.imshow(np.reshape(u,(npix,npix)))
-        pyplot.show()
+        pyplot.savefig('input_pol.png')
+        pyplot.close()
 
     step = int(2*N/size)
     lo = step*rank
@@ -722,22 +728,29 @@ def testpol():
             comm.Recv(_weights,source=0) 
 
     comm.Barrier()
-    maps = run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges)
-
+    az = np.zeros(_tod.size)
+    el = np.zeros(_tod.size)
+    feedid = np.zeros(_tod.size)
+    obsids = np.zeros(_tod.size)
+    obsid_cuts = np.zeros(_tod.size)
+    maps = run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges,az,el,feedid,obsids,obsid_cuts)
     if rank == 0:
         pyplot.subplot(221)
-        pyplot.imshow(np.reshape(maps['map'][:npix*npix],(npix,npix)))
+        pyplot.imshow(np.reshape(maps['All']['map'][:npix*npix],(npix,npix)))
         pyplot.subplot(222)
-        P = np.sqrt(np.reshape(maps['map'][npix*npix:2*npix*npix],(npix,npix))**2+\
-            np.reshape(maps['map'][2*npix*npix:3*npix*npix],(npix,npix)))
-        pyplot.imshow(P)
-        #pyplot.subplot(223)
-        #pyplot.imshow()
+        P = np.sqrt(np.reshape(maps['All']['map'][npix*npix:2*npix*npix],(npix,npix))**2+\
+            np.reshape(maps['All']['map'][2*npix*npix:3*npix*npix],(npix,npix)))
+        qout = np.reshape(maps['All']['map'][npix*npix:2*npix*npix],(npix,npix)) 
+        uout = np.reshape(maps['All']['map'][2*npix*npix:3*npix*npix],(npix,npix))
+        pyplot.imshow(qout)
+        pyplot.title('Q')
+        pyplot.subplot(223)
+        pyplot.imshow(uout)
+        pyplot.title('U')
         pyplot.subplot(224)
         pyplot.imshow(np.reshape(skyP,(npix,npix)))
-
-        pyplot.show()
-
+        pyplot.savefig('output_pol.png')
+        pyplot.close()
 
 
 if __name__ == "__main__":
