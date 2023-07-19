@@ -28,6 +28,8 @@ comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
 
+DETECTOR_TO_SKY =  1 
+SKY_TO_DETECTOR = -1 
 
 def share_residual(matvec,x,b):
 
@@ -65,26 +67,29 @@ def mpi_sum(x):
     # Sum the local values
     local = np.array([np.sum(x)])
 
-    # Initialize the array that will store the results from each process
-    if rank == 0:
-        allvals = np.zeros(size)
-    else:
-        allvals = None
+    comm.Allreduce(MPI.IN_PLACE, local, op=MPI.SUM)
+    return local[0]
 
-    # Gather the local values from each process into the array allvals
-    comm.Gather(local,allvals,root=0)
+    # # Initialize the array that will store the results from each process
+    # if rank == 0:
+    #     allvals = np.zeros(size)
+    # else:
+    #     allvals = None
 
-    # Sum the results
-    if rank == 0:
-        all_resid = np.array([np.sum(allvals)])
-    else:
-        all_resid = np.zeros(1)
+    # # Gather the local values from each process into the array allvals
+    # comm.Gather(local,allvals,root=0)
 
-    # Broadcast the sum to the other processes
-    comm.Bcast(all_resid,root=0)
+    # # Sum the results
+    # if rank == 0:
+    #     all_resid = np.array([np.sum(allvals)])
+    # else:
+    #     all_resid = np.zeros(1)
 
-    # Return the sum
-    return np.sum(all_resid)
+    # # Broadcast the sum to the other processes
+    # comm.Bcast(all_resid,root=0)
+
+    # # Return the sum
+    # return np.sum(all_resid)
 
 def mpi_sum_vector(x):
 
@@ -148,11 +153,13 @@ def cgm(pointing, pixel_edges, tod, weights, obsids, A,b,x0 = None,niter=100,thr
     rb = b - A.matvec(x0)
     p  = r*1.
     pb = rb*1.
-    
+
+
     thresh0 = mpi_sum(r*rb) #np.sum(r*rb)
     for i in range(niter):
         
         q = A.matvec(pb)
+
 
         rTrb = mpi_sum(r*rb) #np.sum(r*rb)
         alpha= rTrb/mpi_sum(pb*q)#np.sum(pb * q)
@@ -203,15 +210,21 @@ def bin_offset_map(pointing,
 
     m = np.zeros(int(pixel_edges[-1])+1)
     h = np.zeros(int(pixel_edges[-1])+1)
-    binFuncs.binValues(m, pointing, weights=z*weights)
     if isinstance(special_weight,type(None)):
+        binFuncs.binValues(m, pointing, weights=z*weights)
         binFuncs.binValues(h, pointing, weights=weights)
     else:
-        binFuncs.binValues(h, pointing, weights=weights*special_weight)
+        iqcus = np.zeros(int(pixel_edges[-1])+1) 
+        iqsuc = np.zeros(int(pixel_edges[-1])+1) 
+        w_iqcus = np.zeros(int(pixel_edges[-1])+1) 
+        w_iqsuc = np.zeros(int(pixel_edges[-1])+1) 
 
-    #m = np.histogram(pointing,pixel_edges,
-    #                 weights=z*weights)[0]
-    #h = np.histogram(pointing,pixel_edges,weights=weights)[0]
+        binFuncs.binValues(iqcus, pointing, weights=z*weights*special_weight[0])
+        binFuncs.binValues(iqsuc, pointing, weights=z*weights*special_weight[1])
+
+        binFuncs.binValues(w_iqcus, pointing, weights=weights*special_weight[0]**2)
+        binFuncs.binValues(w_iqsuc, pointing, weights=weights*special_weight[1]**2)
+
 
     return m, h
 
@@ -248,7 +261,12 @@ def op_Z(pointing, tod, m, special_weight=None):
         return tod - m[pointing]*special_weight
     
 
-
+def sum_map_all_inplace(m): 
+    comm.Allreduce(MPI.IN_PLACE,
+        [m, MPI.DOUBLE],
+        op=MPI.SUM
+        )
+    return m 
 class op_Ax:
     def __init__(self,pointing,weights,offset_length,pixel_edges, special_weight=None):
         
@@ -257,6 +275,24 @@ class op_Ax:
         self.offset_length = offset_length
         self.pixel_edges = pixel_edges
         self.special_weight=special_weight
+        self.sky_map = np.zeros(int(pixel_edges[-1])+1)
+        self.sky_weights = np.zeros(int(pixel_edges[-1])+1)
+        self.tod_out = np.zeros(pointing.size)
+        self.select_I = self.special_weight[2] == 1
+        self.select_Q = self.special_weight[2] == 2
+        self.select_U = self.special_weight[2] == 3
+
+    def rotate_tod(self, tod, direction=1):
+
+        self.tod_out[self.select_I]  = tod[self.select_I]
+        #  Q c + U s = Q_d
+        self.tod_out[self.select_Q] = tod[self.select_Q] * self.special_weight[0][self.select_Q] +\
+                direction*tod[self.select_U] * self.special_weight[0][self.select_U]
+        # -Q s + U c = U_d
+        self.tod_out[self.select_U] = direction*tod[self.select_Q] * self.special_weight[1][self.select_Q] +\
+                tod[self.select_U] * self.special_weight[1][self.select_U]
+
+        return self.tod_out 
 
     def __call__(self,_tod,extend=True): 
         """
@@ -273,47 +309,60 @@ class op_Ax:
                                                 self.offset_length,
                                                 self.pixel_edges,extend=False)
         else:
-            m_offset, w_offset = bin_offset_map(self.pointing,
-                                                tod*self.special_weight[0],
-                                                self.weights/self.special_weight[0]**2,
+
+            self.rotate_tod(tod, DETECTOR_TO_SKY)
+            m,h  = bin_offset_map(self.pointing,
+                                                self.tod_out,
+                                                self.weights,
                                                 self.offset_length,
-                                                self.pixel_edges,extend=False)
+                                                self.pixel_edges,
+                                                extend=False)
 
-        m_offset, w_offset = share_map(m_offset,w_offset)
+        # Use MPI Allreduce to sum the arrays and distribute the result
+        m = sum_map_all_inplace(m)
+        h = sum_map_all_inplace(h)
+        self.sky_map[h != 0] = m[h != 0]/h[h != 0] 
 
-        diff = op_Z(self.pointing, 
-                    tod, 
-                    m_offset,special_weight=self.special_weight[0])
+
+        # Now stretch out the map to the full length of the TOD first, and then rotate that to the detector frame. 
+        self.rotate_tod(self.sky_map[self.pointing], SKY_TO_DETECTOR)
+
+        diff = tod - self.tod_out
+
+        #diff = op_Z(self.pointing, 
+        #            tod, 
+        #            self.sky_map,special_weight=self.special_weight)
 
         #print(size,rank, np.sum(diff))
 
         if not isinstance(self.special_weight,type(None)):
-            sum_diff = np.sum(np.reshape(diff*self.weights/self.special_weight[0]**2,(tod.size//self.offset_length, self.offset_length)),axis=1)
+            sum_diff = np.sum(np.reshape(diff*self.weights,(tod.size//self.offset_length, self.offset_length)),axis=1)
         else:
             sum_diff = np.sum(np.reshape(diff*self.weights,(tod.size//self.offset_length, self.offset_length)),axis=1)
 
-    
         return sum_diff
 
 def run(pointing,tod,weights,offset_length,pixel_edges, obsids, special_weight=None):
+
 
     i_op_Ax = op_Ax(pointing,weights,offset_length,pixel_edges,
                     special_weight=special_weight)
 
     b = i_op_Ax(tod,extend=False)
 
+
     n_offsets = b.size
     A = LinearOperator((n_offsets, n_offsets), matvec = i_op_Ax)
 
     if rank == 0:
         print('Starting CG',flush=True)
-    if True:
-        x = cgm(pointing, pixel_edges, tod, weights, obsids, A,b, offset_length=offset_length)
+    if False:
+        x = cgm(pointing, pixel_edges, tod, weights, obsids, A,b, offset_length=offset_length,threshold=1e-3)
     else:
         x= np.zeros(b.size)
     if rank == 0:
         print('Done',flush=True)
-    return x
+    return x, i_op_Ax
 
 def get_noise(N,sr):
 
@@ -356,6 +405,20 @@ def get_signal(N,x,y,npix):
     sky_tod[pixels==-1] = 0
     return sky_tod, pixels, sky
 
+def sum_map_to_root(m): 
+    m_all = np.zeros_like(m) if rank == 0 else None
+
+    # Use MPI Reduce to sum the arrays and store result on rank 0
+    comm.Reduce(
+        [m, MPI.DOUBLE],
+        [m_all, MPI.DOUBLE],
+        op=MPI.SUM,
+        root=0
+    )
+
+    return m_all 
+
+
 def destriper_iteration(_pointing,
                         _tod,
                         _weights,
@@ -366,39 +429,62 @@ def destriper_iteration(_pointing,
     if isinstance(special_weight,type(None)):
         special_weight = np.ones(_tod.size)
 
-    result = run(_pointing,_tod,_weights,offset_length,pixel_edges,
+    result,i_op_Ax = run(_pointing,_tod,_weights,offset_length,pixel_edges,
                  obsids,
                  special_weight=special_weight)
-    m,h = bin_offset_map(_pointing,
-                         (_tod-np.repeat(result,offset_length))*special_weight[0],
-                         _weights/special_weight[0]**2,
-                         offset_length,
-                         pixel_edges,extend=False)
+    
+    if False:
+        cbass_map = hp.read_map('/scratch/nas_cbassarc/cbass_data/Reductions/v34m3_mcal1/NIGHTMERID20/AWR1/calibrated_map/AWR1_xND12_xAS14_1024_NM20S3M1_C_Offmap.fits',field=[0,1,2])
+        U = hp.ud_grade(cbass_map[2],512)
+        idx = _pointing[0] 
+        select= (_pointing == (idx+12*512**2*2)) 
+        from matplotlib import pyplot
+        top = np.sum(_tod[select]*special_weight[0][select])
+        bot = np.sum(special_weight[0][select]**2) 
+        print(top/bot, idx, U[idx]) 
+        pyplot.plot(_tod[select])
+        pyplot.plot(U[idx]*special_weight[0][select])
+        pyplot.savefig('test.png') 
+        pyplot.close()
+        pyplot.plot(special_weight[1][select])
+        pyplot.savefig('test_pa.png') 
+        pyplot.close()
+        pyplot.plot(special_weight[0][select])
+        pyplot.plot(np.sin(2*special_weight[1][select]))
+        pyplot.savefig('test_angle.png') 
 
-    n,h = bin_offset_map(_pointing,
-                         _tod*special_weight[0],
-                         _weights/special_weight[0]**2,
-                         offset_length,
-                         pixel_edges,extend=False)
-    d2,h = bin_offset_map(_pointing,
-                         (_tod-np.repeat(result,offset_length))**2,
+    tod_out = i_op_Ax.rotate_tod(_tod-np.repeat(result,offset_length), DETECTOR_TO_SKY) 
+    destriped, destriped_h = bin_offset_map(_pointing,
+                         tod_out,
                          _weights,
                          offset_length,
-                         pixel_edges,extend=False)
+                         pixel_edges,
+                         extend=False)
+    tod_out = i_op_Ax.rotate_tod(_tod-np.repeat(result,offset_length), DETECTOR_TO_SKY) 
+    naive, naive_h = bin_offset_map(_pointing,
+                         tod_out,
+                         _weights,
+                         offset_length,
+                         pixel_edges,
+                         extend=False)
 
-    m = mpi_share_map(m)
-    h = mpi_share_map(h)
-    n = mpi_share_map(n)
-    d2 = mpi_share_map(d2)
-
+    destriped = sum_map_to_root(destriped)
+    naive = sum_map_to_root(naive)
+    destriped_h = sum_map_to_root(destriped_h)
+    naive_h = sum_map_to_root(naive_h)
+    
     if rank == 0:
-        m[h!=0] /= h[h!=0]
-        n[h!=0] /= h[h!=0]
-        d2[h!=0] /= h[h!=0]
+        npix = destriped.size//3 
+        I  = destriped[:npix]/destriped_h[:npix]
+        Q  = destriped[npix:2*npix]/destriped_h[npix:2*npix]
+        U  = destriped[2*npix:]/destriped_h[2*npix:]
+        Iw = destriped_h[:npix]
+        Qw = destriped_h[npix:2*npix]
+        Uw = destriped_h[2*npix:]
 
-        return {'map':m,'naive':n, 'weight':h,'map2':d2}, result
+        return {'I':I, 'Q':Q, 'U':U, 'Iw':Iw, 'Qw':Qw, 'Uw':Uw}, result
     else:
-        return {'map':None,'naive':None,'weight':None,'map2':None}  , result
+        return {'I':None, 'Q':None, 'U':None, 'Iw':None, 'Qw':None, 'Uw':None}, result
 
 def run_destriper(_pointing,
                   _tod,
