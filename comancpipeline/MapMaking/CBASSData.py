@@ -16,6 +16,9 @@ rank = comm.Get_rank()
 import gc 
 from dataclasses import dataclass, field
 
+from memory_profiler import profile
+
+
 CBASS_LON = -118+17/60. 
 CBASS_LAT = 37+14/60.
 
@@ -54,7 +57,7 @@ class CBASSData(object):
     @staticmethod
     def get_size(filename, offset_length=100):
         """ Get the size of the data """
-        hdu = fits.open(filename,memmap=False)
+        hdu = fits.open(filename,memmap=True)
         nsize = int(hdu[1].data['I1'].size//offset_length*offset_length)
         hdu.close()
         return nsize
@@ -185,14 +188,14 @@ class CBASSData(object):
 
         h.close()
 
-    @property
+    #@property
     def tod(self):
         tod = np.zeros(self.nsize) 
         mask = self.flag == 0
         tod[mask] = (self.I1[mask]*self.wI1[mask] + self.I2[mask]*self.wI2[mask])/(self.wI1[mask] + self.wI2[mask])
         tod[mask] -= np.nanmedian(tod[mask]) 
         return tod
-    @property
+    #@property
     def tod_iqu(self):
         tod = np.zeros((3,self.nsize))
         mask = (self.flag == 0)
@@ -207,12 +210,12 @@ class CBASSData(object):
         del tod_offsets 
         return tod
 
-    @property
+    #@property
     def weights(self):
         weights = self.wI1[:self.nsize] + self.wI2[:self.nsize]
         return weights
     
-    @property
+    #@property
     def weights_iqu(self):
         weights = np.zeros((3,self.nsize))
         weights[0,:] = self.wI1[:self.nsize] + self.wI2[:self.nsize]
@@ -223,12 +226,12 @@ class CBASSData(object):
 
         return weights
 
-    @property
+    #@property
     def pointing(self):
         pointing = hp.ang2pix(self.nside,np.pi/2 - self.dec[:self.nsize],self.ra[:self.nsize]).astype(int)
         return pointing
     
-    @property
+    #@property
     def pointing_iqu(self):
         pointing = np.zeros((3,self.nsize))
         pointing[:,:] = (hp.ang2pix(self.nside,np.pi/2 - self.dec[:self.nsize],self.ra[:self.nsize]).astype(int))[None,:]
@@ -236,23 +239,23 @@ class CBASSData(object):
         pointing[2,:] += 2*12*self.nside**2
         return pointing.flatten()
     
-    @property
+    #@property
     def obsid_array(self):
         obsids = np.ones(self.nsize)*self.obsid
         return obsids
     
-    @property
+    #@property
     def obsid_array_iqu(self):
         obsids = np.ones((3,self.nsize))*self.obsid
         return obsids.flatten()
     
-    @property
+    #@property
     def special_weights(self):
         """ This is where we store the parallactic angle weights for destriping"""
         special_weights = np.ones(self.nsize)
         return special_weights
 
-    @property
+    #@property
     def special_weights_iqu(self):
         """ This is where we store the parallactic angle weights for destriping"""
         pa = self.pa
@@ -339,6 +342,7 @@ def  read_comap_data(_filelist, offset_length=100, ifile_start=0, ifile_end=None
     good_offsets = CBASSData.calc_empty_offsets(flags, offset_length=offset_length)
     return tod[good_offsets], weights[good_offsets], pointing[good_offsets], obsid[good_offsets], special_weights[good_offsets], all_cbass_data
 
+@profile 
 def  read_comap_data_iqu(_filelist, offset_length=100, ifile_start=0, ifile_end=None,nside=512): 
     if isinstance(ifile_end, type(None)):
         ifile_end = len(_filelist)
@@ -353,42 +357,52 @@ def  read_comap_data_iqu(_filelist, offset_length=100, ifile_start=0, ifile_end=
         ncount += CBASSData.get_size(filename, offset_length=offset_length)*3
 
     # Create the arrays
-    tod = np.random.normal(size=ncount)# np.zeros(ncount,dtype=np.float64)
-    weights = np.zeros(ncount,dtype=np.float64)
-    pointing = np.zeros(ncount,dtype=np.int64)
-    obsid = np.zeros(ncount,dtype=np.int64)
-    flags = np.zeros(ncount,dtype=np.int64)
-    special_weights = np.zeros(ncount,dtype=np.float64)
-    special_weights_rot = np.zeros(ncount,dtype=np.float64)
-    special_weights_pa = np.zeros(ncount,dtype=np.float64)
+    if rank == 0:
+        print('creating arrays',flush=True)
+    tod = np.empty(ncount,dtype=np.float32)
+    weights = np.empty(ncount,dtype=np.float32)
+    pointing = np.empty(ncount,dtype=np.int32)
+    obsid = np.empty(ncount,dtype=np.int16)
+    flags = np.empty(ncount,dtype=np.int16)
+    special_weights = np.empty(ncount,dtype=np.float32)
+    special_weights_rot = np.empty(ncount,dtype=np.float32)
+    special_weights_pa = np.empty(ncount,dtype=np.float32)
 
     # Loop over the files
     nstart = 0
 
-    cbass_map = hp.read_map('/scratch/nas_cbassarc/cbass_data/Reductions/v34m3_mcal1/NIGHTMERID20/AWR1/rawest_map/AWR1_xND12_xAS14_1024_NM20S3M1_C_Offmap.fits',field=[0,1,2])
-    cbass_map = hp.ud_grade(hp.read_map('/scratch/nas_cbassarc/cbass_data/Reductions/v34m3_mcal1/NIGHTMERID20/AWR1/calibrated_map/AWR1_xND12_xAS14_1024_NM20S3M1_C_Offmap.fits',field=[0,1,2]),64)
-
-    print('BEFORE LOOP',psutil.virtual_memory())
+    #cbass_map = hp.read_map('/scratch/nas_cbassarc/cbass_data/Reductions/v34m3_mcal1/NIGHTMERID20/AWR1/rawest_map/AWR1_xND12_xAS14_1024_NM20S3M1_C_Offmap.fits',field=[0,1,2])
+    #cbass_map = hp.ud_grade(hp.read_map('/scratch/nas_cbassarc/cbass_data/Reductions/v34m3_mcal1/NIGHTMERID20/AWR1/calibrated_map/AWR1_xND12_xAS14_1024_NM20S3M1_C_Offmap.fits',field=[0,1,2]),64)
 
     all_cbass_data = [] 
+    if rank == 0:
+        print('READING DATA',flush=True)
+    if rank == 0:
+        filelist = tqdm(_filelist[ifile_start:ifile_end])
+    else:
+        filelist = _filelist[ifile_start:ifile_end]
+
     for i,filename in enumerate(filelist):
         cbass_data = CBASSData(filename,obsid=i+ifile_start,offset_length=offset_length,nside=nside)#,cbass_map=cbass_map)
         _nend = nstart + cbass_data.nsize*3
         nend = _nend 
 
-        tod[nstart:nend] = cbass_data.tod_iqu
-        weights[nstart:nend] = cbass_data.weights_iqu
-        pointing[nstart:nend] = cbass_data.pointing_iqu
-        obsid[nstart:nend] = cbass_data.obsid_array_iqu
+        tod[nstart:nend] = cbass_data.tod_iqu()
+        weights[nstart:nend] = cbass_data.weights_iqu()
+        pointing[nstart:nend] = cbass_data.pointing_iqu()
+        obsid[nstart:nend] = cbass_data.obsid_array_iqu()
         flags[nstart:nend] = np.tile(cbass_data.flag[:cbass_data.nsize],3)
-        special_weights[nstart:nend],special_weights_rot[nstart:nend],special_weights_pa[nstart:nend] = cbass_data.special_weights_iqu
+        special_weights[nstart:nend],special_weights_rot[nstart:nend],special_weights_pa[nstart:nend] = cbass_data.special_weights_iqu()
 
         cbass_data.clear_memory() 
-        if rank == 0:
-            print('AFTER',psutil.virtual_memory())
+        cbass_data.hdu.close()
+        #if rank == 0:
+        #    print('AFTER',psutil.virtual_memory())
+
         all_cbass_data += [cbass_data]
         nstart = _nend
-        
+    if rank == 0:
+        print('DATA READ',flush=True)
 
     good_offsets = CBASSData.calc_empty_offsets(flags, offset_length=offset_length)
     return tod[good_offsets], weights[good_offsets], pointing[good_offsets], obsid[good_offsets], special_weights[good_offsets], special_weights_rot[good_offsets], special_weights_pa[good_offsets], all_cbass_data

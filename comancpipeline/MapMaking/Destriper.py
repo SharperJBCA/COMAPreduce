@@ -22,6 +22,9 @@ from scipy.sparse.linalg import LinearOperator
 from scipy.ndimage import gaussian_filter
 from comancpipeline.Tools import binFuncs
 import healpy as hp
+import sys
+import shutil
+import psutil
 
 from comancpipeline.MapMaking.mpi_functions import sum_map_all_inplace, mpi_sum
 
@@ -52,13 +55,12 @@ def cgm(pointing, pixel_edges, tod, weights, obsids, A,b,x0 = None,niter=100,thr
     
     
     if isinstance(x0,type(None)):
-        x0 = np.zeros(b.size)
+        x0 = np.zeros(b.size,dtype=np.float32)
     
     r  = b - A.matvec(x0)
     rb = b - A.matvec(x0)
     p  = r*1.
     pb = rb*1.
-
 
     thresh0 = mpi_sum(r*rb) 
     for i in range(niter):
@@ -99,16 +101,28 @@ def cgm(pointing, pixel_edges, tod, weights, obsids, A,b,x0 = None,niter=100,thr
 
 def run(pointing,tod,weights,offset_length,pixel_edges, obsids, special_weight=None):
 
+    print(psutil.Process().memory_info().rss/(1024*1024))
 
     i_op_Ax = Experiment.op_Ax(pointing,weights,offset_length,pixel_edges,
                     special_weight=special_weight)
 
     b = i_op_Ax(tod,extend=False)
 
-
     n_offsets = b.size
-    A = LinearOperator((n_offsets, n_offsets), matvec = i_op_Ax)
+    A = LinearOperator((n_offsets, n_offsets), matvec = i_op_Ax, dtype=np.float32)
 
+    print('A memory', sys.getsizeof(A) / (1024 * 1024)) 
+    print('Ax memory', sys.getsizeof(i_op_Ax) / (1024 * 1024)) 
+    print('tod memory', sys.getsizeof(tod) / (1024 * 1024)) 
+    print('weights memory', sys.getsizeof(weights) / (1024 * 1024)) 
+    print('pointing memory', sys.getsizeof(pointing) / (1024 * 1024)) 
+    print('obsid memory', sys.getsizeof(obsids) / (1024 * 1024)) 
+    print('b memory', sys.getsizeof(b) / (1024 * 1024)) 
+
+    for k, v in i_op_Ax.__dict__.items():
+        print(f'i_op_Ax.{k} memory', sys.getsizeof(v) / (1024 * 1024)) 
+
+    print(psutil.Process().memory_info().rss/(1024*1024))
     if rank == 0:
         print('Starting CG',flush=True)
     if True:

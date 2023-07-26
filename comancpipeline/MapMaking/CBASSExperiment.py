@@ -30,10 +30,10 @@ def bin_offset_map(pointing,
     else:
         z = offsets
 
-    m = np.zeros(int(pixel_edges[-1])+1)
-    h = np.zeros(int(pixel_edges[-1])+1)
-    binFuncs.binValues(m, pointing, weights=z*weights)
-    binFuncs.binValues(h, pointing, weights=weights)
+    m = np.zeros(int(pixel_edges[-1])+1,dtype=np.float32)
+    h = np.zeros(int(pixel_edges[-1])+1,dtype=np.float32)
+    binFuncs.binValues_float(m, pointing, weights=z*weights)
+    binFuncs.binValues_float(h, pointing, weights=weights)
 
     return m, h
 
@@ -47,7 +47,7 @@ class op_Ax:
         self.special_weight=special_weight
         self.sky_map = np.zeros(int(pixel_edges[-1])+1)
         self.sky_weights = np.zeros(int(pixel_edges[-1])+1)
-        self.tod_out = np.zeros(pointing.size)
+        self.tod_out = np.zeros(pointing.size,dtype=np.float32)
         self.select_I = self.special_weight[2] == 1
         self.select_Q = self.special_weight[2] == 2
         self.select_U = self.special_weight[2] == 3
@@ -104,7 +104,6 @@ class op_Ax:
         #            self.sky_map,special_weight=self.special_weight)
 
         #print(size,rank, np.sum(diff))
-
         if not isinstance(self.special_weight,type(None)):
             sum_diff = np.sum(np.reshape(diff*self.weights,(tod.size//self.offset_length, self.offset_length)),axis=1)
         else:
@@ -125,7 +124,14 @@ def sum_sky_maps(_tod, _pointing, _weights, offset_length, pixel_edges, obsids, 
                          offset_length,
                          pixel_edges,
                          extend=False)
-    tod_out = i_op_Ax.rotate_tod(_tod-np.repeat(result,offset_length), DETECTOR_TO_SKY) 
+    destriped_sqrd, destriped_h_sqrd = bin_offset_map(_pointing,
+                         tod_out**2,
+                         _weights,
+                         offset_length,
+                         pixel_edges,
+                         extend=False)
+
+    tod_out = i_op_Ax.rotate_tod(_tod, DETECTOR_TO_SKY) 
     naive, naive_h = bin_offset_map(_pointing,
                          tod_out,
                          _weights,
@@ -134,10 +140,12 @@ def sum_sky_maps(_tod, _pointing, _weights, offset_length, pixel_edges, obsids, 
                          extend=False)
 
     destriped = sum_map_to_root(destriped)
+    destriped_sqrd = sum_map_to_root(destriped_sqrd)
     naive = sum_map_to_root(naive)
     destriped_h = sum_map_to_root(destriped_h)
     naive_h = sum_map_to_root(naive_h)
-    
+    destriped_h_sqrd = sum_map_to_root(destriped_h_sqrd)
+
     if rank == 0:
         npix = destriped.size//3 
         I  = destriped[:npix]/destriped_h[:npix]
@@ -146,7 +154,10 @@ def sum_sky_maps(_tod, _pointing, _weights, offset_length, pixel_edges, obsids, 
         Iw = destriped_h[:npix]
         Qw = destriped_h[npix:2*npix]
         Uw = destriped_h[2*npix:]
+        I_rms = np.sqrt(destriped_h_sqrd[:npix]/destriped_h[:npix] - I**2)
+        Q_rms = np.sqrt(destriped_h_sqrd[npix:2*npix]/destriped_h[npix:2*npix] - Q**2)
+        U_rms = np.sqrt(destriped_h_sqrd[2*npix:]/destriped_h[2*npix:] - U**2)
 
-        return {'I':I, 'Q':Q, 'U':U, 'Iw':Iw, 'Qw':Qw, 'Uw':Uw}
+        return {'I':I, 'Q':Q, 'U':U, 'Iw':Iw, 'Qw':Qw, 'Uw':Uw, 'I_rms':I_rms, 'Q_rms':Q_rms, 'U_rms':U_rms}
     else:
-        return {'I':None, 'Q':None, 'U':None, 'Iw':None, 'Qw':None, 'Uw':None}
+        return {'I':None, 'Q':None, 'U':None, 'Iw':None, 'Qw':None, 'Uw':None, 'I_rms':None, 'Q_rms':None, 'U_rms':None}
