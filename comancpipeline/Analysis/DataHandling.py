@@ -516,18 +516,34 @@ class COMAPLevel2(HDF5Data):
     @property
     def ra(self):
         return self['spectrometer/pixel_pointing/pixel_ra'] 
+    
+    @ra.setter
+    def ra(self, v):
+        self['spectrometer/pixel_pointing/pixel_ra'] = v
             
     @property
     def dec(self):
         return self['spectrometer/pixel_pointing/pixel_dec'] 
     
+    @dec.setter
+    def dec(self, v):
+        self['spectrometer/pixel_pointing/pixel_dec'] = v
+
     @property
     def az(self):
         return self['spectrometer/pixel_pointing/pixel_az'] 
 
+    @az.setter
+    def az(self, v):
+        self['spectrometer/pixel_pointing/pixel_az'] = v
+
     @property
     def el(self):
         return self['spectrometer/pixel_pointing/pixel_el'] 
+
+    @el.setter
+    def el(self, v):
+        self['spectrometer/pixel_pointing/pixel_el'] = v
 
     @property
     def system_temperature_el(self):

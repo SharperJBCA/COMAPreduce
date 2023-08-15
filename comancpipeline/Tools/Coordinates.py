@@ -247,8 +247,9 @@ def sourcePosition(src, mjd, lon, lat):
         az, el = e2h(r0,d0,mjd,lon ,lat) # Use a straight conversion here as rdplan handles precession/nutation/aberration
     else:
         r0, d0 = mjd*0 + skypos[0], mjd*0 + skypos[1]
-        az, el = e2h_full(r0,d0,mjd,lon,lat) # Use the full conversion to precess/nutate/aberrate to observer coordinate frame
-
+        az, el = e2h_full(r0[::50],d0[::50],mjd[::50],lon,lat) # Use the full conversion to precess/nutate/aberrate to observer coordinate frame
+        az = np.interp(mjd,mjd[::50],az)
+        el = np.interp(mjd,mjd[::50],el)
     return az, el, r0, d0
 
 def h2e(az, el, mjd, lon, lat, degrees=True): 
@@ -275,7 +276,7 @@ from astropy.utils import iers
 from astropy.time import Time
 from astropy.utils.data import clear_download_cache
 from astroplan import download_IERS_A
-def h2e_full(az, el, mjd, lon, lat, degrees=True): 
+def h2e_full(az, el, mjd, lon, lat, degrees=True,sample_rate=50): 
     """
     Horizon to equatorial coordinates
 
@@ -297,7 +298,10 @@ def h2e_full(az, el, mjd, lon, lat, degrees=True):
     except iers.iers.IERSRangeError:
         dut = 0.0
 
-    ra, dec = pysla.h2e_full(az*c, el*c, mjd, lon*c, lat*c,dut)
+    # interpolate to make this faster 
+    ra, dec = pysla.h2e_full(az[::sample_rate]*c, el[::sample_rate]*c, mjd[::sample_rate], lon*c, lat*c,dut)
+    ra = np.interp(mjd,mjd[::sample_rate],ra)
+    dec = np.interp(mjd,mjd[::sample_rate],dec) 
     return ra/c, dec/c
 
 def e2h_full(ra, dec, mjd, lon, lat, degrees=True, return_lha=False):

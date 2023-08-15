@@ -185,12 +185,16 @@ class ApplyCalibration(PipelineFunction):
         nu = frequency * 1e9
         c  = 2.99792458e8
         conv = 2*kb * (nu/c)**2 * 1e26 * (np.pi/180.)**2 
-        flux = 2*np.pi*fits[:,0]*fits[:,4]*fits[:,5] * conv 
-        print('AMPLITUDE', nu*1e-9, np.nanmedian(fits[:,0]))
-        print('FLUX',np.nanmedian(flux))
-        print('BEAM AREA', np.nanmedian(2*np.pi*fits[:,4]*fits[:,5]) * (np.pi/180.)**2)
-        print('WIDTHS', np.nanmedian(fits[:,4])*60*2.355, np.nanmedian(fits[:,5])*60*2.355)
-        flux_errs = np.array([self.flux_error(fits[i,[0,4,5]],errors[i,[0,4,5]], nu) if fits[i,4] !=0 else 0 for i in range(flux.size)]) 
+        if fits.ndim == 1:
+            flux = fits[0] * 2*np.pi*fits[4]*fits[5] * conv
+            flux_errs = self.flux_error(fits[[0,4,5]],errors[[0,4,5]], nu)
+        else:
+            flux = 2*np.pi*fits[:,0]*fits[:,4]*fits[:,5] * conv 
+            print('AMPLITUDE', nu*1e-9, np.nanmedian(fits[:,0]))
+            print('FLUX',np.nanmedian(flux))
+            print('BEAM AREA', np.nanmedian(2*np.pi*fits[:,4]*fits[:,5]) * (np.pi/180.)**2)
+            print('WIDTHS', np.nanmedian(fits[:,4])*60*2.355, np.nanmedian(fits[:,5])*60*2.355)
+            flux_errs = np.array([self.flux_error(fits[i,[0,4,5]],errors[i,[0,4,5]], nu) if fits[i,4] !=0 else 0 for i in range(flux.size)]) 
                     
         return flux, flux_errs 
     
@@ -198,13 +202,32 @@ class ApplyCalibration(PipelineFunction):
                                     errors : np.ndarray[float,float]):
         """Calculates the geometric radius given gaussian fit parameters""" 
         
-        radius = np.sqrt(fits[:,4]**2 + fits[:,5]**2)
-        radius_err = (fits[:,4]/radius)**2 * errors[:,4]**2 +\
-            (fits[:,5]/radius)**2 * errors[:,5]**2
+        if fits.ndim==1:
+            radius = np.sqrt(fits[4]**2 + fits[5]**2)
+            radius_err = (fits[4]/radius)**2 * errors[4]**2 +\
+                (fits[5]/radius)**2 * errors[5]**2
+        else:
+            radius = np.sqrt(fits[:,4]**2 + fits[:,5]**2)
+            radius_err = (fits[:,4]/radius)**2 * errors[:,4]**2 +\
+                (fits[:,5]/radius)**2 * errors[:,5]**2
         radius_err = radius_err**0.5 
         
         return radius, radius_err
     
+    def get_source_mask(self, ifeed, h, mjd, frequency=27e9,iband=0):
+        calibrator_source = h['comap'].attrs['source'].split(',')[0] #.decode('utf-8')
+        data = h[f'{calibrator_source}_source_fit']
+        flux_model = self.calibrator_models[calibrator_source]
+
+        flux_feed1, flux_err_feed1 = self.get_source_flux(frequency, 
+                                            data['fits'][ifeed,iband,:],
+                                            data['errors'][ifeed,iband,:])
+        radius_feed1, radius_err_feed1 = self.get_source_geometric_radius(data['fits'][ifeed,iband,:],
+                                                            data['errors'][ifeed,iband,:])
+        
+        mask_feed1 = self.create_source_mask(flux_feed1, flux_err_feed1, radius_feed1, radius_err_feed1, flux_feed1/flux_model(frequency, mjd))
+
+        return mask_feed1
     
     def read_data(self, filelist, save_file, overwrite=False): 
         
@@ -246,7 +269,6 @@ class ApplyCalibration(PipelineFunction):
         mjd_all = np.array(mjd_all) 
         err_all = np.array(err_all) 
         el_all  = np.array(el_all)
-        print(el_all.shape)
         data =  {'fits':src_all, 'MJD':mjd_all, 'errors':err_all, 'el':el_all}
 
         flux_model = self.calibrator_models[self.calibrator_source]
@@ -307,7 +329,7 @@ class ApplyCalibration(PipelineFunction):
                 (cali_factor > max_cali_factor) |\
                 (cali_factor < min_cali_factor)
             
-        mean_size = np.nanmedian(radius[~mask])
+        #mean_size = np.nanmedian(radius[~mask])
         #mask = mask | (np.abs(radius - mean_size) > max_geo_radius_diff) # (flux< min_flux) | (flux > max_flux) |\ # (flux_err < min_flux_err) |\
     
         return mask 
@@ -366,7 +388,6 @@ class ApplyCalibration(PipelineFunction):
         """Assigns the nearest good calibration factor""" 
         
         level2_mjd = level2_data.mjd[0] 
-        print(level2_data.filename)
         nfeeds, nbands, nsamples = level2_data.tod_shape 
         
         cal_factors = np.zeros((nfeeds, nbands))

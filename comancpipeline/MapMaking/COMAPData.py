@@ -7,6 +7,10 @@ from tqdm import tqdm
 import healpy as hp
 from comancpipeline.Tools.median_filter import medfilt
 import os
+import healpy as hp 
+from astropy.coordinates import get_sun 
+from astropy.time import Time
+from scipy.stats import binned_statistic
 
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
@@ -60,6 +64,43 @@ def median_filter(tod,medfilt_stepsize):
         filter_tod = np.ones(tod.size)*np.nanmedian(tod)
 
     return filter_tod[:tod.size]
+
+def transform_to_1d(x, y, wcs, nx, ny, return_xy=False):
+    """
+    Transforms sky coordinates to 1D image pixel coordinates.
+
+    Args:
+        x (np.array): x-coord  values.
+        y (np.array): y-coord values.
+        wcs (WCS): Astropy WCS object.
+        nx (int): The number of pixels in the x-direction.
+        ny (int): The number of pixels in the y-direction.
+
+    Returns:
+        np.array: 1D pixel coordinates.
+    """
+    # Transform sky coordinates to 2D pixel coordinates
+    px, py = wcs.wcs_world2pix(x, y, 0)
+
+    # Make sure pixel coordinates are integers
+    px = np.floor(px+0.5).astype(float)
+    py = np.floor(py+0.5).astype(float)
+    
+    # Some of the calculated pixel coordinates can be out of image dimensions
+    # Need to make sure the pixel coordinates are within the image
+    px[(px < 0) | (px > nx-1)] = np.nan
+    py[(py < 0) | (py > ny-1)] = np.nan
+
+    # Map 2D pixel coordinates to 1D array index
+    index_1d = py * nx + px
+    index_1d[np.isnan(index_1d)] = -1 
+    index_1d = index_1d.astype(int) 
+    
+    if return_xy:
+        return index_1d,hp.vstack([px,py])
+    else:
+        return index_1d
+
 def getFlatPixels(x, y,wcs,nxpix,nypix, return_xy=False):
     """
     Convert sky angles to pixel space
@@ -72,7 +113,6 @@ def getFlatPixels(x, y,wcs,nxpix,nypix, return_xy=False):
                                    y+wcs.wcs.cdelt[1]/2.,0)
         pflat = (pixels[0].astype(int) + nxpix*pixels[1].astype(int)).astype(int)
             
-
         # Catch any wrap around pixels
         pflat[(pixels[0] < 0) | (pixels[0] > nxpix)] = -1
         pflat[(pixels[1] < 0) | (pixels[1] > nypix)] = -1
@@ -111,7 +151,11 @@ def countDataSize(filename, Nfeeds, offset_length,level3='.'):
         return info
 
     N = 0
-    scan_edges = d['averaged_tod/scan_edges'][:]
+    try:
+        scan_edges = d['averaged_tod/scan_edges'][:]
+    except KeyError:
+        print('BAD FILE', filename)
+        raise KeyError
     for (start,end) in scan_edges:
         N += int((end-start)//offset_length * offset_length)
 
@@ -123,18 +167,71 @@ def countDataSize(filename, Nfeeds, offset_length,level3='.'):
 
     return info
 
+def sun_centric_coords(ra,dec,mjd,az,el):
+    """
+    Convert the RA/DEC to Sun centric coordinates
+    """
+    # Get the sun position
+    sun = get_sun(Time(mjd,format='mjd'))
+    sun_ra = sun.ra.deg
+    sun_dec = sun.dec.deg
 
-def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1,iband=0,level3='.',calibration=False, calibrator='TauA'):
+    # Convert the RA/DEC to Sun centric coordinates
+    rot = hp.rotator.Rotator(rot=[sun_ra,sun_dec],inv=True)
+    theta,phi = (np.pi/2.-dec*np.pi/180.),ra*np.pi/180.
+    theta,phi = rot(theta,phi)
+
+    return phi, theta 
+
+def auto_rms(tod):
+    N = tod.size//2*2
+    diff = tod[1:N] - tod[:-1:N]
+    return np.nanstd(diff) /np.sqrt(2)
+
+# import astropy sun position
+from astropy.coordinates import get_sun
+
+def get_sun_centric_coords(ra,dec,mjd):
+    """
+    Convert the RA/DEC to Sun centric coordinates
+    """
+    # Get the sun position
+    sun = get_sun(Time(mjd[0],format='mjd'))
+    sun_ra = sun.ra.deg
+    sun_dec = sun.dec.deg
+
+    # Convert the RA/DEC to Sun centric coordinates
+    rot = hp.rotator.Rotator(rot=[sun_ra,sun_dec],inv=True)
+    theta,phi = (np.pi/2.-dec*np.pi/180.),ra*np.pi/180.
+    good_vals = np.isfinite(ra) & np.isfinite(dec)
+    theta[good_vals],phi[good_vals] = rot(theta[good_vals],phi[good_vals])
+
+    if isinstance(phi, float):
+        print('WTF?!?',ra.size,dec.size,mjd.size,sun_ra,sun_dec,np.nansum(ra),np.nansum(dec))
+        print(theta,phi)
+
+    return phi, theta
+
+# Haversine formula for a unit sphere
+def haversine(theta1,phi1,theta2,phi2):
+    return 2*np.arcsin(np.sqrt(np.sin((theta2-theta1)/2)**2+np.cos(theta1)*np.cos(theta2)*np.sin((phi2-phi1)/2)**2))
+
+def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_gain_filter=True, feed_weights=1,iband=0,level3='.',calibration=False, calibrator='TauA'):
     """
     Want to select each feed and average the data over some frequency range
     """
 
     d = h5py.File(filename,'r')
-    dset     = d['averaged_tod/tod']
-    #dset  = d['averaged_tod/tod_original']
+    if use_gain_filter:
+        dset     = d['averaged_tod/tod']
+    else:
+        dset  = d['averaged_tod/tod_original']
     az_dset  = d['spectrometer/pixel_pointing/pixel_az']
     el_dset  = d['spectrometer/pixel_pointing/pixel_el']
+    ra_dset = d['spectrometer/pixel_pointing/pixel_ra']
+    dec_dset = d['spectrometer/pixel_pointing/pixel_dec']
     wei_dset = d['averaged_tod/weights']
+    mjd_dset = d['spectrometer/MJD']
     try:
         spike_dset = d['spikes/spike_mask'][...]
     except KeyError:
@@ -156,6 +253,8 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
     weights = np.zeros((len(selected_feeds), datasize))
     az      = np.zeros((len(selected_feeds), datasize))
     el      = np.zeros((len(selected_feeds), datasize))
+    ra     = np.zeros((len(selected_feeds), datasize))
+    dec     = np.zeros((len(selected_feeds), datasize))
     feedid  = np.zeros((len(selected_feeds), datasize))
     obsid   = os.path.basename(filename).split('-')[1]
 
@@ -166,47 +265,90 @@ def get_tod(filename,datasize,offset_length=50,selected_feeds=[1],feed_weights=1
     fnoise = d['fnoise_fits/fnoise_fit_parameters'][...]
 
     # Read in data from each feed
-    for file_feed, output_feed in zip(file_feed_index, output_feed_index):
+    #def norm_data(d):
+    #    # d is shape (Nfeed,Ntime)
+    #    # normalise each feed 
+    #    d -= np.nanmean(d,axis=1)[:,None]
+    #    d /= np.nanstd(d,axis=1)[:,None]
+    #    return d
+    #calibrated_data = dset[file_feed_index,iband,:]/cal_factors[file_feed_index,iband,None]
+    #calibrated_data = norm_data(calibrated_data)
+    #average_data = np.sum(calibrated_data*wei_dset[file_feed_index,iband,:],axis=0)/np.sum(wei_dset[file_feed_index,iband,:],axis=0)
+    #bad = (average_data == 0)
+    #average_data[~bad] = median_filter(average_data[~bad],500)
+    #average_data[np.isnan(average_data)] = 0
+
+    mask_map_option=False
+    if mask_map_option:
+        from astropy.io import fits
+        mask_map = fits.open('maps/galactic/All_galactic_low_gainfilter_medianFilter400_Band00_cutoff75.fits')[0].data
+        mask_map = (mask_map > 0.05) & np.isfinite(mask_map)
+        mask_map = mask_map.flatten() 
+
+    idx = np.arange(pointing.size)
+    for ifeed, (file_feed, output_feed) in enumerate(zip(file_feed_index, output_feed_index)):
         #print(f'Calibration factors {file_feeds[file_feed]} {cal_factors[file_feed,iband]}')
         tod_file = dset[file_feed,iband,:]/cal_factors[file_feed,iband]
-        weights_file = wei_dset[file_feed,iband,:]*cal_factors[file_feed,iband]**2
+        tod_file_copy = tod_file[scan_edges[0][0]:scan_edges[-1][1]]*1. 
+
+        weights_file = np.ones(tod_file.size)/auto_rms(tod_file)**2
 
         spikes_file  = spike_dset[file_feed,iband,:]
         az_file      = az_dset[file_feed,:]
+        #az_file -= np.median(az_file)
+        
         el_file      = el_dset[file_feed,:]
+        ra_file, dec_file = get_sun_centric_coords(ra_dset[file_feed,:],dec_dset[file_feed,:],mjd_dset[:])
+        ra_file = haversine(0,0,ra_file, dec_file) * 180.0/np.pi
+        #ra_file      = ra_dset[file_feed,:]
+        #dec_file     = dec_dset[file_feed,:]
         feedid[output_feed] = file_feeds[file_feed]
         weights_file[spikes_file] = 0
+        weights_file[ra_file < 10] = 0
 
+
+        # mask 10% edges of az and el
+        good = np.isfinite(az_file)
+        edge_cut_fraction = 10
+        az10 = np.percentile(az_file[good],edge_cut_fraction)
+        az90 = np.percentile(az_file[good],100-edge_cut_fraction)
+        el10 = np.percentile(el_file[good],edge_cut_fraction)
+        el90 = np.percentile(el_file[good],100-edge_cut_fraction)
+        weights_file[(az_file < az10) | (az_file > az90)] = 0
+        weights_file[(el_file < el10) | (el_file > el90)] = 0
 
         # then the data for each scan
         last = 0
-        for iscan,(start,end) in enumerate(scan_edges):
-
-            # Check if the noise estimate is bad
-            #print(file_feed, iscan, np.max(fnoise[file_feed,iband,:,1]), fnoise[file_feed,iband,:,1])
-            if any([~np.isfinite(fnoise_stat) for fnoise_stat in fnoise[file_feed,iband,iscan]]) | \
-                all([fnoise_stat == 0 for fnoise_stat in fnoise[file_feed,iband,iscan]]) | \
-               (np.min(fnoise[file_feed,iband,:,2]) < -5.25) | (np.max(fnoise[file_feed,iband,:,1]) > 600e-3):
-                print('Skipping scan %d for feed %d in %s because of bad noise estimate'%(iscan,file_feeds[file_feed],obsid),all([fnoise_stat == 0 for fnoise_stat in fnoise[file_feed,iband,iscan]]), any([~np.isfinite(fnoise_stat) for fnoise_stat in fnoise[file_feed,iband,iscan]]))
-                continue # i.e., set the weight to zero
-                        
+        for iscan,(start,end) in enumerate(scan_edges):                        
             N = int((end-start)//offset_length * offset_length)
-            #tod_file[start:start+N] -= median_filter(tod_file[start:start+N],int(30./0.02))
+
+            p = pointing[ifeed,last:last+N]
+            #bad = (mask_map[p])
+            tod_copy = tod_file[start:start+N]*1.
+            #tod_copy[bad] = np.interp(p[bad],p[~bad],tod_copy[~bad])
+            bad = (tod_copy == 0) 
+            tod_slice = tod_file[start:start+N]
+            tod_slice[~bad] -= median_filter(tod_copy[~bad],400)
 
             # Set first and last 10% of data to 0 weight to remove dithering effects
             Nten = int(N*0.1) 
             weights_file[start:start+Nten] = 0
             weights_file[start+N-Nten:start+N] = 0
-            
-            tod[output_feed,last:last+N]     = tod_file[start:start+N]
+                        
+            tod[output_feed,last:last+N]     = tod_slice
             weights[output_feed,last:last+N] = weights_file[start:start+N] 
             az[output_feed,last:last+N]      = az_file[start:start+N]
             el[output_feed,last:last+N]      = el_file[start:start+N]
+            try:
+                ra[output_feed,last:last+N]      = ra_file[start:start+N]
+            except IndexError:
+                print(ra.shape, ra_file.shape, N, tod.shape, tod_file.shape)
+            dec[output_feed,last:last+N]     = dec_file[start:start+N]
             last += N
                 
     d.close()
 
-    return tod.flatten(), weights.flatten(),az.flatten(), el.flatten(), feedid.flatten().astype(int)
+    return tod.flatten(), weights.flatten(),az.flatten(), el.flatten(), ra.flatten(), dec.flatten(), feedid.flatten().astype(int)
 
 
 def read_pixels(filename,datasize,offset_length,selected_feeds,map_info,level3='.'):
@@ -232,7 +374,6 @@ def read_pixels(filename,datasize,offset_length,selected_feeds,map_info,level3='
     last = 0
     for iscan, (start,end) in enumerate(scan_edges):
         N = int((end-start)//offset_length * offset_length)
-        N = int((end-start)//offset_length * offset_length)
         end = start+N
         xc = x[:,start:end]
         yc = y[:,start:end]
@@ -243,11 +384,14 @@ def read_pixels(filename,datasize,offset_length,selected_feeds,map_info,level3='
             
             gb, gl = rot((90-yc.flatten())*np.pi/180., xc.flatten()*np.pi/180.)
             xc, yc = gl*180./np.pi, (np.pi/2-gb)*180./np.pi
-        pixels[:,last:last+N] = np.reshape(getFlatPixels(xc.flatten(),
+        if not isinstance(xc, np.ndarray):
+            continue
+        pixels[:,last:last+N] = np.reshape(transform_to_1d(xc.flatten(),
                                                          yc.flatten(),
                                                          wcs,
                                                          nxpix,
                                                          nypix),ycshape)
+        
         last += N
     d.close()
     return pixels 
@@ -294,7 +438,7 @@ def read_pixels_healpix(filename,datasize,offset_length,selected_feeds,map_info,
     d.close()
     return pixels 
 
-def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50,feeds=[i+1 for i in range(19)], calibration=False, calibrator='TauA', healpix=False):
+def read_comap_data(filelist,map_info,feed_weights=None,iband=0,use_gain_filter=True,offset_length=50,feeds=[i+1 for i in range(19)], calibration=False, calibrator='TauA', healpix=False):
     """
     """
     Nfeeds = len(feeds)
@@ -316,6 +460,8 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50
     pointing = np.zeros(all_info['N'],dtype=int)
     az       = np.zeros(all_info['N'])
     el       = np.zeros(all_info['N'])
+    ra       = np.zeros(all_info['N'])
+    dec       = np.zeros(all_info['N'])
     feedid   = np.zeros(all_info['N'],dtype=int)
     obsids   = np.zeros(all_info['N'],dtype=int)
     last = 0
@@ -327,13 +473,7 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50
 
     for ifile,filename in enumerate(_filelist):
         obsid = int(os.path.basename(filename).split('-')[1])
-        _tod, _weights,_az,_el, _feedid = get_tod(filename,
-                                             all_info['datasize'][ifile],
-                                             offset_length=offset_length,
-                                             selected_feeds=feeds,
-                                                 feed_weights=feed_weights,
-                                             iband=iband, calibration=calibration,
-                                             calibrator=calibrator)
+
         if healpix:
             _pointing = read_pixels_healpix(filename,
                                  all_info['datasize'][ifile],
@@ -347,11 +487,30 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50
                                 feeds,
                                 map_info)
 
+        _tod, _weights,_az,_el,_ra,_dec, _feedid = get_tod(filename,_pointing.astype(int),
+                                             all_info['datasize'][ifile],
+                                             offset_length=offset_length,
+                                             selected_feeds=feeds,
+                                             use_gain_filter=use_gain_filter,
+                                                 feed_weights=feed_weights,
+                                             iband=iband, calibration=calibration,
+                                             calibrator=calibrator)
+
+        try:
+            pass
+            #if np.min(_ra[_ra != 0]) < 79.4:
+            #    print(filename, np.min(_ra[_ra != 0]), np.max(_ra[_ra != 0])   )
+        except ValueError:
+            print('BAD',filename)
+            print('BAD',_ra.size)
+            print('BAD',np.sum(_ra))
         N = _tod.size
         tod[last:last+N] = _tod
         weights[last:last+N] = _weights
         az[last:last+N] = _az
         el[last:last+N] = _el
+        ra[last:last+N] = _ra
+        dec[last:last+N] = _dec
         feedid[last:last+N] = _feedid
         pointing[last:last+N] = _pointing.flatten()
         obsids[last:last+N]  = obsid
@@ -372,6 +531,8 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50
     pointing = pointing[cut_empty_offsets]
     az = az[cut_empty_offsets]
     el = el[cut_empty_offsets]
+    ra = ra[cut_empty_offsets]
+    dec = dec[cut_empty_offsets]
     feedid = feedid[cut_empty_offsets] 
     obsids = obsids[cut_empty_offsets] 
     weights[~np.isfinite(weights)] = 0
@@ -380,15 +541,67 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50
         from matplotlib import pyplot
         from matplotlib.lines import Line2D
         import sys 
+        pyplot.figure(figsize=(25,5))
         samples = np.arange(tod.size)
         handles = [] 
-        for obsid in np.unique(obsids):
+        for iobs,obsid in enumerate(np.unique(obsids)):
             select= obsids == obsid
-            plt = pyplot.plot(samples[select],tod[select],',',label=f'{obsid}')
+            plt = pyplot.plot(samples[select],tod[select],',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
             handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
-            legend = pyplot.legend(handles=handles, prop={'size': 6})
-            pyplot.savefig(f'tod_figures/rank{rank:03d}_test.png')
-            pyplot.close() 
+        legend = pyplot.legend(handles=handles, prop={'size': 6})
+        pyplot.savefig(f'tod_figures/rank{rank:03d}_test.png')
+        pyplot.close()
+        samples = np.arange(tod.size)
+        handles = [] 
+        for iobs,obsid in enumerate(np.unique(obsids)):
+            select= obsids == obsid
+            plt = pyplot.plot(az[select],tod[select],',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
+            # bin in azimuth 
+            bin_edges = np.linspace(np.min(az[select]),np.max(az[select]),15)
+            top = np.histogram(az[select],bin_edges,weights=tod[select])[0]
+            bot = np.histogram(az[select],bin_edges)[0]
+            bin_mids = (bin_edges[1:]+bin_edges[:-1])/2.
+            pyplot.plot(bin_mids,top/bot,'-',lw=3,color='k')
+            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
+        legend = pyplot.legend(handles=handles, prop={'size': 6})
+        pyplot.savefig(f'tod_figures/az_bins_rank{rank:03d}_test.png')
+        pyplot.close()
+        # now the same again, but with elevation 
+        samples = np.arange(tod.size)
+        handles = []
+        for iobs,obsid in enumerate(np.unique(obsids)):
+            select= obsids == obsid
+            plt = pyplot.plot(el[select],tod[select],',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
+            # bin in elevation 
+            bin_edges = np.linspace(np.min(el[select]),np.max(el[select]),15)
+            top = np.histogram(el[select],bin_edges,weights=tod[select])[0]
+            bot = np.histogram(el[select],bin_edges)[0]
+            bin_mids = (bin_edges[1:]+bin_edges[:-1])/2.
+            pyplot.plot(bin_mids,top/bot,'-',lw=3,color='k')
+            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
+        legend = pyplot.legend(handles=handles, prop={'size': 6})
+        pyplot.savefig(f'tod_figures/el_bins_rank{rank:03d}_test.png')
+        pyplot.close()
+    if False: 
+        handles = [] 
+        print(np.unique(obsids))
+        for iobs,obsid in enumerate(np.unique(obsids)):
+            select= obsids == obsid
+            plt = pyplot.plot(samples[select],1./weights[select]**0.5,',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
+            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
+        legend = pyplot.legend(handles=handles, prop={'size': 6})
+        pyplot.savefig(f'tod_figures/rms_rank{rank:03d}_test.png')
+        pyplot.close() 
+        handles = [] 
+        print(np.unique(obsids))
+        for iobs,obsid in enumerate(np.unique(obsids)):
+            select= obsids == obsid
+            plt = pyplot.plot(ra[select],tod[select],',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
+            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
+        legend = pyplot.legend(handles=handles, prop={'size': 6})
+        pyplot.savefig(f'tod_figures/sundist_rank{rank:03d}_test.png')
+        pyplot.close() 
+
     #samples = np.arange(tod.size)
     #for obsid in np.unique(obsids):
     #   select= obsids == obsid
@@ -413,10 +626,12 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,offset_length=50
     # pyplot.savefig('test.png')
     # stop
 
+
     remapping_array = np.unique(pointing)
     remapping_array = find_unique_values(remapping_array)
-    pointing = index_replace(remapping_array, pointing)
+    if healpix:
+        pointing = index_replace(remapping_array, pointing)
     # share the remapping_array of each node to to all other nodes 
 
 
-    return tod, weights, pointing, remapping_array.astype(int), az, el, feedid, obsids
+    return tod, weights, pointing, remapping_array.astype(int), az, el, ra, dec, feedid, obsids

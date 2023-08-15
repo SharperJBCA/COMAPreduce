@@ -156,7 +156,7 @@ def cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b,x0 = None,niter
         alpha= rTrb/mpi_sum(pb*q)#np.sum(pb * q)
 
         x0 += alpha*pb
-        
+
         r = r - alpha*A.matvec(p)
         rb= rb- alpha*A.matvec(pb)
         
@@ -167,7 +167,7 @@ def cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b,x0 = None,niter
         pb= rb+ beta*pb
         
         delta = mpi_sum(r*rb)/thresh0
-        
+
         if verbose:
             print(delta)
         if rank ==0:
@@ -256,11 +256,15 @@ class op_Ax:
         self.pixel_edges = pixel_edges
         self.special_weight=special_weight
 
+    def op_F(self,fits):
+        tod = np.repeat(fits,self.offset_length)        
+        return tod
+
     def __call__(self,_tod,extend=True): 
         """
         """
         if extend:
-            tod = np.repeat(_tod,self.offset_length)
+            tod = self.op_F(_tod)
         else:
             tod = _tod
 
@@ -290,9 +294,85 @@ class op_Ax:
 
     
         return sum_diff
+    
+class op_Ax_with_ground:
+    def __init__(self,pointing,azimuths,obsids,feedids,weights,offset_length,pixel_edges, special_weight=None):
+        
+        self.pointing = pointing
+        self.weights  = weights
+        self.offset_length = offset_length
+        self.pixel_edges = pixel_edges
+        self.azimuths = azimuths
+        self.feedids = feedids
+        self.obsids = obsids
+        self.special_weight=special_weight
 
-def run(pointing,tod,weights,offset_length,pixel_edges,feedid, obsids, special_weight=None):
+    def op_F(self,fits):
+        noffsets = self.pointing.size//self.offset_length
+        unique_obsids = np.unique(self.obsids)
+        unique_feeds  = np.unique(self.feedids)
+        nobs = len(unique_obsids)
+        nfeeds = len(unique_feeds)
+        tod = np.repeat(fits[:noffsets],self.offset_length)
+        for i,obsid in enumerate(unique_obsids):
+            for j, feedid in enumerate(unique_feeds):
+                select = (self.obsids == obsid) & (self.feedids == feedid)
+                tod[select] += fits[noffsets+i*2*nfeeds+2*j]*self.azimuths[select] + fits[noffsets+i*2*nfeeds+1+2*j]
 
+        return tod
+
+
+    def __call__(self,_tod,extend=True): 
+        """
+        """
+        if extend:
+            tod = self.op_F(_tod)
+        else:
+            tod = _tod
+
+        if isinstance(self.special_weight,type(None)):
+            m_offset, w_offset = bin_offset_map(self.pointing,
+                                                tod,
+                                                self.weights,
+                                                self.offset_length,
+                                                self.pixel_edges,extend=False)
+        else:
+            m_offset, w_offset = bin_offset_map(self.pointing,
+                                                tod/self.special_weight,
+                                                self.weights*self.special_weight**2,
+                                                self.offset_length,
+                                                self.pixel_edges,extend=False)
+
+        m_offset, w_offset = share_map(m_offset,w_offset)
+
+        diff = op_Z(self.pointing, 
+                    tod, 
+                    m_offset,special_weight=self.special_weight)
+
+        #print(size,rank, np.sum(diff))
+
+        # This is the offset part 
+        sum_diff = np.sum(np.reshape(diff*self.weights,(tod.size//self.offset_length, self.offset_length)),axis=1)
+
+        # Now we need to sum signal with azimuth per obsid
+        unique_obsids = np.unique(self.obsids)
+        unique_feeds  = np.unique(self.feedids)
+        noffsets = self.pointing.size//self.offset_length
+        sum_az = np.zeros(2*unique_obsids.size*unique_feeds.size) 
+        nfeeds = len(unique_feeds)
+        for i,obsid in enumerate(unique_obsids):
+            for j, feedid in enumerate(unique_feeds):
+                select = (self.obsids == obsid) & (self.feedids == feedid)
+                sum_az[2*i*nfeeds + 2*j] = np.sum(self.azimuths[select]*diff[select]*self.weights[select])
+                sum_az[2*i*nfeeds + 2*j + 1] = np.sum(diff[select]*self.weights[select])
+
+        return np.concatenate([sum_diff,sum_az])
+
+
+def run(pointing,az,tod,weights,offset_length,pixel_edges,feedid, obsids, special_weight=None, threshold=1e-3):
+
+    #i_op_Ax = op_Ax_with_ground(pointing,az,obsids,feedid,weights,offset_length,pixel_edges,
+    #                 special_weight=special_weight)
     i_op_Ax = op_Ax(pointing,weights,offset_length,pixel_edges,
                     special_weight=special_weight)
 
@@ -303,10 +383,13 @@ def run(pointing,tod,weights,offset_length,pixel_edges,feedid, obsids, special_w
 
     if rank == 0:
         print('Starting CG',flush=True)
-    x = cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b, offset_length=offset_length)
+    if True:
+        x = cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b, offset_length=offset_length,threshold=threshold)
+    else:
+        x = np.zeros(b.size)
     if rank == 0:
         print('Done',flush=True)
-    return x
+    return x, i_op_Ax 
 
 def get_noise(N,sr):
 
@@ -350,29 +433,31 @@ def get_signal(N,x,y,npix):
     return sky_tod, pixels, sky
 
 def destriper_iteration(_pointing,
+                        az,
                         _tod,
                         _weights,
                         offset_length,
                         pixel_edges,
                         feedid,
                         obsids,
+                        threshold=1e-3,
                         special_weight=None):
-    result = run(_pointing,_tod,_weights,offset_length,pixel_edges,
+    result,i_op_Ax = run(_pointing,az,_tod,_weights,offset_length,pixel_edges,
                  feedid, obsids,
+                 threshold=threshold,
                  special_weight=None)
-    m,h = bin_offset_map(_pointing,
-                         np.repeat(result,offset_length),
-                         _weights,
-                         offset_length,
-                         pixel_edges,extend=False)
-
+    
     n,h = bin_offset_map(_pointing,
                          _tod,
                          _weights,
                          offset_length,
                          pixel_edges,extend=False)
-    d2,h = bin_offset_map(_pointing,
-                         (_tod-np.repeat(result,offset_length))**2,
+
+    noffsets = _tod.size//offset_length
+    offsets = i_op_Ax.op_F(result) 
+
+    m,h = bin_offset_map(_pointing,
+                         _tod-offsets,
                          _weights,
                          offset_length,
                          pixel_edges,extend=False)
@@ -380,16 +465,15 @@ def destriper_iteration(_pointing,
     m = mpi_share_map(m)
     h = mpi_share_map(h)
     n = mpi_share_map(n)
-    d2 = mpi_share_map(d2)
 
     if rank == 0:
         m[h!=0] /= h[h!=0]
         n[h!=0] /= h[h!=0]
-        d2[h!=0] /= h[h!=0]
 
-        return {'map':n-m,'naive':n, 'weight':h,'map2':d2}, result
+        return {'map':m,'naive':n, 'weight':h,'map2':h}, result,i_op_Ax
     else:
-        return {'map':None,'naive':None,'weight':None,'map2':None}  , result
+        return {'map':None,'naive':None,'weight':None,'map2':None}  , result,i_op_Ax
+
 
 def run_destriper(_pointing,
                   _tod,
@@ -398,93 +482,26 @@ def run_destriper(_pointing,
                   pixel_edges,
                   az,
                   el,
+                  ra,
+                  dec,
                   feedid,
                   obsids,
                   obsid_cuts,
                   chi2_cutoff=100,special_weight=None,healpix=False):
 
-    _maps,result = destriper_iteration(_pointing,
+    _maps,result,i_op_Ax = destriper_iteration(_pointing,
+                                       az,
                                       _tod,
                                       _weights,
                                       offset_length,
                                       pixel_edges,
                                       feedid,
                                       obsids,
+                                      
                                       special_weight=None)
 
-    # Here we will check Chi^2 contributions of each datum to each pixel.
-    # Data that exceeds the chi2_cutoff are weighted to zero 
-    # Share maps to all nodes
-    #for k in maps.keys():
-    #    maps[k] = comm.bcast(maps[k],root=0)
-
-    #residual = (_tod-np.repeat(result,offset_length)-maps['map'][_pointing])
-    #chi2 = residual**2*_weights
-    #_weights[chi2 > chi2_cutoff] = 0
-    #_maps,result = destriper_iteration(_pointing,
-    #                                  _tod,
-    #                                  _weights,
-    #                                  offset_length,
-    #                                  pixel_edges,
-    #                                  feedid,
-    #                                  obsids,
-    #                                  special_weight=None)
-
-
-    #if rank == 0:
-    #    print('HELLO',flush=True)
 
     maps = {'All':_maps}
-    # now make each individual feed map
-    # ufeeds = np.unique(feedid)
-    # for feed in ufeeds:
-    #     sel = np.where((feedid == feed))[0]
-    #     m,h = bin_offset_map(_pointing[sel],
-    #                          residual[sel],
-    #                          _weights[sel],
-    #                          offset_length,
-    #                          pixel_edges,extend=False)
-    #     m = mpi_share_map(m)
-    #     h = mpi_share_map(h)
-    #     if rank == 0:
-    #         m[h!=0] /= h[h!=0]
-
-    #         maps[f'Feed{feed:02d}']={'map':m,'weight':h}
-    #     else:           
-    #         maps[f'Feed{feed:02d}']={'map':None,'weight':None}
-    
-    # for (low,high) in obsid_cuts:
-    #     sel = np.where(((obsids >= low) & (obsids < high)))[0]
-    #     m,h = bin_offset_map(_pointing[sel],
-    #                          residual[sel],
-    #                          _weights[sel],
-    #                          offset_length,
-    #                          pixel_edges,extend=False)
-    #     m = mpi_share_map(m)
-    #     h = mpi_share_map(h)
-    #     if rank == 0:
-    #         m[h!=0] /= h[h!=0]
-
-    #         maps[f'ObsID{low:07d}-{high:07d}']={'map':m,'weight':h}
-    #     else:           
-    #         maps[f'ObsID{low:07d}-{high:07d}']={'map':None,'weight':None}
-
-    # for feed in ufeeds:
-    #     for (low,high) in obsid_cuts:
-    #         sel = np.where(((obsids >= low) & (obsids < high) & (feedid == feed)))[0]
-    #         m,h = bin_offset_map(_pointing[sel],
-    #                              residual[sel],
-    #                              _weights[sel],
-    #                              offset_length,
-    #                              pixel_edges,extend=False)
-    #         m = mpi_share_map(m)
-    #         h = mpi_share_map(h)
-    #         if rank == 0:
-    #             m[h!=0] /= h[h!=0]
-
-    #             maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':m,'weight':h}
-    #         else:           
-    #             maps[f'Feed{feed:02d}-ObsID{low:07d}-{high:07d}']={'map':None,'weight':None}
 
     return maps
 
@@ -583,7 +600,7 @@ def test():
     comm.Barrier()
     maps = run_destriper(_pointing,_tod,_weights,offset_length,pixel_edges)
 
-    if rank == 0:
+    if False:
         pyplot.plot(maps['map2']-maps['map']**2)
         pyplot.show()
         pyplot.subplot(131)

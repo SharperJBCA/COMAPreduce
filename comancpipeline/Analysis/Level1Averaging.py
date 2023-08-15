@@ -186,6 +186,7 @@ def solve_gain_solution(d, templates, white_noise, fknee, alpha, tau=1./50., use
     matvec = AMatrix(templates, white_noise, fknee, alpha, tau, use_prior=use_prior)
     A = LinearOperator((n, n), matvec=matvec, dtype=np.float64)
     b = matvec.create_b(d)
+
     try:
         g, info = cg(A, b)
     except ValueError: 
@@ -951,30 +952,40 @@ class Level1AveragingGainCorrection(Level1Averaging):
                     data_reshape[nan_tod] = ones[nan_tod]
 
                     tod[...,start:end] = data_reshape.reshape((n_bands, n_channels, end-start))
+                    print('ORIGINAL TOD', np.nanstd(tod))
+
                     if data.source_name in Coordinates.CalibratorList: 
                         clean_tod = tod[...,start:end] - np.nanmedian(tod[...,start:end],axis=-1)[...,None]
                     else:
                         clean_tod = self.remove_atmosphere(data.airmass[ifeed,start:end], tod[...,start:end], level2_data['atmosphere/fit_values'][iscan,ifeed,:])
+                    print('AFTER AIR', np.nanstd(clean_tod))
                     clean_tod, normalisation_factor = self.normalise_data(clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:], level2_data['vane/system_gain'][0,ifeed,:,:]) 
+                    print('AFTER NORMALISATION', np.nanstd(clean_tod))
                     clean_tod = self.median_filter(clean_tod, int(50*120))
+                    print('AFTER MEDIAN FILTER', np.nanstd(clean_tod))
                     #frequency_power_spectra = self.frequency_spectra_per_band(clean_tod)
                     try:
                         dG = self.gain_subtraction(data, clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:]) 
                     except (ValueError, IndexError): 
                         dG = None
+
+                # Build weights, mask out edge channels and centre channels
                 weights = 1./level2_data.system_temperature[0,ifeed]**2 
                 weights[level2_data.system_temperature[0,ifeed] == 0] = 0
                 weights[:,:10] = 0
                 weights[:,-10:] = 0
                 weights[:,510:515] = 0
-                
+                print('AFTER GAIN', np.nanstd(dG))
+
                 if not isinstance(dG, type(None)):
                     residual = (clean_tod - dG[None,None,:])*normalisation_factor/level2_data['vane/system_gain'][0,ifeed,:,:,None]
                 else:
                     residual = clean_tod*normalisation_factor/level2_data['vane/system_gain'][0,ifeed,:,:,None]
+                print('AFTER RENORMALISATION', np.nanstd(residual))
 
                 residual = self.weighted_average_over_band(residual, weights) 
-                
+                print('AFTER BAND AVERAGING', np.nanstd(residual))
+
                 if (iscan == 0) & (not isinstance(dG, type(None))):
                     avg_tod = self.weighted_average_over_band(clean_tod, weights) 
                     ### Plot some diagnostics

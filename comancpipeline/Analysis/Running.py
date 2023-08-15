@@ -34,6 +34,7 @@ class PipelineFunction:
     """Template class implementing the minimum functions needed for a pipeline routine"""
     STATE : bool = True 
     level2 : COMAPLevel2 = field(default_factory=COMAPLevel2) 
+    write : bool = True 
 
     @property  
     def save_data(self):
@@ -89,7 +90,8 @@ class Runner:
         for filename in self._filelist:
             logging.info(f'PROCESSING {path.basename(filename)}')
             time.sleep(rank*15)
-            self.level2_data = COMAPLevel2(filename=self.data_path(filename))            
+            self.level2_data = COMAPLevel2(filename=self.data_path(filename))        
+
             processes = [process(level2=self.level2_data,**kwargs) for (process,kwargs) in self.processes.items()]
 
             print('Loading level 1 data')
@@ -105,7 +107,8 @@ class Runner:
                         logging.info(f'{process.name} has stopped processing file') 
                         break 
                     self.level2_data.update(process)
-                    self.level2_data.write_data_file(f'{self.level2_data_dir}/Level2_{path.basename(filename)}')
+                    if process.write:
+                        self.level2_data.write_data_file(f'{self.level2_data_dir}/Level2_{path.basename(filename)}')
 
 
     def run_astro_cal(self):

@@ -259,10 +259,10 @@ class SourcePosition:
         return _x, _y 
     
     def rotate_ra(self, ra_telescope, dec_telescope): 
-        pa = Coordinates.pa(self.ra, self.dec, self.mjd,
+        pa = Coordinates.pa(self.ra[::50], self.dec[::50], self.mjd[::50],
                             Coordinates.comap_longitude, 
                             Coordinates.comap_latitude)
-        
+        pa = np.interp(self.mjd, self.mjd[::50], pa)
         
         ra_r, dec_r = Coordinates.Rotate(ra_telescope,
                                          dec_telescope,
@@ -270,9 +270,9 @@ class SourcePosition:
         
         s = SourcePosition(source=self.source, _mjd=self._mjd)
         s.ra = np.zeros(self._ra.size)
-        s.ra[self.mask] = ra_r 
+        s.ra[self.mask] = ra_r
         s.dec = np.zeros(self._dec.size)
-        s.dec[self.mask] = dec_r 
+        s.dec[self.mask] = dec_r
         s.set_mask(self.mask)
         return s 
         
@@ -434,6 +434,7 @@ class FitSource(PipelineFunction):
     name : str = 'FitSource'
     
     overwrite : bool = False
+    suffix : str = ''
     calibration : str = 'none' 
     STATE : bool = True 
     MEDIAN_FILTER_STEP : int = 200
@@ -449,9 +450,9 @@ class FitSource(PipelineFunction):
         
         self.data = {}
 
-        self.groups = [f'{self.calibration}_source_fit/fits',
-                       f'{self.calibration}_source_fit/errors',
-                       f'{self.calibration}_source_fit/chi2']    
+        self.groups = [f'{self.calibration}_source_fit{self.suffix}/fits',
+                       f'{self.calibration}_source_fit{self.suffix}/errors',
+                       f'{self.calibration}_source_fit{self.suffix}/chi2']    
 
 
     @property 
@@ -525,6 +526,11 @@ class FitSource(PipelineFunction):
         except np.linalg.LinAlgError: 
             return result.x, np.zeros(result.x.size)+np.nan, chi2
 
+    def update_source_radec(self, az, el, mjd):
+        """Use the updated SLALIB routines to calculate radec"""
+
+        ra, dec = Coordinates.h2e_full(az, el, mjd, Coordinates.comap_longitude, Coordinates.comap_latitude)
+        return ra, dec 
     
     def fit_source(self, data : HDF5Data, level2_data : COMAPLevel2):
         """ """
@@ -539,9 +545,9 @@ class FitSource(PipelineFunction):
         
         n_feeds, n_bands, n_tod = level2_data.tod_shape 
         
-        self.data[f'{self.calibration}_source_fit/fits'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
-        self.data[f'{self.calibration}_source_fit/errors'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
-        self.data[f'{self.calibration}_source_fit/chi2'] = np.zeros((n_feeds,n_bands, ))
+        self.data[f'{self.calibration}_source_fit{self.suffix}/fits'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
+        self.data[f'{self.calibration}_source_fit{self.suffix}/errors'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
+        self.data[f'{self.calibration}_source_fit{self.suffix}/chi2'] = np.zeros((n_feeds,n_bands, ))
 
 
         def gaussian2d(x, y, A, B, x0, y0, sigmax, sigmay):
@@ -569,8 +575,13 @@ class FitSource(PipelineFunction):
             tod_clean = tod - self.median_filter(tod, self.MEDIAN_FILTER_STEP)
             weights = np.ones(tod_clean.size)/rms**2 
             self.source_position.set_mask(mask)
-            relative_source_position = self.source_position.rotate_ra(level2_data.ra[ifeed,mask],
-                                                                      level2_data.dec[ifeed,mask])
+
+            if self.suffix == '_updated_radec':
+                ra, dec = self.update_source_radec(level2_data.az[ifeed,mask],level2_data.el[ifeed,mask],level2_data.mjd[mask])
+                relative_source_position = self.source_position.rotate_ra(ra,dec)
+            else:
+                relative_source_position = self.source_position.rotate_ra(level2_data.ra[ifeed,mask],
+                                                                        level2_data.dec[ifeed,mask])
 
             
             source_map = SkyMap()
@@ -617,9 +628,9 @@ class FitSource(PipelineFunction):
             pyplot.savefig(f'{self._full_figure_directory}/{self.source}_feed{feed:02d}_band{iband:02d}.png')
             pyplot.close()
             
-            self.data[f'{self.calibration}_source_fit/fits'][ifeed,iband]  = result
-            self.data[f'{self.calibration}_source_fit/errors'][ifeed,iband]  = errors
-            self.data[f'{self.calibration}_source_fit/chi2'][ifeed,iband]  = chi2
+            self.data[f'{self.calibration}_source_fit{self.suffix}/fits'][ifeed,iband]  = result
+            self.data[f'{self.calibration}_source_fit{self.suffix}/errors'][ifeed,iband]  = errors
+            self.data[f'{self.calibration}_source_fit{self.suffix}/chi2'][ifeed,iband]  = chi2
             logging.info(f'Feed {feed:02d} Band {iband:02d} A: {result[0]:.1f} pm {errors[0]:.1f}, x0: {result[2]:.1f} pm {errors[2]:.1f}')
 
         # return 

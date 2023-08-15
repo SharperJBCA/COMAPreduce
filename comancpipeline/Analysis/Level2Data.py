@@ -11,6 +11,7 @@ from tqdm import tqdm
 from astropy.time import Time 
 import os
 from matplotlib import pyplot 
+import h5py
 
 from dataclasses import dataclass, field 
 
@@ -64,6 +65,48 @@ class AssignLevel1Data(PipelineFunction):
         
         self.attrs['comap'] = {k:v for k,v in data.attrs('comap').items()}
         
+        return self.STATE
+    
+@dataclass 
+class UseLevel2Pointing(PipelineFunction):
+    """Class was implemented to test the pointing updates """
+    name : str = 'UseLevel2Pointing'
+    
+    overwrite : bool = False
+
+    level2 : COMAPLevel2 = field(default_factory=COMAPLevel2) 
+
+    def __post_init__(self):
+        
+        self.data = {}
+        self.attrs = {} 
+        self.groups = list(self.data.keys())
+    @property 
+    def save_data(self):
+        """Use full path that will be saved into the HDF5 file"""
+            
+        attrs = {}
+
+        return self.data, self.attrs
+
+    def __call__(self, data : HDF5Data, level2_data : COMAPLevel2):
+        
+        if not self.overwrite:
+            return self.STATE
+        if not os.path.exists(level2_data.filename):
+            return self.STATE 
+        h = h5py.File(level2_data.filename,'r')
+        level2_data.ra = h['spectrometer/pixel_pointing/pixel_ra'][...]
+        level2_data.dec = h['spectrometer/pixel_pointing/pixel_dec'][...]
+        level2_data.az = h['spectrometer/pixel_pointing/pixel_az'][...]
+        level2_data.el = h['spectrometer/pixel_pointing/pixel_el'][...]
+        h.close()
+
+        data.ra = level2_data.ra
+        data.dec= level2_data.dec
+        data.az = level2_data.az
+        data.el = level2_data.el
+        self.attrs['comap'] = {k:v for k,v in data.attrs('comap').items()}
         return self.STATE
 
 @dataclass 

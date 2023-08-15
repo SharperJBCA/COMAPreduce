@@ -5,7 +5,7 @@ import os
 from comancpipeline.Analysis.Running import Runner
 from comancpipeline.Analysis.VaneCalibration import MeasureSystemTemperature
 from comancpipeline.Analysis.Level1Averaging import CheckLevel1File,Level1Averaging, AtmosphereRemoval,Level1AveragingGainCorrection, SkyDip
-from comancpipeline.Analysis.Level2Data import AssignLevel1Data, WriteLevel2Data, Level2Timelines, Level2FitPowerSpectrum
+from comancpipeline.Analysis.Level2Data import AssignLevel1Data, UseLevel2Pointing, WriteLevel2Data, Level2Timelines, Level2FitPowerSpectrum
 from comancpipeline.Analysis.AstroCalibration import FitSource
 from comancpipeline.Analysis.Statistics import NoiseStatistics, Spikes
 from comancpipeline.Analysis.PostCalibration import ApplyCalibration
@@ -36,13 +36,14 @@ def create_tod_processing(filelist_name, figure_directory='figures', level2_dire
     tod_processing = Runner()
     processes = {
         CheckLevel1File: {'overwrite': True},
-        AssignLevel1Data: {'overwrite': False},
+        AssignLevel1Data: {'overwrite': False,'write':False},
+        UseLevel2Pointing: {'overwrite': True},
         MeasureSystemTemperature: {'overwrite': False,'figure_directory':figure_directory},
         SkyDip: {'overwrite': False,'figure_directory':figure_directory},
         AtmosphereRemoval: {'overwrite': False},
         Level1AveragingGainCorrection: {'overwrite': False,'figure_directory':figure_directory},
         Level2FitPowerSpectrum: {'overwrite': False, 'figure_directory':figure_directory},
-        FitSource: {'overwrite': True, 'calibration': 'CasA','figure_directory':figure_directory},
+        FitSource: {'overwrite': True, 'calibration': 'jupiter','figure_directory':figure_directory,'suffix':'_updated_radec_and_azel'},
         Spikes: {'overwrite': False}
     }
 
@@ -103,7 +104,7 @@ def create_plot_processing(level2_data_dir, source, output_dir):
 
 def main():
     import sys
-    if False:
+    if True:
         filelist_name = sys.argv[1] 
         figure_directory_name = sys.argv[2]
         level2_directory_name = sys.argv[3]
@@ -112,8 +113,8 @@ def main():
 
         tod_processing.run_tod()
     
-    if True:
-        astro_processing = create_astro_cal(targets='processed_runlists/level2_fg9.txt',
+    if False:
+        astro_processing = create_astro_cal(targets='processed_runlists/level2_galactic.txt',
                                         source='CasA',figure_directory='figures_CasA',
                                         cal_files = 'processed_runlists/level2_CasA.txt')
         astro_processing.run_astro_cal() 

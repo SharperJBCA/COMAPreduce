@@ -1,5 +1,5 @@
 import numpy as np
-import Destriper
+import Destriper as Destriper
 import COMAPData
 import sys
 from astropy.wcs import WCS
@@ -25,22 +25,22 @@ def write_map(prefix,maps,map_info,output_dir,iband,postfix=''):
 
     for k,v in maps.items():
         hdulist = []
-        hdu = fits.PrimaryHDU(np.reshape(v['map'],(nxpix,nypix)),
+        hdu = fits.PrimaryHDU(np.reshape(v['map'],(nypix,nxpix)),
                               header=wcs.to_header())
         hdulist += [hdu]
         columns = ['map']
         if 'naive' in v:
-            naive = fits.ImageHDU(np.reshape(v['naive'],(nxpix,nypix)),
+            naive = fits.ImageHDU(np.reshape(v['naive'],(nypix,nxpix)),
                                   name='Naive',header=wcs.to_header())
             hdulist += [naive]
             columns += ['naive']
         if 'weight' in v:
-            cov = fits.ImageHDU(np.reshape(np.sqrt(1./v['weight']),(nxpix,nypix)),
+            cov = fits.ImageHDU(np.reshape(np.sqrt(1./v['weight']),(nypix,nxpix)),
                                 name='Noise',header=wcs.to_header())
             hdulist += [cov]
             columns += ['rms']
         if 'map2' in v:
-            std = fits.ImageHDU(np.reshape(np.sqrt(v['map2']-v['map']**2),(nxpix,nypix)),
+            std = fits.ImageHDU(np.reshape(np.sqrt(v['map2']-v['map']**2),(nypix,nxpix)),
                                 name='NoiseSTD',
                                 header=wcs.to_header())
             hdulist += [std]
@@ -90,6 +90,7 @@ def main(filelistname,
          crpix=[ 240,240],
          ctype = ['RA---CAR', 'DEC--CAR'],
          cdelt=[-0.016666,0.016666],
+         use_gain_filter=True,
          calibration=True,
          calibrator='TauA', 
          healpix=False):
@@ -140,11 +141,12 @@ def main(filelistname,
     print(f'Rank {rank} working on {filelist.size} files',flush=True )
 
     for iband in range(0,4):
-        tod, weights, pointing, remapping_array, az, el ,feedid, obsids = COMAPData.read_comap_data(filelist,map_info,
+        tod, weights, pointing, remapping_array, az, el, ra, dec, feedid, obsids = COMAPData.read_comap_data(filelist,map_info,
                                                                                    feed_weights=feed_weights,
                                                                                    offset_length=offset_length,
                                                                                    iband=iband,
                                                                                    feeds=feeds,
+                                                                                   use_gain_filter=use_gain_filter,
                                                                                    calibration=calibration,
                                                                                    calibrator=calibrator,
                                                                                    healpix=healpix)
@@ -166,6 +168,8 @@ def main(filelistname,
                                        pixel_edges,
                                        az,
                                        el,
+                                       ra,
+                                       dec,
                                        feedid,
                                        obsids,
                                        obsid_cuts,
@@ -195,6 +199,7 @@ if __name__ == "__main__":
          crpix=params['crpix'],
          ctype=params['ctype'],
          cdelt=params['cdelt'],
+         use_gain_filter=p['ReadData']['use_gain_filter'],
          calibration=p['ReadData']['calibration'],
          calibrator=p['ReadData']['calibrator'],
          healpix=params['healpix'])
