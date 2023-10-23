@@ -60,65 +60,29 @@ def share_b(b):
 # Compute the sum of the array x
 def mpi_sum(x):
 
-    # Sum the local values
-    local = np.array([np.sum(x)])
-
-    # Initialize the array that will store the results from each process
-    if rank == 0:
-        allvals = np.zeros(size)
-    else:
-        allvals = None
-
-    # Gather the local values from each process into the array allvals
-    comm.Gather(local,allvals,root=0)
-
-    # Sum the results
-    if rank == 0:
-        all_resid = np.array([np.sum(allvals)])
-    else:
-        all_resid = np.zeros(1)
-
-    # Broadcast the sum to the other processes
-    comm.Bcast(all_resid,root=0)
-
-    # Return the sum
-    return np.sum(all_resid)
+    local_sum = np.sum(x)  # Sum the elements on this process
+    global_sum = np.array([0.0])
+    
+    # Sum across all processes and return the result to all processes
+    comm.Allreduce([local_sum, MPI.DOUBLE], [global_sum, MPI.DOUBLE], op=MPI.SUM)
+    
+    return global_sum[0]
 
 def mpi_sum_vector(x):
-
-    local = x
-    if rank == 0:
-        allvals = np.zeros((size,x.size))
-    else:
-        allvals = None
-    comm.Gather(local,allvals,root=0)
-    if rank == 0:
-        all_resid = np.sum(allvals,axis=0)
-    else:
-        all_resid = np.zeros(x.size)
-    comm.Bcast(all_resid,root=0)
+    all_resid = np.zeros_like(x)
+    comm.Allreduce(x, all_resid, op=MPI.SUM)
+    
     return all_resid
 
 
 def mpi_share_map(m):
-    comm.Barrier() 
-    if rank == 0:
-        print('SHARE MAP') 
-        
-    for irank in range(1,size):
-        if (rank == 0) & (size > 1):
-            m_node2 = np.zeros(m.size)
-            print(f'{rank} waiting for {irank}')
-            comm.Recv(m_node2, source=irank,tag=irank)
-            m += m_node2
-
-        elif (rank !=0 ) & (rank == irank) & (size > 1):
-            print(f'{irank} sending to 0')
-            comm.Send(m, dest=0,tag=irank)
-    return m
+    m_sum = np.zeros_like(m)
+    comm.Reduce(m, m_sum, op=MPI.SUM, root=0)
+    
+    return m_sum if rank == 0 else m
 
 
-def cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b,x0 = None,niter=100,threshold=1e-2,verbose=False, offset_length=50):
+def cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b,x0 = None,niter=1000,threshold=1e-2,verbose=False, offset_length=50):
     """
     Biconjugate CGM implementation from Numerical Recipes 2nd, pg 83-85
     
@@ -369,7 +333,7 @@ class op_Ax_with_ground:
         return np.concatenate([sum_diff,sum_az])
 
 
-def run(pointing,az,tod,weights,offset_length,pixel_edges,feedid, obsids, special_weight=None, threshold=1e-3):
+def run(pointing,az,tod,weights,offset_length,pixel_edges,feedid, obsids, special_weight=None, threshold=1e-3,niter=1000):
 
     #i_op_Ax = op_Ax_with_ground(pointing,az,obsids,feedid,weights,offset_length,pixel_edges,
     #                 special_weight=special_weight)
@@ -384,7 +348,7 @@ def run(pointing,az,tod,weights,offset_length,pixel_edges,feedid, obsids, specia
     if rank == 0:
         print('Starting CG',flush=True)
     if True:
-        x = cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b, offset_length=offset_length,threshold=threshold)
+        x = cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b, offset_length=offset_length,threshold=threshold,niter=niter)
     else:
         x = np.zeros(b.size)
     if rank == 0:
@@ -440,11 +404,13 @@ def destriper_iteration(_pointing,
                         pixel_edges,
                         feedid,
                         obsids,
-                        threshold=1e-3,
+                        threshold=1e-6,
+                        niter=100,
                         special_weight=None):
     result,i_op_Ax = run(_pointing,az,_tod,_weights,offset_length,pixel_edges,
                  feedid, obsids,
                  threshold=threshold,
+                 niter=niter,
                  special_weight=None)
     
     n,h = bin_offset_map(_pointing,
@@ -462,15 +428,24 @@ def destriper_iteration(_pointing,
                          offset_length,
                          pixel_edges,extend=False)
 
+    _,hits = bin_offset_map(_pointing,
+                         _tod-offsets,
+                         np.ones(_tod.size),
+                         offset_length,
+                         pixel_edges,extend=False)
+
+    print('About to share map', rank)
     m = mpi_share_map(m)
     h = mpi_share_map(h)
     n = mpi_share_map(n)
+    hits = mpi_share_map(hits)
+    print('Map Shared', rank)
 
     if rank == 0:
         m[h!=0] /= h[h!=0]
         n[h!=0] /= h[h!=0]
 
-        return {'map':m,'naive':n, 'weight':h,'map2':h}, result,i_op_Ax
+        return {'map':m,'naive':n, 'weight':h,'map2':h, 'hits':hits}, result,i_op_Ax
     else:
         return {'map':None,'naive':None,'weight':None,'map2':None}  , result,i_op_Ax
 
@@ -487,6 +462,8 @@ def run_destriper(_pointing,
                   feedid,
                   obsids,
                   obsid_cuts,
+                  threshold=1e-6,
+                  niter=100,
                   chi2_cutoff=100,special_weight=None,healpix=False):
 
     _maps,result,i_op_Ax = destriper_iteration(_pointing,
@@ -497,11 +474,28 @@ def run_destriper(_pointing,
                                       pixel_edges,
                                       feedid,
                                       obsids,
-                                      
+                                      threshold=threshold,
+                                      niter=niter,
                                       special_weight=None)
 
 
     maps = {'All':_maps}
+
+    # Create individual feed maps too
+    # unique_feeds = np.unique(feedid)
+    # offsets = i_op_Ax.op_F(result) 
+
+    # for feed in unique_feeds:
+    #     select = feedid == feed
+    #     print('About to share map', feed, rank)
+    #     n,h = bin_offset_map(_pointing[select],
+    #                         _tod[select]-offsets[select],
+    #                         _weights[select],
+    #                         offset_length,
+    #                         pixel_edges,extend=False)
+    #     n = mpi_share_map(n)
+    #     print('Shared map', feed, rank)
+    #     maps[f'Feed{feed:02d}'] = {'map':n}
 
     return maps
 

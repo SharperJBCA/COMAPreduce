@@ -450,9 +450,7 @@ class FitSource(PipelineFunction):
         
         self.data = {}
 
-        self.groups = [f'{self.calibration}_source_fit{self.suffix}/fits',
-                       f'{self.calibration}_source_fit{self.suffix}/errors',
-                       f'{self.calibration}_source_fit{self.suffix}/chi2']    
+        self.groups = None 
 
 
     @property 
@@ -462,7 +460,25 @@ class FitSource(PipelineFunction):
 
         return self.data, {}
     
+    def pre_init(self, data : HDF5Data):
+        """Function to run before initialising the pipeline"""
+        self.source = data.source_name
+        self.groups = [f'{self.source}_source_fit{self.suffix}/fits',
+                       f'{self.source}_source_fit{self.suffix}/errors',
+                       f'{self.source}_source_fit{self.suffix}/chi2']    
+
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
+
+        self.source = data.source_name
+
+        # Check source else return 
+        if not self.source_good(): return self.STATE
+
+        self.groups = [f'{self.source}_source_fit{self.suffix}/fits',
+                       f'{self.source}_source_fit{self.suffix}/errors',
+                       f'{self.source}_source_fit{self.suffix}/chi2']    
+
+
         self._full_figure_directory = f'{self.figure_directory}/{data.obsid}'
         if not os.path.exists(self._full_figure_directory):
             os.makedirs(self._full_figure_directory)
@@ -535,19 +551,15 @@ class FitSource(PipelineFunction):
     def fit_source(self, data : HDF5Data, level2_data : COMAPLevel2):
         """ """
         
-        self.source = data.source_name
-
-        # Check source else return 
-        if not self.source_good(): return
         
         self.source_position = SourcePosition(source=self.source,
                                               _mjd = level2_data.mjd) 
         
         n_feeds, n_bands, n_tod = level2_data.tod_shape 
         
-        self.data[f'{self.calibration}_source_fit{self.suffix}/fits'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
-        self.data[f'{self.calibration}_source_fit{self.suffix}/errors'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
-        self.data[f'{self.calibration}_source_fit{self.suffix}/chi2'] = np.zeros((n_feeds,n_bands, ))
+        self.data[f'{self.source}_source_fit{self.suffix}/fits'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
+        self.data[f'{self.source}_source_fit{self.suffix}/errors'] = np.zeros((n_feeds,n_bands,self.NPARAMS, ))
+        self.data[f'{self.source}_source_fit{self.suffix}/chi2'] = np.zeros((n_feeds,n_bands, ))
 
 
         def gaussian2d(x, y, A, B, x0, y0, sigmax, sigmay):
@@ -628,9 +640,9 @@ class FitSource(PipelineFunction):
             pyplot.savefig(f'{self._full_figure_directory}/{self.source}_feed{feed:02d}_band{iband:02d}.png')
             pyplot.close()
             
-            self.data[f'{self.calibration}_source_fit{self.suffix}/fits'][ifeed,iband]  = result
-            self.data[f'{self.calibration}_source_fit{self.suffix}/errors'][ifeed,iband]  = errors
-            self.data[f'{self.calibration}_source_fit{self.suffix}/chi2'][ifeed,iband]  = chi2
+            self.data[f'{self.source}_source_fit{self.suffix}/fits'][ifeed,iband]  = result
+            self.data[f'{self.source}_source_fit{self.suffix}/errors'][ifeed,iband]  = errors
+            self.data[f'{self.source}_source_fit{self.suffix}/chi2'][ifeed,iband]  = chi2
             logging.info(f'Feed {feed:02d} Band {iband:02d} A: {result[0]:.1f} pm {errors[0]:.1f}, x0: {result[2]:.1f} pm {errors[2]:.1f}')
 
         # return 

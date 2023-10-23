@@ -355,7 +355,11 @@ class AtmosphereRemoval(PipelineFunction):
         d = tod[select] 
         d = d[:,select_time].flatten()[:,None]
 
-        b = Zmasked.T.dot(d)
+        try:
+            b = Zmasked.T.dot(d)
+        except ValueError:
+            logging.INFO(f'{self.name}: Value Error in Atmosphere Fit')
+            return np.zeros(Nfreq), np.zeros(Nfreq)
         M = (Zmasked.T.dot(Zmasked))
         fit_values = linalg.spsolve(M,b)
         offset = np.zeros(1024) + np.nan
@@ -975,16 +979,15 @@ class Level1AveragingGainCorrection(Level1Averaging):
                 weights[:,:10] = 0
                 weights[:,-10:] = 0
                 weights[:,510:515] = 0
-                print('AFTER GAIN', np.nanstd(dG))
+                if not isinstance(dG, type(None)):
+                    print('AFTER GAIN', np.nanstd(dG))
 
                 if not isinstance(dG, type(None)):
                     residual = (clean_tod - dG[None,None,:])*normalisation_factor/level2_data['vane/system_gain'][0,ifeed,:,:,None]
                 else:
                     residual = clean_tod*normalisation_factor/level2_data['vane/system_gain'][0,ifeed,:,:,None]
-                print('AFTER RENORMALISATION', np.nanstd(residual))
 
                 residual = self.weighted_average_over_band(residual, weights) 
-                print('AFTER BAND AVERAGING', np.nanstd(residual))
 
                 if (iscan == 0) & (not isinstance(dG, type(None))):
                     avg_tod = self.weighted_average_over_band(clean_tod, weights) 
@@ -1073,3 +1076,5 @@ class Level1Plotting(PipelineFunction):
             fig.tight_layout()
             fig.savefig(f'{self._full_figure_directory}/frequency_spectra_feed_{feed:02d}.png')
             plt.close(fig)
+
+

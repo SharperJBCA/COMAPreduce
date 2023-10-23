@@ -36,14 +36,13 @@ def create_tod_processing(filelist_name, figure_directory='figures', level2_dire
     tod_processing = Runner()
     processes = {
         CheckLevel1File: {'overwrite': True},
-        AssignLevel1Data: {'overwrite': False,'write':False},
-        UseLevel2Pointing: {'overwrite': True},
+        AssignLevel1Data: {'overwrite': False,'write':True},
         MeasureSystemTemperature: {'overwrite': False,'figure_directory':figure_directory},
         SkyDip: {'overwrite': False,'figure_directory':figure_directory},
         AtmosphereRemoval: {'overwrite': False},
         Level1AveragingGainCorrection: {'overwrite': False,'figure_directory':figure_directory},
         Level2FitPowerSpectrum: {'overwrite': False, 'figure_directory':figure_directory},
-        FitSource: {'overwrite': True, 'calibration': 'jupiter','figure_directory':figure_directory,'suffix':'_updated_radec_and_azel'},
+        FitSource: {'overwrite': False, 'calibration': 'jupiter','figure_directory':figure_directory},
         Spikes: {'overwrite': False}
     }
 

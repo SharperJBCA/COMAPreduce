@@ -138,6 +138,13 @@ def GetFeeds(file_feeds : np.ndarray, selected_feeds : np.ndarray):
     output_indices = output_indices[gd]
     return feed_indices, output_indices 
 
+def get_scan_edges(d):
+    try:
+        scan_edges = d['averaged_tod/scan_edges'][:]
+    except KeyError:
+        scan_edges = [[0,0]]
+    return scan_edges
+
 def countDataSize(filename, Nfeeds, offset_length,level3='.'):
     """
     Opens each datafile and determines the number of samples
@@ -151,11 +158,7 @@ def countDataSize(filename, Nfeeds, offset_length,level3='.'):
         return info
 
     N = 0
-    try:
-        scan_edges = d['averaged_tod/scan_edges'][:]
-    except KeyError:
-        print('BAD FILE', filename)
-        raise KeyError
+    scan_edges = get_scan_edges(d)
     for (start,end) in scan_edges:
         N += int((end-start)//offset_length * offset_length)
 
@@ -216,13 +219,24 @@ def get_sun_centric_coords(ra,dec,mjd):
 def haversine(theta1,phi1,theta2,phi2):
     return 2*np.arcsin(np.sqrt(np.sin((theta2-theta1)/2)**2+np.cos(theta1)*np.cos(theta2)*np.sin((phi2-phi1)/2)**2))
 
+def read_calibration_factors(d, source):
+    cal_factors = np.zeros((20,4))
+    cal_factors[:,0] = d['comap'].attrs[f'{source}_calibration_factor_band0']
+    cal_factors[:,1] = d['comap'].attrs[f'{source}_calibration_factor_band1']
+    cal_factors[:,2] = d['comap'].attrs[f'{source}_calibration_factor_band2']
+    cal_factors[:,3] = d['comap'].attrs[f'{source}_calibration_factor_band3']
+    return cal_factors 
+
+
 def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_gain_filter=True, feed_weights=1,iband=0,level3='.',calibration=False, calibrator='TauA'):
     """
     Want to select each feed and average the data over some frequency range
     """
 
     d = h5py.File(filename,'r')
-    if use_gain_filter:
+    source = d['comap'].attrs['source'].split(',')[0]
+
+    if use_gain_filter and not source in ['TauA','CasA','CygA','jupiter']:
         dset     = d['averaged_tod/tod']
     else:
         dset  = d['averaged_tod/tod_original']
@@ -232,51 +246,35 @@ def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_g
     dec_dset = d['spectrometer/pixel_pointing/pixel_dec']
     wei_dset = d['averaged_tod/weights']
     mjd_dset = d['spectrometer/MJD']
+    bad_feeds = d['comap'].attrs['bad_observation']
     try:
         spike_dset = d['spikes/spike_mask'][...]
+        if len(spike_dset.shape) == 1:
+            spike_dset = None 
     except KeyError:
+        spike_dset = None
         print('LOOK HERE FOR BAD FILE!!!!!', filename)
+    
     file_feeds = d['spectrometer/feeds'][...]
-    scan_edges = d['averaged_tod/scan_edges'][...]*1
+    scan_edges = get_scan_edges(d)
     if calibration:
         try:
-            cal_factors = d[f'astro_calibration/{calibrator}_cal_factors'][...]
+            cal_factors = read_calibration_factors(d, calibrator)
         except KeyError:
             print('LOOK HERE FOR BAD FILE!!!!!', filename)
-
     else:
         cal_factors = np.ones((dset.shape[0],dset.shape[1])) #
     
     file_feed_index, output_feed_index = GetFeeds(file_feeds, selected_feeds) # Length of nfeeds in file 
 
-    tod     = np.zeros((len(selected_feeds), datasize))
-    weights = np.zeros((len(selected_feeds), datasize))
-    az      = np.zeros((len(selected_feeds), datasize))
-    el      = np.zeros((len(selected_feeds), datasize))
-    ra     = np.zeros((len(selected_feeds), datasize))
-    dec     = np.zeros((len(selected_feeds), datasize))
-    feedid  = np.zeros((len(selected_feeds), datasize))
+    tod     = np.zeros((len(output_feed_index), datasize))
+    weights = np.zeros((len(output_feed_index), datasize))
+    az      = np.zeros((len(output_feed_index), datasize))
+    el      = np.zeros((len(output_feed_index), datasize))
+    ra     = np.zeros((len(output_feed_index), datasize))
+    dec     = np.zeros((len(output_feed_index), datasize))
+    feedid  = np.zeros((len(output_feed_index), datasize))
     obsid   = os.path.basename(filename).split('-')[1]
-
-    # Read in the stats too: Feed, Band, Time, Stat[White, Red, Alpha] 
-    if len(d['fnoise_fits/fnoise_fit_parameters'].shape) == 3:
-        print(filename)
-        return tod.flatten(), weights.flatten(),az.flatten(), el.flatten(), feedid.flatten().astype(int)
-    fnoise = d['fnoise_fits/fnoise_fit_parameters'][...]
-
-    # Read in data from each feed
-    #def norm_data(d):
-    #    # d is shape (Nfeed,Ntime)
-    #    # normalise each feed 
-    #    d -= np.nanmean(d,axis=1)[:,None]
-    #    d /= np.nanstd(d,axis=1)[:,None]
-    #    return d
-    #calibrated_data = dset[file_feed_index,iband,:]/cal_factors[file_feed_index,iband,None]
-    #calibrated_data = norm_data(calibrated_data)
-    #average_data = np.sum(calibrated_data*wei_dset[file_feed_index,iband,:],axis=0)/np.sum(wei_dset[file_feed_index,iband,:],axis=0)
-    #bad = (average_data == 0)
-    #average_data[~bad] = median_filter(average_data[~bad],500)
-    #average_data[np.isnan(average_data)] = 0
 
     mask_map_option=False
     if mask_map_option:
@@ -287,13 +285,14 @@ def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_g
 
     idx = np.arange(pointing.size)
     for ifeed, (file_feed, output_feed) in enumerate(zip(file_feed_index, output_feed_index)):
-        #print(f'Calibration factors {file_feeds[file_feed]} {cal_factors[file_feed,iband]}')
+        if bad_feeds[file_feeds[file_feed]] > 0:
+            continue
+
         tod_file = dset[file_feed,iband,:]/cal_factors[file_feed,iband]
         tod_file_copy = tod_file[scan_edges[0][0]:scan_edges[-1][1]]*1. 
 
         weights_file = np.ones(tod_file.size)/auto_rms(tod_file)**2
 
-        spikes_file  = spike_dset[file_feed,iband,:]
         az_file      = az_dset[file_feed,:]
         #az_file -= np.median(az_file)
         
@@ -303,7 +302,10 @@ def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_g
         #ra_file      = ra_dset[file_feed,:]
         #dec_file     = dec_dset[file_feed,:]
         feedid[output_feed] = file_feeds[file_feed]
-        weights_file[spikes_file] = 0
+
+        if not isinstance(spike_dset,type(None)):
+            spikes_file  = spike_dset[file_feed,iband,:]
+            weights_file[spikes_file] = 0
         weights_file[ra_file < 10] = 0
 
 
@@ -328,7 +330,8 @@ def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_g
             #tod_copy[bad] = np.interp(p[bad],p[~bad],tod_copy[~bad])
             bad = (tod_copy == 0) 
             tod_slice = tod_file[start:start+N]
-            tod_slice[~bad] -= median_filter(tod_copy[~bad],400)
+            if not source in ['TauA','CasA','CygA','jupiter']:
+                tod_slice[~bad] -= median_filter(tod_copy[~bad],400)
 
             # Set first and last 10% of data to 0 weight to remove dithering effects
             Nten = int(N*0.1) 
@@ -369,8 +372,8 @@ def read_pixels(filename,datasize,offset_length,selected_feeds,map_info,level3='
     wcs = map_info['wcs']
     nxpix = map_info['nxpix']
     nypix = map_info['nypix']
-    scan_edges = d['averaged_tod/scan_edges'][...]
-    pixels = np.zeros((x.shape[0], datasize))
+    scan_edges = get_scan_edges(d)
+    pixels = np.zeros((len(output_feed_index), datasize))
     last = 0
     for iscan, (start,end) in enumerate(scan_edges):
         N = int((end-start)//offset_length * offset_length)
@@ -386,12 +389,13 @@ def read_pixels(filename,datasize,offset_length,selected_feeds,map_info,level3='
             xc, yc = gl*180./np.pi, (np.pi/2-gb)*180./np.pi
         if not isinstance(xc, np.ndarray):
             continue
-        pixels[:,last:last+N] = np.reshape(transform_to_1d(xc.flatten(),
+        _pixels = np.reshape(transform_to_1d(xc.flatten(),
                                                          yc.flatten(),
                                                          wcs,
                                                          nxpix,
                                                          nypix),ycshape)
-        
+        for ifeed, (file_feed, output_feed) in enumerate(zip(file_feed_index, output_feed_index)):
+            pixels[ifeed,last:last+N] = _pixels[output_feed,:]
         last += N
     d.close()
     return pixels 
@@ -536,96 +540,6 @@ def read_comap_data(filelist,map_info,feed_weights=None,iband=0,use_gain_filter=
     feedid = feedid[cut_empty_offsets] 
     obsids = obsids[cut_empty_offsets] 
     weights[~np.isfinite(weights)] = 0
-
-    if False:
-        from matplotlib import pyplot
-        from matplotlib.lines import Line2D
-        import sys 
-        pyplot.figure(figsize=(25,5))
-        samples = np.arange(tod.size)
-        handles = [] 
-        for iobs,obsid in enumerate(np.unique(obsids)):
-            select= obsids == obsid
-            plt = pyplot.plot(samples[select],tod[select],',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
-            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
-        legend = pyplot.legend(handles=handles, prop={'size': 6})
-        pyplot.savefig(f'tod_figures/rank{rank:03d}_test.png')
-        pyplot.close()
-        samples = np.arange(tod.size)
-        handles = [] 
-        for iobs,obsid in enumerate(np.unique(obsids)):
-            select= obsids == obsid
-            plt = pyplot.plot(az[select],tod[select],',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
-            # bin in azimuth 
-            bin_edges = np.linspace(np.min(az[select]),np.max(az[select]),15)
-            top = np.histogram(az[select],bin_edges,weights=tod[select])[0]
-            bot = np.histogram(az[select],bin_edges)[0]
-            bin_mids = (bin_edges[1:]+bin_edges[:-1])/2.
-            pyplot.plot(bin_mids,top/bot,'-',lw=3,color='k')
-            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
-        legend = pyplot.legend(handles=handles, prop={'size': 6})
-        pyplot.savefig(f'tod_figures/az_bins_rank{rank:03d}_test.png')
-        pyplot.close()
-        # now the same again, but with elevation 
-        samples = np.arange(tod.size)
-        handles = []
-        for iobs,obsid in enumerate(np.unique(obsids)):
-            select= obsids == obsid
-            plt = pyplot.plot(el[select],tod[select],',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
-            # bin in elevation 
-            bin_edges = np.linspace(np.min(el[select]),np.max(el[select]),15)
-            top = np.histogram(el[select],bin_edges,weights=tod[select])[0]
-            bot = np.histogram(el[select],bin_edges)[0]
-            bin_mids = (bin_edges[1:]+bin_edges[:-1])/2.
-            pyplot.plot(bin_mids,top/bot,'-',lw=3,color='k')
-            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
-        legend = pyplot.legend(handles=handles, prop={'size': 6})
-        pyplot.savefig(f'tod_figures/el_bins_rank{rank:03d}_test.png')
-        pyplot.close()
-    if False: 
-        handles = [] 
-        print(np.unique(obsids))
-        for iobs,obsid in enumerate(np.unique(obsids)):
-            select= obsids == obsid
-            plt = pyplot.plot(samples[select],1./weights[select]**0.5,',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
-            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
-        legend = pyplot.legend(handles=handles, prop={'size': 6})
-        pyplot.savefig(f'tod_figures/rms_rank{rank:03d}_test.png')
-        pyplot.close() 
-        handles = [] 
-        print(np.unique(obsids))
-        for iobs,obsid in enumerate(np.unique(obsids)):
-            select= obsids == obsid
-            plt = pyplot.plot(ra[select],tod[select],',',label=f'{obsid}',color=f'C{np.mod(iobs,10)}')
-            handles += [Line2D([0], [0], color=plt[0].get_color(), linestyle='None', marker='o', label=f'{obsid}')]
-        legend = pyplot.legend(handles=handles, prop={'size': 6})
-        pyplot.savefig(f'tod_figures/sundist_rank{rank:03d}_test.png')
-        pyplot.close() 
-
-    #samples = np.arange(tod.size)
-    #for obsid in np.unique(obsids):
-    #   select= obsids == obsid
-    #   pyplot.plot(samples[select],az[select],',',label=f'{obsid}')
-    #pyplot.legend(prop={'size': 6})
-    #pyplot.savefig(f'tod_figures/az_rank{rank:03d}_test.png')
-    #pyplot.close() 
-
-    #comm.barrier()
-    #sys.exit()
-    for obsid in np.unique(obsids):
-        for feed in np.unique(feedid):
-            select= (feedid == feed )& (obsids == obsid)
-            if len(tod[select]) < 100:
-                continue
-            #pmdl = np.poly1d(np.polyfit(az[select],tod[select],1))
-            #tod[select] -= pmdl(az[select])
-            continue
-    #         pyplot.plot(samples[select],tod[select],',')
-    # pyplot.xlim(0,50000)
-    # #pyplot.legend()
-    # pyplot.savefig('test.png')
-    # stop
-
 
     remapping_array = np.unique(pointing)
     remapping_array = find_unique_values(remapping_array)

@@ -50,6 +50,10 @@ class PipelineFunction:
     def bad_data(self):
         """Check if data is bad"""
         return False
+    
+    def pre_init(self, data : HDF5Data):
+        """Function to run before initialising the pipeline"""
+        pass
 
     def __call__(self, data : HDF5Data) -> HDF5Data:
                         
@@ -99,11 +103,14 @@ class Runner:
             data.read_data_file(filename)
             for process in processes:
                 logging.info(f'INITIALISING {process.name}')
+                process.pre_init(data) 
                 print(process.name, not self.level2_data.contains(process), process.overwrite, process.bad_data())
                 if (not self.level2_data.contains(process)) | process.overwrite | process.bad_data():
                     logging.info(f'RUNNING {process.name}')
                     print(f'Running process {process.name}')
+                    print(process.STATE)
                     if not process(data, self.level2_data): 
+                        print('inside break',process.STATE)
                         logging.info(f'{process.name} has stopped processing file') 
                         break 
                     self.level2_data.update(process)

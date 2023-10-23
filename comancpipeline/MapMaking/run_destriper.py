@@ -7,7 +7,8 @@ from matplotlib import pyplot
 from astropy.io import fits
 import os
 import healpy as hp
-
+import h5py 
+import time
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 size = comm.Get_size()
@@ -39,9 +40,9 @@ def write_map(prefix,maps,map_info,output_dir,iband,postfix=''):
                                 name='Noise',header=wcs.to_header())
             hdulist += [cov]
             columns += ['rms']
-        if 'map2' in v:
-            std = fits.ImageHDU(np.reshape(np.sqrt(v['map2']-v['map']**2),(nypix,nxpix)),
-                                name='NoiseSTD',
+        if 'hits' in v:
+            std = fits.ImageHDU(np.reshape(v['hits'],(nypix,nxpix)),
+                                name='Hits',
                                 header=wcs.to_header())
             hdulist += [std]
         hdul = fits.HDUList(hdulist)
@@ -55,7 +56,6 @@ def write_map_healpix(prefix,maps,remapping_array, map_info,output_dir,iband,pos
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     for k,v in maps.items():
-        print(v['map'].shape,remapping_array.shape)
         hdulist = []
         m = np.zeros((3,12*nside**2)) + hp.UNSEEN
         m[0,remapping_array] = v['map']
@@ -93,26 +93,25 @@ def main(filelistname,
          use_gain_filter=True,
          calibration=True,
          calibrator='TauA', 
+         threshold=1e-6,
+         niter=100,
          healpix=False):
 
-    filelist = np.loadtxt(filelistname,dtype=str,ndmin=1)
-
-    # import h5py
-    # for filename in filelist:
-    #     h = h5py.File(filename,'r')
-    #     print(h['averaged_tod/frequency_power_spectra_fits'][0,:,0,2])
-    #     feeds = h['spectrometer/feeds'][:] 
-    #     diff = (feeds-6)
-    #     idx = np.argmin(diff**2)
-    #     if diff[idx]**2 > 0:
-    #         continue
-
-    #     pyplot.plot(h['averaged_tod/frequency_power_spectra'][0,idx,0,:,0].flatten(),
-    #                 h['averaged_tod/frequency_power_spectra'][0,idx,0,:,1].flatten(),label=filename.split('/')[-1])
-    #     h.close()
-    # pyplot.legend(prop={'size':6})
-    # pyplot.show()
-    
+    input_filelist = np.loadtxt(filelistname,dtype=str,ndmin=1)
+    # Check the filelists quickly
+    filelist = []
+    time.sleep(rank*2)
+    for i,f in enumerate(input_filelist):
+        h = h5py.File(f,'r')
+        if i == 0:
+            source = h['comap'].attrs['source'].split(',')[0]
+        if 'averaged_tod/tod' in h:
+            filelist.append(f)
+        h.close() 
+    filelist = np.array(filelist)
+    if rank == 0:
+        print('SOURCE: ',source, os.path.basename(filelist[0]))
+    comm.Barrier()
     if isinstance(crval[0],str):
         crval = [Coordinates.sex2deg(c,hours=f) for c,f in zip(crval,[True,False])]
 
@@ -139,6 +138,10 @@ def main(filelistname,
     filelist = filelist[lo:hi]
 
     print(f'Rank {rank} working on {filelist.size} files',flush=True )
+
+    if source in ['TauA','CasA','CygA','jupiter']:
+        offset_length = 250
+        threshold = 1 
 
     for iband in range(0,4):
         tod, weights, pointing, remapping_array, az, el, ra, dec, feedid, obsids = COMAPData.read_comap_data(filelist,map_info,
@@ -173,6 +176,8 @@ def main(filelistname,
                                        feedid,
                                        obsids,
                                        obsid_cuts,
+                                       threshold=threshold,
+                                       niter=niter,
                                        chi2_cutoff=20)
 
         if rank == 0:
@@ -202,4 +207,6 @@ if __name__ == "__main__":
          use_gain_filter=p['ReadData']['use_gain_filter'],
          calibration=p['ReadData']['calibration'],
          calibrator=p['ReadData']['calibrator'],
+         threshold=10**float(params['threshold']),
+            niter=int(params['niter']),
          healpix=params['healpix'])
