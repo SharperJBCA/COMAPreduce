@@ -11,6 +11,7 @@ from .DataHandling import HDF5Data, COMAPLevel1, COMAPLevel2
 import time 
 import socket 
 import os
+import h5py 
 from datetime import datetime
 
 current_time = datetime.now()
@@ -71,7 +72,7 @@ class Runner:
 
         self.level2_data = None
         self.level2_data_dir = '.'
-        self.level2_prefix = 'Level2'
+        self.level2_prefix = 'Level2_'
         
     @property
     def filelist(self):
@@ -89,18 +90,33 @@ class Runner:
     def processes(self, processes : list):
         self._processes = processes
 
+    def is_level2_file(self, filename : str) -> bool:
+        """Check if the file is a level 2 file"""
+        
+        if self.level2_prefix in filename:
+            return True
+        else:
+            return False
+
     def run_tod(self):
         
         for filename in self._filelist:
             logging.info(f'PROCESSING {path.basename(filename)}')
             time.sleep(rank*15)
-            self.level2_data = COMAPLevel2(filename=self.data_path(filename))        
 
+
+            if self.is_level2_file(filename):
+                print('Loading level 1 data')
+                data = COMAPLevel2(overwrite=False, large_datasets=['spectrometer/tod'])
+                self.level2_prefix = 'temp_'
+            else:
+                print('Loading level 1 data')
+                data = COMAPLevel1(overwrite=False, large_datasets=['spectrometer/tod'])
+            data.read_data_file(filename)
+
+            self.level2_data = COMAPLevel2(filename=self.data_path(filename, self.level2_prefix))        
             processes = [process(level2=self.level2_data,**kwargs) for (process,kwargs) in self.processes.items()]
 
-            print('Loading level 1 data')
-            data = COMAPLevel1(overwrite=False, large_datasets=['spectrometer/tod'])
-            data.read_data_file(filename)
             for process in processes:
                 logging.info(f'INITIALISING {process.name}')
                 process.pre_init(data) 
@@ -137,10 +153,10 @@ class Runner:
                 data.update(process)
                 data.write_data_file(f'{filename}')
 
-    def data_path(self, filename : str) -> str:
+    def data_path(self, filename : str, level2_prefix : str ) -> str:
         """Get the path for the output level 2 data"""
         
         filename_short = path.basename(filename)
-        name = f'{self.level2_data_dir}/{self.level2_prefix}_{filename_short}'
+        name = f'{self.level2_data_dir}/{level2_prefix}{filename_short}'
         
         return name

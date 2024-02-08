@@ -216,6 +216,8 @@ class SkyDip(PipelineFunction):
         return data, attrs
 
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
+        if isinstance(data, COMAPLevel2):
+            return self.STATE 
 
         if not data.source_name in Coordinates.CalibratorList: 
             self.skydip(data)
@@ -314,6 +316,8 @@ class AtmosphereRemoval(PipelineFunction):
     overwrite : bool = False 
     STATE : bool = True 
 
+
+
     @property 
     def save_data(self):
         """Use full path that will be saved into the HDF5 file"""
@@ -323,7 +327,11 @@ class AtmosphereRemoval(PipelineFunction):
         return data, attrs
 
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
-                
+
+        if isinstance(data, COMAPLevel2):
+            self.fit_values = data['atmosphere/fit_values'][...]
+            return self.STATE 
+
         self.filter_atmosphere(data)
         
         return self.STATE
@@ -374,9 +382,9 @@ class AtmosphereRemoval(PipelineFunction):
         A = data.airmass
         n_feeds, n_bands, n_channels, n_tod = data.tod_shape 
         n_scans = len(data.scan_edges)
+        self.fit_values = np.zeros((n_scans, n_feeds, n_bands, 2, n_channels))
         logging.info(f'{self.name}: Total number of scans {n_scans:03d}')
         
-        self.fit_values = np.zeros((n_scans, n_feeds, n_bands, 2, n_channels))
         for ((ifeed, feed),) in tqdm(data.tod_loop(bands=False, channels=False), desc='Atmosphere Filter Feed Loop'):
             _tod = data['spectrometer/tod'][ifeed,...]
             for iband in range(n_bands):
@@ -416,6 +424,8 @@ class Level1Averaging(PipelineFunction):
         self.channel_idx = np.arange(self.N_CHANNELS)
 
     def __call__(self, data : HDF5Data) -> HDF5Data:
+        if isinstance(data, COMAPLevel2):
+            return self.STATE 
                 
         self.average_tod(data)
         
@@ -497,8 +507,10 @@ class CheckLevel1File(PipelineFunction):
         return self.STATE
 
 
+
+
 @dataclass 
-class Level1AveragingGainCorrection(Level1Averaging):
+class Level1AveragingGainCorrectionOctober2023(Level1Averaging):
     name : str = 'Level1AveragingGainCorrection'
     groups : list = field(default_factory=lambda: ['averaged_tod']) 
     figure_directory : str = 'figures'
@@ -525,15 +537,127 @@ class Level1AveragingGainCorrection(Level1Averaging):
         self.average_tod(data, level2_data)
         
         return self.STATE
+    
+    def build_filters(self,start, end):
+        # Fix NaNs, assign NaNs to nearest next good value along the time axis
+        data_reshape = tod[...,start:end].reshape((n_bands*n_channels, end-start))
+        nan_tod = np.isnan(data_reshape) 
+        ones = np.ones(data_reshape.shape)*np.nanmedian(data_reshape,axis=1)[:,None] 
+        data_reshape[nan_tod] = ones[nan_tod]
 
-    def bad_data(self):
-        """Check if tod average is nan"""
-        #if 'averaged_tod/tod' in self.level2.keys():
-        #    tod = self.level2['averaged_tod/tod']
-        #    good_tod = [np.isfinite(np.sum(d)) & (np.sum(d) != 0) for d in tod]
-        #    if not all(good_tod):
-        #        return True
-        return False
+        tod[...,start:end] = data_reshape.reshape((n_bands, n_channels, end-start))
+        print('ORIGINAL TOD', np.nanstd(tod))
+
+        if data.source_name in Coordinates.CalibratorList: 
+            clean_tod = tod[...,start:end] - np.nanmedian(tod[...,start:end],axis=-1)[...,None]
+        else:
+            clean_tod = self.remove_atmosphere(data.airmass[ifeed,start:end], tod[...,start:end], level2_data['atmosphere/fit_values'][iscan,ifeed,:])
+        print('AFTER AIR', np.nanstd(clean_tod))
+        clean_tod, normalisation_factor = self.normalise_data(clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:], level2_data['vane/system_gain'][0,ifeed,:,:]) 
+        print('AFTER NORMALISATION', np.nanstd(clean_tod))
+        clean_tod = self.median_filter(clean_tod, int(50*120))
+        print('AFTER MEDIAN FILTER', np.nanstd(clean_tod))
+        #frequency_power_spectra = self.frequency_spectra_per_band(clean_tod)
+        try:
+            dG = self.gain_subtraction(data, clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:]) 
+        except (ValueError, IndexError): 
+            dG = None
+
+        # Build weights, mask out edge channels and centre channels
+        weights = 1./level2_data.system_temperature[0,ifeed]**2 
+        weights[level2_data.system_temperature[0,ifeed] == 0] = 0
+        weights[:,:10] = 0
+        weights[:,-10:] = 0
+        weights[:,510:515] = 0
+        if not isinstance(dG, type(None)):
+            print('AFTER GAIN', np.nanstd(dG))
+
+        if not isinstance(dG, type(None)):
+            residual = (clean_tod - dG[None,None,:])*normalisation_factor/level2_data['vane/system_gain'][0,ifeed,:,:,None]
+        else:
+            residual = clean_tod*normalisation_factor/level2_data['vane/system_gain'][0,ifeed,:,:,None]
+
+        residual = self.weighted_average_over_band(residual, weights) 
+
+        if (iscan == 0) & (not isinstance(dG, type(None))):
+            avg_tod = self.weighted_average_over_band(clean_tod, weights) 
+            ### Plot some diagnostics
+            self.plot_gain_examples(data, clean_tod[0], avg_tod[0], dG, level2_data, iscan, feed,
+                    level2_data.system_temperature[0,ifeed,0,:,None],figure_path=self.figure_directory)
+            ### 
+        clean_tod = clean_tod*level2_data.system_temperature[0,ifeed,:,:,None]
+        avg_tod = self.weighted_average_over_band(clean_tod, weights) 
+
+        self.tod_cleaned[ifeed,:,start:end]  = residual
+        self.tod_original[ifeed,:,start:end] = avg_tod
+        self.tod_weights[ifeed,:,start:end]  = 1./self.auto_rms(residual)[:,None]**2
+
+
+    def average_tod(self, data : HDF5Data, level2_data : COMAPLevel2) -> HDF5Data:
+        """Average the time ordered data in frequency"""
+        
+        # Setup the system temperature and gain data
+        n_feeds, n_bands, n_channels, n_tod = data.tod_shape
+
+        n_channels_low = 4 # n_channels//self.frequency_bin_size 
+
+        bandwidth = (2e9/n_channels) 
+        sample_rate = 50. 
+        self.tod_cleaned  = np.zeros((n_feeds, n_channels_low, n_tod))
+        self.tod_original = np.zeros((n_feeds, n_channels_low, n_tod))
+        self.tod_weights  = np.zeros((n_feeds, n_channels_low, n_tod))
+        self.scan_edges   = data.scan_edges
+        n_scans = len(self.scan_edges) 
+        self.freq_power_spectra = np.zeros((n_scans, n_feeds, n_bands, 15,2))
+        self.freq_power_spectra_fits = np.zeros((n_scans, n_feeds, n_bands, 3))
+        for ((ifeed, feed),) in tqdm(data.tod_loop(bands=False, channels=False), desc='TOD Averaging Loop'):
+            if (feed > 19):
+                continue
+            tod = data['spectrometer/tod'][ifeed, ...]
+
+            for iscan, (start, end) in enumerate(self.scan_edges): 
+                logging.debug(f'{self.name}: Averaging level 1 {iscan:02d} in Feed {feed:02d}')
+                tod[...,start:end] = self.fill_bad_data(tod[...,start:end])
+
+
+
+@dataclass 
+class Level1AveragingGainCorrection(Level1Averaging):
+    name : str = 'Level1AveragingGainCorrection'
+    groups : list = field(default_factory=lambda: ['averaged_tod']) 
+    figure_directory : str = 'figures'
+
+    overwrite : bool = False
+    STATE : bool = True 
+
+    @property 
+    def save_data(self):
+        """Use full path that will be saved into the HDF5 file"""
+        self.data  = {'averaged_tod/tod':self.tod_cleaned,
+                 'averaged_tod/tod_original':self.tod_original,
+                 'averaged_tod/weights':self.tod_weights,
+                 'averaged_tod/scan_edges':self.scan_edges,
+                 'averaged_tod/frequency_power_spectra':self.freq_power_spectra,
+                 'averaged_tod/frequency_power_spectra_fits':self.freq_power_spectra_fits}
+                 
+        self.attrs = {}
+
+        return self.data, self.attrs
+    
+    def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
+        if isinstance(data, COMAPLevel2):
+            print(type(data['averaged_tod/tod']))
+            self.tod_cleaned = data['averaged_tod/tod'],
+            self.tod_original = data['averaged_tod/tod_original'],
+            self.tod_weights = data['averaged_tod/weights'],
+            self.scan_edges = data['averaged_tod/scan_edges'],
+            self.freq_power_spectra = data['averaged_tod/frequency_power_spectra'],
+            self.freq_power_spectra_fits = data['averaged_tod/frequency_power_spectra_fits']
+            return self.STATE
+        self.average_tod(data, level2_data)
+        
+        return self.STATE
+    
     def auto_rms(self, tod : np.ndarray[float]):
         """ Calculate rms from differences of adjacent samples """ 
         
@@ -646,18 +770,12 @@ class Level1AveragingGainCorrection(Level1Averaging):
             a_bestfit = np.fft.irfft(a_bestfit_f, n=n_tod)
             yz = y*1 
             yz[yz ==0] = np.nan 
-            ym = np.nanmean(yz,axis=0)
             yz = np.nanmedian(yz,axis=0) 
             
-            pmdl= np.poly1d(np.polyfit(np.nanmean(F*a_bestfit,axis=0).flatten(), ym, 1) )
             m_bestfit = np.linalg.inv(P.T.dot(P)).dot(P.T).dot(y - F*a_bestfit)
-            
+
             return a_bestfit, m_bestfit   
         
-        nsb, Nfreqs, Ntod = y_feed.shape
-        freqs = np.fft.rfftfreq(len(y_feed[0,30]), d=1.0/50.)
-        RHS = np.abs(np.fft.rfft(y_feed[0,30]))**2 
-
 
         scaled_freqs = np.linspace(-4.0 / 30, 4.0 / 30, 4 * 1024)  # (nu - nu_0) / nu_0
         scaled_freqs = scaled_freqs.reshape((4, 1024))
@@ -778,10 +896,14 @@ class Level1AveragingGainCorrection(Level1Averaging):
                                  P0=[np.nanmedian(tod_fft[iband,10:N])**0.5, 1e-3, -1]) 
         return power_spectra
 
-    def remove_atmosphere(self, airmass, tod, atmosphere_fit_values):
+    def remove_atmosphere(self, airmass, tod, atmosphere_fit_values, source_name = ''):
         """
         Remove the atmosphere from the TOD
         """
+
+        if source_name in Coordinates.CalibratorList: 
+            return tod[...] - np.nanmedian(tod[...],axis=-1)[...,None]
+        
         n_bands, n_channels, n_tod = tod.shape
         tod_clean = np.zeros((tod.shape[0],tod.shape[1],n_tod))
         for iband in range(n_bands):
@@ -789,6 +911,16 @@ class Level1AveragingGainCorrection(Level1Averaging):
                                                                               tod[iband,...],
                                                                               atmosphere_fit_values[iband])
         return tod_clean 
+
+    def fill_bad_data(self, tod):
+        """Fill nan values with median of the tod"""
+        n_bands, n_channels, n_tod = tod.shape
+        data_reshape = tod[...].reshape((n_bands*n_channels, n_tod))
+        nan_tod = np.isnan(data_reshape) 
+        ones = np.ones(data_reshape.shape)*np.nanmedian(data_reshape,axis=1)[:,None] 
+        data_reshape[nan_tod] = ones[nan_tod]
+        return  data_reshape.reshape((n_bands, n_channels, n_tod))
+
     def normalise_data(self, tod, system_temperature, gains):
         """
         Normalise the data by the system temperature and gains
@@ -917,10 +1049,10 @@ class Level1AveragingGainCorrection(Level1Averaging):
 
         bandwidth = (2e9/n_channels) 
         sample_rate = 50. 
-        self.tod_cleaned = np.zeros((n_feeds, n_channels_low, n_tod))
+        self.tod_cleaned  = np.zeros((n_feeds, n_channels_low, n_tod))
         self.tod_original = np.zeros((n_feeds, n_channels_low, n_tod))
-        self.tod_weights = np.zeros((n_feeds, n_channels_low, n_tod))
-        self.scan_edges  = data.scan_edges
+        self.tod_weights  = np.zeros((n_feeds, n_channels_low, n_tod))
+        self.scan_edges   = data.scan_edges
         n_scans = len(self.scan_edges) 
         self.freq_power_spectra = np.zeros((n_scans, n_feeds, n_bands, 15,2))
         self.freq_power_spectra_fits = np.zeros((n_scans, n_feeds, n_bands, 3))
@@ -932,46 +1064,14 @@ class Level1AveragingGainCorrection(Level1Averaging):
             for iscan, (start, end) in enumerate(self.scan_edges): 
                 logging.debug(f'{self.name}: Averaging level 1 {iscan:02d} in Feed {feed:02d}')
 
-                if False:
-                    if not os.path.exists(f'temp_files/{data.obsid}_temp.npy'):
-                        clean_tod = self.remove_atmosphere(data.airmass[ifeed,start:end], tod[...,start:end], level2_data['atmosphere/fit_values'][iscan,ifeed,:])
-                        clean_tod = self.normalise_data(clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:], level2_data['vane/system_gain'][0,ifeed,:,:]) 
-                        clean_tod = self.median_filter(clean_tod, int(50*120))
-                        frequency_power_spectra = self.frequency_spectra_per_band(clean_tod)
-                        np.save(f'temp_files/{data.obsid}_temp.npy',{'clean_tod':clean_tod, 'frequency_power_spectra':frequency_power_spectra})
-                    else:
-                        save_dict = np.load(f'temp_files/{data.obsid}_temp.npy', allow_pickle=True).flatten()[0]
-                        clean_tod = save_dict['clean_tod']
-                        frequency_power_spectra = save_dict['frequency_power_spectra']
-                    if not os.path.exists(f'temp_files/{data.obsid}_temp_dG.npy'):
-                        dG = self.gain_subtraction(data, clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:]) 
-                        np.save(f'temp_files/{data.obsid}_temp_dG.npy',dG)
-                    else:
-                        dG = np.load(f'temp_files/{data.obsid}_temp_dG.npy', allow_pickle=True).flatten()
-                else:
-                    # Fix NaNs, assign NaNs to nearest next good value along the time axis
-                    data_reshape = tod[...,start:end].reshape((n_bands*n_channels, end-start))
-                    nan_tod = np.isnan(data_reshape) 
-                    ones = np.ones(data_reshape.shape)*np.nanmedian(data_reshape,axis=1)[:,None] 
-                    data_reshape[nan_tod] = ones[nan_tod]
-
-                    tod[...,start:end] = data_reshape.reshape((n_bands, n_channels, end-start))
-                    print('ORIGINAL TOD', np.nanstd(tod))
-
-                    if data.source_name in Coordinates.CalibratorList: 
-                        clean_tod = tod[...,start:end] - np.nanmedian(tod[...,start:end],axis=-1)[...,None]
-                    else:
-                        clean_tod = self.remove_atmosphere(data.airmass[ifeed,start:end], tod[...,start:end], level2_data['atmosphere/fit_values'][iscan,ifeed,:])
-                    print('AFTER AIR', np.nanstd(clean_tod))
-                    clean_tod, normalisation_factor = self.normalise_data(clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:], level2_data['vane/system_gain'][0,ifeed,:,:]) 
-                    print('AFTER NORMALISATION', np.nanstd(clean_tod))
-                    clean_tod = self.median_filter(clean_tod, int(50*120))
-                    print('AFTER MEDIAN FILTER', np.nanstd(clean_tod))
-                    #frequency_power_spectra = self.frequency_spectra_per_band(clean_tod)
-                    try:
-                        dG = self.gain_subtraction(data, clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:]) 
-                    except (ValueError, IndexError): 
-                        dG = None
+                tod[...,start:end] = self.fill_bad_data(tod[...,start:end])
+                clean_tod = self.remove_atmosphere(data.airmass[ifeed,start:end], tod[...,start:end], level2_data['atmosphere/fit_values'][iscan,ifeed,:], source_name=data.source_name)
+                clean_tod, normalisation_factor = self.normalise_data(clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:], level2_data['vane/system_gain'][0,ifeed,:,:]) 
+                clean_tod = self.median_filter(clean_tod, int(50*120))
+                try:
+                    dG = self.gain_subtraction(data, clean_tod, level2_data['vane/system_temperature'][0,ifeed,:,:]) 
+                except (ValueError, IndexError): 
+                    dG = None
 
                 # Build weights, mask out edge channels and centre channels
                 weights = 1./level2_data.system_temperature[0,ifeed]**2 

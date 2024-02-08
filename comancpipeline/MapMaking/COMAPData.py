@@ -25,6 +25,21 @@ rank = comm.Get_rank()
     
 #     return array3
 
+
+def parse_bit_mask(flag):
+    p = np.inf 
+    bit_mask_list = []
+    current_flag = flag*1
+    while p != 0: 
+        if current_flag == 0:
+            bit_mask_list.append(0)
+            break
+        p = int(np.floor(np.log(current_flag)/np.log(2)))
+        bit_mask_list.append(p)
+        current_flag -= 2**p
+    return bit_mask_list
+
+
 def index_replace(array1, array2):
     # Argsort array1, get sorted indices
     sort_indices = np.argsort(array1)
@@ -159,8 +174,9 @@ def countDataSize(filename, Nfeeds, offset_length,level3='.'):
 
     N = 0
     scan_edges = get_scan_edges(d)
-    for (start,end) in scan_edges:
-        N += int((end-start)//offset_length * offset_length)
+    if len(scan_edges) > 0:
+        for (start,end) in scan_edges:
+            N += int((end-start)//offset_length * offset_length)
 
     d.close()
 
@@ -256,7 +272,6 @@ def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_g
         print('LOOK HERE FOR BAD FILE!!!!!', filename)
     
     file_feeds = d['spectrometer/feeds'][...]
-    scan_edges = get_scan_edges(d)
     if calibration:
         try:
             cal_factors = read_calibration_factors(d, calibrator)
@@ -276,6 +291,10 @@ def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_g
     feedid  = np.zeros((len(output_feed_index), datasize))
     obsid   = os.path.basename(filename).split('-')[1]
 
+    scan_edges = get_scan_edges(d)
+    if len(scan_edges) == 0:
+        return tod.flatten(), weights.flatten(),az.flatten(), el.flatten(), ra.flatten(), dec.flatten(), feedid.flatten().astype(int)
+
     mask_map_option=False
     if mask_map_option:
         from astropy.io import fits
@@ -285,8 +304,15 @@ def get_tod(filename,pointing,datasize,offset_length=50,selected_feeds=[1],use_g
 
     idx = np.arange(pointing.size)
     for ifeed, (file_feed, output_feed) in enumerate(zip(file_feed_index, output_feed_index)):
-        if bad_feeds[file_feeds[file_feed]] > 0:
-            continue
+        feed_bit_mask = bad_feeds[file_feeds[file_feed]] 
+        bad_feed = False
+        for bit_value in parse_bit_mask(feed_bit_mask):
+            if bit_value != 0 and bit_value != 5:#  and bit_value != 1:  # 1 is bad stats, ignore for now. 
+                bad_feed = True 
+                break
+        #print(ifeed, file_feed, output_feed, bad_feed, parse_bit_mask(feed_bit_mask))
+        if bad_feed:
+            continue 
 
         tod_file = dset[file_feed,iband,:]/cal_factors[file_feed,iband]
         tod_file_copy = tod_file[scan_edges[0][0]:scan_edges[-1][1]]*1. 

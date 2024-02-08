@@ -39,6 +39,8 @@ class MeasureSystemTemperature(PipelineFunction):
     figure_directory : str = 'figures'
 
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2):
+        if isinstance(data, COMAPLevel2):
+            return self.STATE 
         self.measure_system_temperature(data)
         return self.STATE 
     

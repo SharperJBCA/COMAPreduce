@@ -41,7 +41,7 @@ def create_tod_processing(filelist_name, figure_directory='figures', level2_dire
         SkyDip: {'overwrite': False,'figure_directory':figure_directory},
         AtmosphereRemoval: {'overwrite': False},
         Level1AveragingGainCorrection: {'overwrite': False,'figure_directory':figure_directory},
-        Level2FitPowerSpectrum: {'overwrite': False, 'figure_directory':figure_directory},
+        Level2FitPowerSpectrum: {'overwrite': True, 'figure_directory':figure_directory},
         FitSource: {'overwrite': False, 'calibration': 'jupiter','figure_directory':figure_directory},
         Spikes: {'overwrite': False}
     }

@@ -131,6 +131,9 @@ def cgm(pointing, pixel_edges, tod, weights, feedid, obsids, A,b,x0 = None,niter
         pb= rb+ beta*pb
         
         delta = mpi_sum(r*rb)/thresh0
+        if np.isnan(delta):
+            print('DELTA WAS NAN')
+            break
 
         if verbose:
             print(delta)

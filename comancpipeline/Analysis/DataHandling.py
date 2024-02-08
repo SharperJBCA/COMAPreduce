@@ -431,7 +431,7 @@ class COMAPLevel2(HDF5Data):
                 
     def contains(self, pipeline_function : PipelineFunction):
         """Check if process data is already in level 2 structure"""
-        if all([g in self.groups for g in pipeline_function.groups]):
+        if all([g.split('/')[0] in self.groups for g in pipeline_function.groups]):
             return True
         else:
             return False
@@ -460,6 +460,15 @@ class COMAPLevel2(HDF5Data):
             source = source_split[0]
 
         return source
+
+    @property 
+    def obsid(self):
+        try:
+            obsid = int(self.attrs('comap','obsid'))
+        except KeyError:
+            obsid = -1 
+
+        return obsid
 
     @property
     def vane_flag(self):
