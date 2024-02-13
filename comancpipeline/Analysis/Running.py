@@ -13,6 +13,8 @@ import socket
 import os
 import h5py 
 from datetime import datetime
+import sys 
+import traceback as tb 
 
 current_time = datetime.now()
 formatted_time = current_time.strftime("%Y-%m-%d-%H-%M-%S")
@@ -39,6 +41,12 @@ def set_logging(logfilename, loglevel='INFO'):
                         datefmt='%m-%d %H:%M',
                         filename=f'{path}/{basename}_{formatted_time}_{socket.gethostname()}_PID{os.getpid()}_rank{rank:02d}.log',
                         filemode='w')
+
+    def except_logging(*args):
+        logging.info(' '.join(map(str,args)))
+        logging.info('Error on line {} in {}'.format(tb.extract_tb(sys.last_traceback)[-1][1],tb.extract_tb(sys.last_traceback)[-1][0]))
+        sys.__excepthook__(*args)
+    sys.excepthook = except_logging
 
 @dataclass
 class PipelineFunction:
