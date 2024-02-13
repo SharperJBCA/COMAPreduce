@@ -480,11 +480,12 @@ class Level1AveragingGainCorrection(Level1Averaging):
     STATE : bool = True 
 
     gain_subtraction_name : str = 'gain_subtraction_fit' # Default gain subtraction name 
+    gain_subtracted_tod_name : str = 'tod'
 
     @property 
     def save_data(self):
         """Use full path that will be saved into the HDF5 file"""
-        self.data  = {'averaged_tod/tod':self.tod_cleaned,
+        self.data  = {f'averaged_tod/{self.gain_subtracted_tod_name}':self.tod_cleaned,
                  'averaged_tod/tod_original':self.tod_original,
                  'averaged_tod/weights':self.tod_weights,
                  'averaged_tod/scan_edges':self.scan_edges,
@@ -497,8 +498,7 @@ class Level1AveragingGainCorrection(Level1Averaging):
     
     def __call__(self, data : HDF5Data, level2_data : COMAPLevel2): 
         if isinstance(data, COMAPLevel2):
-            print(type(data['averaged_tod/tod']))
-            self.tod_cleaned = data['averaged_tod/tod'],
+            self.tod_cleaned = data[f'averaged_tod/{self.gain_subtracted_tod_name}'],
             self.tod_original = data['averaged_tod/tod_original'],
             self.tod_weights = data['averaged_tod/weights'],
             self.scan_edges = data['averaged_tod/scan_edges'],
