@@ -73,7 +73,7 @@ class Spikes(PipelineFunction):
         
         return filter_tod[:tod.size]
 
-    def fit_spikes(self, tod : np.ndarray[float], rms : float, step : int = 100):
+    def fit_spikes(self, tod : np.ndarray, rms : float, step : int = 100):
         
         tod_clean = tod - self.median_filter(tod, self.MEDIAN_FILTER_STEP)
         mask = (np.abs(tod_clean) > rms*self.SPIKE_THRESHOLD) 
@@ -148,7 +148,7 @@ class NoiseStatistics(PipelineFunction):
         return P[0] + P[1]*np.abs(x/0.1)**P[2]
     
     @staticmethod
-    def power_spectrum(tod : np.ndarray[float], sample_rate : float=1./50., nbins : int =15):
+    def power_spectrum(tod : np.ndarray, sample_rate : float=1./50., nbins : int =15):
         """Creates binned power spectrum"""
         
         ps = np.abs(np.fft.fft(tod)**2)
@@ -169,7 +169,7 @@ class NoiseStatistics(PipelineFunction):
 
         return nu_bin, P_bin
 
-    def fit_power_spectrum(self,tod : np.ndarray[float], lowf=10, highf=-10):
+    def fit_power_spectrum(self,tod : np.ndarray, lowf=10, highf=-10):
         """ Fits the powerspectrum """
 
         def error(P,x,y,sig2, model):
@@ -193,7 +193,7 @@ class NoiseStatistics(PipelineFunction):
         results = [P_bin[-1], result.x[0],result.x[1]]
         return results
 
-    def plot_fnoise(self,tod : np.ndarray[float], parameters : np.ndarray[float]):
+    def plot_fnoise(self,tod : np.ndarray, parameters : np.ndarray):
         
         nu_bin, P_bin = self.power_spectrum(tod)        
         model = self.model(parameters,nu_bin) 

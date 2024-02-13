@@ -24,11 +24,21 @@ size = comm.Get_size()
 
 # set up logging to file - see previous section for more details
 import logging
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
-                    datefmt='%m-%d %H:%M',
-                    filename=f'logs/log_{formatted_time}_{socket.gethostname()}_PID{os.getpid()}_rank{rank:02d}.log',
-                    filemode='w')
+
+def set_logging(logfilename, loglevel='INFO'):
+    path = os.path.dirname(logfilename)
+    if path == '':
+        path = '.'
+    basename = os.path.basename(logfilename).split('.')[0]
+    if rank == 0:
+        os.makedirs(path,exist_ok=True)
+    comm.Barrier()
+    log_level = getattr(logging, loglevel)
+    logging.basicConfig(level=log_level,
+                        format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+                        datefmt='%m-%d %H:%M',
+                        filename=f'{path}/{basename}_{formatted_time}_{socket.gethostname()}_PID{os.getpid()}_rank{rank:02d}.log',
+                        filemode='w')
 
 @dataclass
 class PipelineFunction:
@@ -36,6 +46,7 @@ class PipelineFunction:
     STATE : bool = True 
     level2 : COMAPLevel2 = field(default_factory=COMAPLevel2) 
     write : bool = True 
+    figure_directory : str = 'figures' 
 
     @property  
     def save_data(self):
@@ -114,7 +125,7 @@ class Runner:
                 data = COMAPLevel1(overwrite=False, large_datasets=['spectrometer/tod'])
             data.read_data_file(filename)
 
-            self.level2_data = COMAPLevel2(filename=self.data_path(filename, self.level2_prefix))        
+            self.level2_data = COMAPLevel2(filename=self.data_path(filename, self.level2_prefix))   
             processes = [process(level2=self.level2_data,**kwargs) for (process,kwargs) in self.processes.items()]
 
             for process in processes:

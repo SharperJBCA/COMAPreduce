@@ -2,13 +2,11 @@ import matplotlib
 matplotlib.use('agg')
 
 import os
-from comancpipeline.Analysis.Running import Runner
-from comancpipeline.Analysis.VaneCalibration import MeasureSystemTemperature
-from comancpipeline.Analysis.Level1Averaging import CheckLevel1File,Level1Averaging, AtmosphereRemoval,Level1AveragingGainCorrection, SkyDip
-from comancpipeline.Analysis.Level2Data import AssignLevel1Data, UseLevel2Pointing, WriteLevel2Data, Level2Timelines, Level2FitPowerSpectrum
-from comancpipeline.Analysis.AstroCalibration import FitSource
-from comancpipeline.Analysis.Statistics import NoiseStatistics, Spikes
-from comancpipeline.Analysis.PostCalibration import ApplyCalibration
+import toml
+
+from comancpipeline import Analysis 
+from comancpipeline.Analysis.Running import set_logging
+
 import glob 
 #from comancpipeline.MapMaking.run_destriper import main as destriper_main 
 
@@ -18,8 +16,15 @@ rank = comm.Get_rank()
 size = comm.Get_size()
 import numpy as np 
 
-def create_tod_processing(filelist_name, figure_directory='figures', level2_directory='level2'):
+def create_tod_processing(configuration): 
+    
+    #filelist_name, figure_directory='figures', level2_directory='level2'):
     """This is the tod processing loop"""
+
+    figure_directory = configuration['Global']['level2_figures'] 
+    filelist_name = configuration['Global']['level1_filelist']
+    level2_directory = configuration['Global']['level2_data']
+    
     if rank == 0:
         if not os.path.exists(figure_directory):
             os.makedirs(figure_directory)
@@ -33,22 +38,18 @@ def create_tod_processing(filelist_name, figure_directory='figures', level2_dire
     idx = np.sort(np.mod(np.arange(filelist.size),size)) 
     idx = np.where((idx == rank))[0] 
     
-    tod_processing = Runner()
-    processes = {
-        CheckLevel1File: {'overwrite': True},
-        AssignLevel1Data: {'overwrite': False,'write':True},
-        MeasureSystemTemperature: {'overwrite': False,'figure_directory':figure_directory},
-        SkyDip: {'overwrite': False,'figure_directory':figure_directory},
-        AtmosphereRemoval: {'overwrite': False},
-        Level1AveragingGainCorrection: {'overwrite': False,'figure_directory':figure_directory},
-        Level2FitPowerSpectrum: {'overwrite': True, 'figure_directory':figure_directory},
-        FitSource: {'overwrite': False, 'calibration': 'jupiter','figure_directory':figure_directory},
-        Spikes: {'overwrite': False}
-    }
+    tod_processing = Analysis.Runner()
 
-    tod_processing.level2_data_dir = level2_directory# '/mn/stornext/d22/cmbco/comap/continuum/COMAPreduce/level2_jupiter'
-    tod_processing.filelist  : List[str]= filelist[idx]
-    tod_processing.processes : Dict[str, Dict[str, bool]] = processes
+    processes={Analysis.CheckLevel1File: {'overwrite': True},
+               Analysis.AssignLevel1Data: {'overwrite': False,'write':True}} 
+    
+    for process_name in configuration['Global']['processes']:
+        processes[getattr(Analysis,process_name)] = configuration[process_name]
+        processes[getattr(Analysis,process_name)]['figure_directory'] = figure_directory
+
+    tod_processing.level2_data_dir = level2_directory
+    tod_processing.filelist  = filelist[idx]
+    tod_processing.processes = processes
 
     return tod_processing 
 
@@ -104,12 +105,13 @@ def create_plot_processing(level2_data_dir, source, output_dir):
 def main():
     import sys
     if True:
-        filelist_name = sys.argv[1] 
-        figure_directory_name = sys.argv[2]
-        level2_directory_name = sys.argv[3]
-        tod_processing = create_tod_processing(filelist_name, figure_directory=figure_directory_name,
-                                                level2_directory=level2_directory_name)
 
+        toml_filename = sys.argv[1] 
+        with open(toml_filename,'r') as file:
+            configuration = toml.load(file)
+
+        set_logging(configuration['Global']['log_file'],configuration['Global']['log_level'])
+        tod_processing = create_tod_processing(configuration) 
         tod_processing.run_tod()
     
     if False:

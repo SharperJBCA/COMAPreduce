@@ -1,0 +1,48 @@
+[Global] 
+
+level2_data = 'level2_data'
+level2_figures = 'level2_figures'
+level1_filelist = 'filelists/Field00.txt' 
+
+log_file = 'logs/log.log' 
+log_level = 'INFO'
+
+# Processes to run on the Level 1 data 
+processes = ['MeasureSystemTemperature', 'SkyDip', 'AtmosphereRemoval','Level1AveragingGainCorrection', 'Level2FitPowerSpectrum','FitSource','Spikes']
+
+[MeasureSystemTemperature]
+
+overwrite = false 
+figure_directory = '' 
+
+[SkyDip]
+
+overwrite = false 
+figure_directory = '' 
+
+[AtmosphereRemoval]
+
+overwrite = false
+figure_directory = '' 
+
+[Level1AveragingGainCorrection]
+
+overwrite = true
+figure_directory = '' 
+gain_subtraction_name = 'gain_subtraction_fit' # See comancpipeline.Analysis.GainSubtraction for options/add more functions
+
+[Level2FitPowerSpectrum]
+
+overwrite = false
+figure_directory = '' 
+
+[FitSource]
+
+overwrite = false
+figure_directory = '' 
+calibration = 'jupiter'
+
+[Spikes]
+
+overwrite = false
+figure_directory = '' 

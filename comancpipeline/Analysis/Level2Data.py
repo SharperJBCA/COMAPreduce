@@ -174,7 +174,7 @@ class Level2Timelines(PipelineFunction):
 
         return data, attrs
 
-    def plot_mean_vanes(self, filelist : list[str]): 
+    def plot_mean_vanes(self, filelist : list): 
         """Plot median system temperature and gain over time"""
 
         # First gather data for plotting from all of the files
@@ -229,7 +229,7 @@ class Level2FitPowerSpectrum(PipelineFunction):
     name : str = 'Level2FitPowerSpectrum'
 
     level2 : COMAPLevel2 = field(default_factory=COMAPLevel2()) 
-    groups : list[str] = field(default_factory=lambda: ['fnoise_fits'])
+    groups : list = field(default_factory=lambda: ['fnoise_fits'])
 
     source = 'none' 
     figure_directory : str = 'figures'     

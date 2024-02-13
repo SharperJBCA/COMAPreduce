@@ -177,8 +177,8 @@ class ApplyCalibration(PipelineFunction):
         return sigma_out**0.5
     
     def get_source_flux(self,frequency : float, 
-                        fits : np.ndarray[float,float], 
-                        errors : np.ndarray[float,float]):
+                        fits : np.ndarray, 
+                        errors : np.ndarray):
         """Calculates the flux density given gaussian fit parameters""" 
         
         kb = 1.38e-23 
@@ -198,8 +198,8 @@ class ApplyCalibration(PipelineFunction):
                     
         return flux, flux_errs 
     
-    def get_source_geometric_radius(self, fits : np.ndarray[float,float], 
-                                    errors : np.ndarray[float,float]):
+    def get_source_geometric_radius(self, fits : np.ndarray, 
+                                    errors : np.ndarray):
         """Calculates the geometric radius given gaussian fit parameters""" 
         
         if fits.ndim==1:

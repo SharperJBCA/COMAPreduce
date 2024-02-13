@@ -32,7 +32,7 @@ class MeasureSystemTemperature(PipelineFunction):
     
     VANE_COLD_TEMP : float = 2.73 # K
     
-    groups : list[str] = field(default_factory=lambda:['vane'])
+    groups : list = field(default_factory=lambda:['vane'])
     
     overwrite : bool = False
     STATE : bool = True 
@@ -65,10 +65,10 @@ class MeasureSystemTemperature(PipelineFunction):
         return vane_indices, n_vanes
     
     def system_temperature_from_tod(self,
-                                    vane_hot_temp : np.ndarray[float],
-                                    tod : np.ndarray[float],  
-                                    hot_samples : np.ndarray[int],  
-                                    cold_samples : np.ndarray[int]) -> (np.ndarray, np.ndarray):
+                                    vane_hot_temp : np.ndarray,
+                                    tod : np.ndarray,  
+                                    hot_samples : np.ndarray,  
+                                    cold_samples : np.ndarray) -> (np.ndarray, np.ndarray):
         """Measure the system temperature for a vane event"""
                 
         temp_hot = np.nanmean(tod[...,hot_samples],axis=-1)
@@ -100,11 +100,10 @@ class MeasureSystemTemperature(PipelineFunction):
                         command: str='<', jump_size : int=50):
             """ """
             
-            match command:
-                case '>':
-                    func = np.greater 
-                case '<':
-                    func = np.less
+            if '>' in command:
+                func = np.greater
+            elif '<' in command:
+                func = np.less
                 
             vane_tod = tod*1. 
             range_val = np.nanmax(vane_tod)-np.nanmin(vane_tod)

@@ -32,9 +32,9 @@ size = comm.Get_size()
 @dataclass 
 class SkyMap:
 
-    _sky_sum : np.ndarray[float] = field(default_factory=lambda: None) # sky map summed data
-    _wei_sum : np.ndarray[float] = field(default_factory=lambda: None) # sum weights map 
-    _hit_sum : np.ndarray[float] = field(default_factory=lambda: None) # sum hits map 
+    _sky_sum : np.ndarray = field(default_factory=lambda: None) # sky map summed data
+    _wei_sum : np.ndarray = field(default_factory=lambda: None) # sum weights map 
+    _hit_sum : np.ndarray = field(default_factory=lambda: None) # sum hits map 
         
     wcs : WCS = field(default_factory=lambda: None)
     x_npix : int = None
@@ -66,7 +66,7 @@ class SkyMap:
         header['NAXIS2'] = self.y_npix 
         self.wcs = WCS(header) 
         
-    def world_to_pixels(self, x : np.ndarray[float], y: np.ndarray[float]):
+    def world_to_pixels(self, x : np.ndarray, y: np.ndarray):
         """Convert coordinates to pixel positions""" 
         rows, columns = self.wcs.world_to_array_index_values(x,y)
         ipix = columns * self.y_npix + rows 
@@ -75,11 +75,11 @@ class SkyMap:
         return ipix.astype(int), bad
 
     def bin_data(self, 
-                 tod : np.ndarray[float],
-                 x : np.ndarray[float],
-                 y : np.ndarray[float],
-                 weights : np.ndarray[float] = None,
-                 mask : np.ndarray[bool] = None): 
+                 tod : np.ndarray,
+                 x : np.ndarray,
+                 y : np.ndarray,
+                 weights : np.ndarray = None,
+                 mask : np.ndarray = None): 
         """Bin data into the sky map arrays"""
         
         if isinstance(weights,type(None)): weights = np.ones(tod.size) 
@@ -277,7 +277,7 @@ class SourcePosition:
         return s 
         
     
-    def set_mask(self, mask : np.ndarray[bool]):
+    def set_mask(self, mask : np.ndarray):
         self.mask = mask 
         
 

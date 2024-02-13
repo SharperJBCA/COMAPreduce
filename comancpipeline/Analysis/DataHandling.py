@@ -42,7 +42,7 @@ class HDF5Data:
     """General class for reading/writing in HDF5 files to memory using dictionaries"""
     
     name : str = 'HDF5Data' 
-    large_datasets : list[str] = field(default_factory=list)
+    large_datasets : list = field(default_factory=list)
     hdf5_file : File = None
     overwrite : bool = True
     __hdf5_data : dict = field(default_factory=dict)
